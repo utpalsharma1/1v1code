@@ -46,7 +46,7 @@ export const ease: Record<"out" | "in" | "inOut" | "snap" | "impact", Cubic> = {
 export const spring = {
   ui: { type: "spring", stiffness: 420, damping: 32, mass: 0.7 }, // ζ 0.93
   bar: { type: "spring", stiffness: 200, damping: 26, mass: 1 }, // ζ 0.92 — must read accurate
-  heavy: { type: "spring", stiffness: 130, damping: 19, mass: 1.15 }, // ζ 0.78
+  heavy: { type: "spring", stiffness: 130, damping: 22, mass: 1.15 }, // ζ 0.90 — weight, not bounce
   impact: { type: "spring", stiffness: 600, damping: 30, mass: 1.1 }, // ζ 0.58 — pops hard
 } satisfies Record<string, Transition>;
 

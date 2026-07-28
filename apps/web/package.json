@@ -9,8 +9,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@1v1/db": "workspace:*",
+    "@1v1/proto": "workspace:*",
     "@1v1/ui": "workspace:*",
     "framer-motion": "^12.42.2",
+    "ioredis": "^5.4.2",
     "next": "^15.5.22",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

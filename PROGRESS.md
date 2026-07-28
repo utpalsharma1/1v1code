@@ -1,5 +1,78 @@
 # PROGRESS
 
+## Phase 2A — Persistence and execution ⚠️ built, partly unverified
+
+Everything is written and typechecks; the web build passes; the seed set is verified against
+reference solutions. **The judge has never been executed — Docker is not installed on this machine.**
+The containment suite exists and runs, but every one of its ten tests currently reports
+`# docker unavailable`, and it prints `!! DOCKER UNREACHABLE — containment was NOT verified.`
+before doing so. Treat the sandbox as unproven until that suite runs green.
+
+```
+docker compose up -d          # Postgres 17 + Redis 7
+pnpm db:push && pnpm db:seed  # schema + 20 problems
+pnpm judge:images             # build the two judge images
+pnpm judge                    # the worker
+pnpm dev                      # http://localhost:3000/dev/judge
+pnpm judge:test               # THE CONTAINMENT SUITE — must be green
+pnpm db:verify                # 101 seed test cases vs reference solutions
+```
+
+### What is verified
+
+- **All 5 packages typecheck**, web builds, Prisma schema validates.
+- **101 seeded test cases** across 20 problems each agree with an independent reference solution
+  *and* pass their own validator. This caught **five real bugs** in hand-written expected output —
+  including `modular-power` shipping test data that violated its own stated constraints, which is
+  precisely the defect that makes a hack phase police a contract the problem itself breaks. A wrong
+  expected value means a correct submission is judged `WRONG_ANSWER`, which is the worst bug a judge
+  can have, and none of them were visible by reading.
+
+### What is NOT verified
+
+- Container containment. Ten tests, zero executed.
+- Any database round-trip: no migration has run, nothing has been seeded, auth has never issued a
+  session, `/dev/judge` has never rendered a real problem list.
+- The runner has never compiled anything.
+
+### Judge design notes
+
+- **Nothing is bind-mounted.** The job goes in over stdin and results come back as JSONL on stdout.
+  That removes mount-based escapes from the design and sidesteps Windows/WSL2 path translation,
+  which is slow and permission-strange for bind mounts.
+- **§11's flag set plus four additions** it doesn't name: `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, `--memory-swap` pinned equal to `--memory` (without it Docker
+  grants swap equal to the limit, so `256m` silently means 512m), and four `--ulimit`s under the
+  cgroup ceilings.
+- **`--tmpfs /tmp` is mounted `exec` deliberately.** A compiled C++ binary has to run from
+  somewhere, and the process is executing attacker code by definition — `noexec` there would break
+  C++ without removing any capability the attacker lacks.
+- **The 5s wall clock is enforced by the worker, not Docker.** Docker has no kill-after-N-seconds
+  flag; `--stop-timeout` only affects `docker stop`. The worker kills the *container* by name rather
+  than the CLI process, because killing the client orphans the container and it keeps burning CPU.
+- **Output is capped at 1 MB in the worker** and 256 KB per test in the runner. Docker will not do
+  this for you; an unbounded `print` loop otherwise fills a pipe and then a disk.
+- **Results stream one test at a time.** §11 is explicit, and §6.6's sequential reveal is built on
+  it — a judge that returns an array at the end silently kills the best beat in the product.
+- **The worker refuses to start without Docker** when `JUDGE_STRICT=1` (the default). A judge that
+  degrades to running untrusted code on the host is worse than one that is down.
+
+### Validators
+
+Every problem carries a `validatorKey` into a registry in reviewed source. The validator is
+deliberately **not** stored as source in a database column: it must execute server-side to police
+hack inputs (§6.8), and a row containing executable code is a code-injection surface one bad admin
+form away from RCE. `assertSeedIntegrity` refuses to seed a problem whose key is unknown, so there
+is no path to a problem without one.
+
+### Auth
+
+Email/password via `node:crypto` scrypt with per-user salts and a constant-time compare; sessions
+are opaque database rows, not JWTs. Both avoid a dependency (§13.3) without weakening anything —
+scrypt is memory-hard and in the standard library, and a DB session can actually be revoked. Login
+hashes a dummy password when the user doesn't exist so signup state can't be probed by timing.
+
+
 ## Phase 1 — The Moment Simulator ✅
 
 `/dev/hud`. Every beat of §6 fires on demand, beats chain into a full match, and every number in

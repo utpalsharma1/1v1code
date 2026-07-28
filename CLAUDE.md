@@ -222,7 +222,7 @@ export const ease: Record<'out' | 'in' | 'inOut' | 'snap' | 'impact', Cubic> = {
 export const spring = {
   ui:     { type: 'spring', stiffness: 420, damping: 32, mass: 0.7  },  // ζ 0.93
   bar:    { type: 'spring', stiffness: 200, damping: 26, mass: 1    },  // ζ 0.92
-  heavy:  { type: 'spring', stiffness: 130, damping: 19, mass: 1.15 },  // ζ 0.78
+  heavy:  { type: 'spring', stiffness: 130, damping: 22, mass: 1.15 },  // ζ 0.90
   impact: { type: 'spring', stiffness: 600, damping: 30, mass: 1.1  },  // ζ 0.58
 };
 
@@ -235,8 +235,8 @@ export const shake = { light: 3, hard: 5, cycles: 3, decay: 0.62 };
 **Damping ratios are load-bearing, so they are stated.** ζ = c / (2√(k·m)), and it decides whether a spring overshoots:
 
 - `ui` — ζ 0.93, overshoot 0.03%. Effectively critically damped. Settles in ~175ms.
-- `bar` — ζ 0.92, overshoot 0.07%. **This one drives a value that must read as accurate**, so it must never visibly pass its target and snap back. Do not lower its damping.
-- `heavy` — ζ 0.78, overshoot 2.1% at ~470ms, settling ~484ms. A single soft overshoot reads as weight.
+- `bar` — ζ 0.92, overshoot 0.07%. It drives the **continuous** fill used above `MAX_CELLS` tests; the segmented cells run on tween keyframes and never touch it. So the risk it guards against is *not* a fill spilling across a cell boundary and reading as a false pass — that cannot happen. It is subtler: a bar whose entire job is to be read as a measurement briefly displaying a value above the true one. The old 180/22 (ζ 0.82) overshot 1.11%, about 3.6px on a 320px bar. Do not lower its damping.
+- `heavy` — ζ 0.90, overshoot 0.16%, settling ~418ms. Slow arrival with no visible wobble. Mass is what makes it feel heavy; an earlier attempt raised mass but left damping at 19, which produced ζ 0.78 and 2.1% overshoot — that is bounce, not weight, and it reads as cheapness on a large panel.
 - `impact` — ζ 0.58, overshoot 10.4%, then a 1.1% rebound 330ms later, then nothing. One hard landing plus a hint of a second. Below about ζ 0.5 the second rebound becomes clearly visible and it stops reading as an impact and starts reading as a bounce.
 
 **`ease.impact` and `spring.impact` are not interchangeable.** The expo-out curve arrives hard with *no* overshoot — use it where something must land, like the §6.2 nameplate collision. The spring overshoots 10% — use it where something must pop, like the `VS` badge or a rank-up badge assembling. Choosing the spring for a collision makes the plates bounce, which is the opposite of a collision.
@@ -461,7 +461,13 @@ Do exactly one phase per session. Each phase ends fully designed, fully animated
 
 **Phase 1 — The Moment Simulator.** Before any networking, build `/dev/hud`: the complete match HUD with buttons that fire every cinematic on demand — queue pop, countdown, test pass, test fail, clutch state, submit pass, submit fail, victory, rank-up. *You are building this alone and will not have two humans to test with. This route is how you tune the feel, and it is the highest-leverage thing in the whole build.* Do not skip it, do not build it last.
 
-**Phase 2 — Real 1v1.** Auth, Postgres schema, 20 seeded problems **each with a validator (§6.8)**, Socket.IO gateway, matchmaking on Redis, Monaco with delta streaming, Docker judge, the real match screen wired to Phase 1's animations, Glicko-2, **problem ratings on the player scale (§8) driving difficulty selection at mean − 120**, victory and rating flow.
+**Phase 2 — Real 1v1.** Six systems, so it splits in two. One phase per session still holds (§13.4) — 2A and 2B are separate sessions.
+
+**Phase 2A — Persistence and execution.** Postgres + Prisma (users, problems, test cases, validators, submissions, matches, ratings, replay index). Auth, email/password only, no OAuth yet. The problem model carries a Glicko-scale difficulty rating (§8) **and a validator (§6.8) — the validator lands here, not retrofitted in Phase 4**. 20 seeded problems across DP, graphs, greedy, strings and math, rated 800–2000. The Docker judge: a worker pulling from Redis, executing in a container, streaming per-test-case results back individually. C++17 and Python 3 only; Java and JavaScript later. Plus `/dev/judge` — paste code, pick a problem, watch verdicts stream — for the same reason `/dev/hud` exists: see the judge work before it is buried under networking.
+
+Judge security is verified, never assumed. Every containment claim in §11 gets a test that actually attempts the escape — network call, fork bomb, memory exhaustion, infinite loop, unbounded stdout, filesystem write — and proves it is contained.
+
+**Phase 2B — Realtime.** Socket.IO gateway, `packages/proto` extended with zod schemas for every socket event, Redis matchmaking, Monaco with delta streaming, the real match screen wired to Phase 1's animations, Glicko-2, the bot opponent from §13.6, and the append-only JSONL event log that becomes the replay.
 
 **Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 

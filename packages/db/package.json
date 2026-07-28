@@ -1,0 +1,28 @@
+{
+  "name": "@1v1/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./validators": "./src/validators.ts",
+    "./problems": "./src/problems.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "verify": "node --experimental-strip-types src/verify-seed.ts",
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "push": "prisma db push",
+    "seed": "node --experimental-strip-types prisma/seed.ts",
+    "studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prisma": "^6.3.0",
+    "typescript": "^5.9.3"
+  }
+}

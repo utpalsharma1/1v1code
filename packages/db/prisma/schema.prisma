@@ -1,0 +1,253 @@
+// 1v1.code — data model (Phase 2A)
+//
+// Ratings are integers on one shared scale for both players and problems (§8):
+// a 1600 problem is one a 1600-rated player solves about half the time.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/* ── Identity ─────────────────────────────────────────────────────────── */
+
+model User {
+  id           String   @id @default(cuid())
+  handle       String   @unique
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  // Glicko-2. Rating is hidden behind the tier ladder (§8) but stored raw.
+  rating       Int      @default(1200)
+  ratingDev    Float    @default(350)
+  volatility   Float    @default(0.06)
+  placementsLeft Int    @default(5)
+
+  sessions     Session[]
+  submissions  Submission[]
+  matchesAsP1  Match[]      @relation("MatchP1")
+  matchesAsP2  Match[]      @relation("MatchP2")
+  ratingEvents RatingEvent[]
+
+  @@index([rating])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/* ── Problems ─────────────────────────────────────────────────────────── */
+
+enum Topic {
+  DP
+  GRAPHS
+  GREEDY
+  STRINGS
+  MATH
+}
+
+model Problem {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  title       String
+  topic       Topic
+  statement   String
+  /// Human-readable constraints, shown under the statement.
+  constraints String
+
+  /// On the player scale (§8). Seeded by estimate, then converged on solve data.
+  rating      Int
+  /// Glicko deviation for the problem, so convergence can be weighted.
+  ratingDev   Float   @default(200)
+  solveCount  Int     @default(0)
+  attemptCount Int    @default(0)
+
+  /// Key into the validator registry in src/validators.ts.
+  ///
+  /// The validator is deliberately NOT stored as source in the database.
+  /// It has to execute server-side to police hack inputs (§6.8), and a row
+  /// that contains executable code is a code-injection surface one bad admin
+  /// form away from RCE. The key keeps the code in reviewed, typechecked
+  /// source; the row only names it.
+  validatorKey String
+
+  timeLimitMs   Int @default(5000)
+  memoryLimitMb Int @default(256)
+
+  testCases   TestCase[]
+  submissions Submission[]
+  matches     Match[]
+
+  createdAt   DateTime @default(now())
+
+  @@index([rating])
+  @@index([topic])
+}
+
+model TestCase {
+  id        String  @id @default(cuid())
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  ordinal   Int
+  input     String
+  expected  String
+  /// Sample cases are shown in the statement; the rest are hidden.
+  isSample  Boolean @default(false)
+
+  @@unique([problemId, ordinal])
+  @@index([problemId])
+}
+
+/* ── Execution ────────────────────────────────────────────────────────── */
+
+enum Language {
+  CPP17
+  PYTHON3
+}
+
+enum Verdict {
+  PENDING
+  RUNNING
+  ACCEPTED
+  WRONG_ANSWER
+  TIME_LIMIT
+  MEMORY_LIMIT
+  RUNTIME_ERROR
+  COMPILE_ERROR
+  OUTPUT_LIMIT
+  INTERNAL_ERROR
+}
+
+model Submission {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId String
+  problem   Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  matchId   String?
+  match     Match?   @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  language  Language
+  source    String
+  verdict   Verdict  @default(PENDING)
+  /// Index of the first failing test, null when accepted.
+  failedAt  Int?
+  passed    Int      @default(0)
+  total     Int      @default(0)
+  runtimeMs Int?
+  memoryKb  Int?
+  /// Compiler output on COMPILE_ERROR. Never the program's own stdout.
+  message   String?
+
+  createdAt DateTime @default(now())
+  results   TestResult[]
+
+  @@index([userId, createdAt])
+  @@index([problemId])
+  @@index([matchId])
+}
+
+model TestResult {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  ordinal   Int
+  verdict   Verdict
+  runtimeMs Int?
+  memoryKb  Int?
+
+  @@unique([submissionId, ordinal])
+  @@index([submissionId])
+}
+
+/* ── Matches ──────────────────────────────────────────────────────────── */
+
+enum MatchMode {
+  RANKED
+  BLITZ
+  BO3
+  CASUAL
+}
+
+enum MatchState {
+  PENDING
+  LIVE
+  FINISHED
+  ABANDONED
+}
+
+model Match {
+  id        String     @id @default(cuid())
+  mode      MatchMode  @default(RANKED)
+  state     MatchState @default(PENDING)
+
+  p1Id      String
+  p1        User       @relation("MatchP1", fields: [p1Id], references: [id])
+  p2Id      String
+  p2        User       @relation("MatchP2", fields: [p2Id], references: [id])
+  winnerId  String?
+
+  problemId String
+  problem   Problem    @relation(fields: [problemId], references: [id])
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  /// Final elapsed time per side, in ms. The §6.8 hack penalty is charged here.
+  p1ElapsedMs Int?
+  p2ElapsedMs Int?
+
+  submissions Submission[]
+  ratingEvents RatingEvent[]
+  replay      Replay?
+
+  createdAt DateTime @default(now())
+
+  @@index([p1Id])
+  @@index([p2Id])
+  @@index([state])
+}
+
+model RatingEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matchId   String
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  before    Int
+  after     Int
+  devBefore Float
+  devAfter  Float
+  createdAt DateTime @default(now())
+
+  @@unique([userId, matchId])
+  @@index([userId, createdAt])
+}
+
+/// Index only. The replay itself is the append-only JSONL event log on
+/// disk/S3 (§10) — playback is a pure function of that file, and this row
+/// just points at it.
+model Replay {
+  id        String   @id @default(cuid())
+  matchId   String   @unique
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  logUri    String
+  sizeBytes Int
+  eventCount Int
+  durationMs Int
+  createdAt DateTime @default(now())
+}

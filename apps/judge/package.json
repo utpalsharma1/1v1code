@@ -1,0 +1,21 @@
+{
+  "name": "@1v1/judge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "test": "node --experimental-strip-types --test src/security.test.ts",
+    "images": "docker build -f images/cpp17.Dockerfile -t 1v1-judge-cpp17 images && docker build -f images/python3.Dockerfile -t 1v1-judge-python3 images",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@1v1/proto": "workspace:*",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

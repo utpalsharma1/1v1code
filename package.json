@@ -9,6 +9,12 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
+    "judge": "pnpm --filter @1v1/judge start",
+    "judge:images": "pnpm --filter @1v1/judge images",
+    "judge:test": "pnpm --filter @1v1/judge test",
+    "db:push": "pnpm --filter @1v1/db push",
+    "db:seed": "pnpm --filter @1v1/db seed",
+    "db:verify": "pnpm --filter @1v1/db verify",
     "clean": "node -e \"['apps/web/.next','apps/web/.turbo','packages/ui/.turbo','.turbo','apps/web/tsconfig.tsbuildinfo'].forEach(p=>require('fs').rmSync(p,{recursive:true,force:true}));console.log('cleaned')\""
   },
   "devDependencies": {

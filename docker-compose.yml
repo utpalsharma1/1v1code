@@ -1,0 +1,42 @@
+# Local development infrastructure only. The judge does NOT run here — judge
+# containers are launched one-per-submission by apps/judge via the Docker CLI,
+# so they get the hardened flags in §11 rather than compose's defaults.
+#
+#   docker compose up -d
+#   docker compose down          (keeps data)
+#   docker compose down -v       (wipes data)
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: 1v1-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: 1v1
+      POSTGRES_PASSWORD: 1v1_dev_only
+      POSTGRES_DB: 1v1
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U 1v1 -d 1v1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: 1v1-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
