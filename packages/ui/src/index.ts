@@ -56,6 +56,7 @@ export {
   type SpringKey,
   type SpringValue,
 } from "./lib/motion-tuning";
+export { CUE_ALIASES, playCue, sound, type Cue } from "./lib/sound";
 export {
   DIVISIONS,
   TIERS,

@@ -39,6 +39,35 @@ by 1/speed, spring stiffness by speed² and damping by speed. That holds the dam
 ζ = c/2√(km) constant, so you change tempo without silently changing bounce. Scaling stiffness alone
 would have you tuning two things at once without knowing it.
 
+### Follow-ups applied after first review
+
+- **§5's looping rule was reworded, not the code.** Looping motion is now allowed whenever it
+  encodes live state and forbidden when it is decoration. The queue radar (actively searching) and
+  the clutch edge (opponent above 80%) both qualify and both stop when the fact stops being true.
+  No exception needed anywhere, and the rule is about meaning rather than a quota.
+- **Placeholder sound pulled forward.** Six Web Audio oscillator tones generated at runtime, no
+  asset files: countdown tick, final tick (pitched higher), test pass (rises a semitone per
+  consecutive pass, resets after 4s or a fail), test fail (low thud), submit (band-passed noise
+  sweep), victory (three-note rising arpeggio). Mute and volume are in the rail. The real library is
+  still Phase 4 and will use a preloaded buffer pool per §9 — this is scaffolding so rhythm can be
+  tuned at all.
+- **The `--grandmaster` co-occurrence hole is closed.** Spectate shows the HUD *and* viewer handles,
+  which would have put `--fail` and `--grandmaster` on screen together. Resolved by rule rather than
+  by color: **tier color and match-state color never share a screen**, so handles render
+  `--text-dim` anywhere a live HUD is present (match, spectate, replay) and keep tier color
+  everywhere else. Shifting `--fail` was tested first and rejected — a search for the value that
+  maximises its minimum separation returns `#CD871C`, a dark goldenrod, because the only free space
+  left in the warm quadrant is the gap between crimson and `--clock`. Every meaningful shift costs
+  `--fail` its alarm semantics. Written into §4 next to the constraint.
+- **The pulse line's fake signal was wrong and is rebuilt.** The first version rolled a fresh
+  Bernoulli "burst?" every tick, which produces smooth noise — a shape that never occurs in reality,
+  and tuning the rendering against it would have meant tuning against a lie. It is now a four-state
+  machine (think / burst / edit / pause) with realistic dwell times and asymmetric smoothing, so
+  bursts start hard and silence arrives gently. Verified over 5 simulated minutes rather than
+  assumed: **44.8% dead air, 22.5s longest pause, 5.9s longest burst, 15 sharp onsets** for P1;
+  P2 runs spikier at 52.4% dead air and 31s longest pause. The flatline-then-spike shape the graph
+  exists to show now actually occurs. Replaced by real `opponent.pulse` events in Phase 2.
+
 ### Judgment calls worth reviewing
 
 - **Phase 0 primitives were migrated onto the tuning hook.** TestBar, Clock, Nameplate,

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CellState, Emote, FloatingEmote, Side, Status } from "@1v1/ui";
+import { playCue, type CellState, type Emote, type FloatingEmote, type Side, type Status } from "@1v1/ui";
+import { FakeTypist } from "./fakeTyping";
 
 /* ============================================================================
    The Moment Simulator's state (§12 Phase 1)
@@ -33,13 +34,12 @@ export interface PlayerSim {
 }
 
 const emptyCells = (): CellState[] => Array<CellState>(TOTAL_TESTS).fill("idle");
-const flatPulse = (): number[] => Array<number>(60).fill(0.05);
 
-function newPlayer(): PlayerSim {
+function newPlayer(pulse: number[] = []): PlayerSim {
   return {
     cells: emptyCells(),
     status: { kind: "idle" },
-    pulse: flatPulse(),
+    pulse,
     compileKey: 0,
     flashKey: 0,
     shatterKey: 0,
@@ -47,10 +47,22 @@ function newPlayer(): PlayerSim {
   };
 }
 
+const PULSE_WINDOW = 60;
+
 export function useMatchSim() {
+  // P2 is the spikier typist, so the two traces never look like the same signal.
+  const typists = useRef({
+    p1: new FakeTypist({ spikiness: 1 }),
+    p2: new FakeTypist({ spikiness: 1.5 }),
+  });
+
   const [overlay, setOverlay] = useState<Overlay>(null);
-  const [p1, setP1] = useState<PlayerSim>(newPlayer);
-  const [p2, setP2] = useState<PlayerSim>(newPlayer);
+  const [p1, setP1] = useState<PlayerSim>(() =>
+    newPlayer(typists.current.p1.history(PULSE_WINDOW)),
+  );
+  const [p2, setP2] = useState<PlayerSim>(() =>
+    newPlayer(typists.current.p2.history(PULSE_WINDOW)),
+  );
   const [clockMs, setClockMs] = useState(MATCH_MS);
   const [clockRunning, setClockRunning] = useState(false);
   const [clockPending, setClockPending] = useState(true);
@@ -79,8 +91,13 @@ export function useMatchSim() {
   const cancelled = useRef(false);
   const emoteId = useRef(0);
 
-  /** Sound is Phase 4. Until then, log the cue so its timing can still be tuned. */
+  /**
+   * The full library is Phase 4. A handful of placeholder oscillator tones are
+   * pulled forward because §6.3 and §6.6 are timed to rhythm and that cannot be
+   * tuned in silence. Cues with no tone yet are still logged.
+   */
   const cue = useCallback((name: string) => {
+    playCue(name);
     setSoundLog((log) => [{ id: ++seq.current, name }, ...log].slice(0, 14));
   }, []);
 
@@ -107,17 +124,11 @@ export function useMatchSim() {
      stretch followed by a burst is the whole point of the graph. */
   useEffect(() => {
     if (overlay !== null && overlay !== "verdict") return;
-    const tick = (set: typeof setP1, burstiness: number) =>
-      set((p) => {
-        const last = p.pulse[p.pulse.length - 1] ?? 0;
-        const wantsBurst = Math.random() < burstiness;
-        const target = wantsBurst ? 0.55 + Math.random() * 0.45 : Math.random() * 0.12;
-        const next = last + (target - last) * 0.35;
-        return { ...p, pulse: [...p.pulse.slice(1), next] };
-      });
     const id = window.setInterval(() => {
-      tick(setP1, 0.22);
-      tick(setP2, 0.3);
+      const a = typists.current.p1.next();
+      const b = typists.current.p2.next();
+      setP1((p) => ({ ...p, pulse: [...p.pulse.slice(1), a] }));
+      setP2((p) => ({ ...p, pulse: [...p.pulse.slice(1), b] }));
     }, 125 / speed);
     return () => window.clearInterval(id);
   }, [overlay, speed]);
@@ -127,8 +138,8 @@ export function useMatchSim() {
   const reset = useCallback(() => {
     cancelled.current = true;
     setOverlay(null);
-    setP1(newPlayer());
-    setP2(newPlayer());
+    setP1(newPlayer(typists.current.p1.history(PULSE_WINDOW)));
+    setP2(newPlayer(typists.current.p2.history(PULSE_WINDOW)));
     setClockMs(MATCH_MS);
     setClockRunning(false);
     setClockPending(true);

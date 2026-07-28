@@ -5,6 +5,7 @@ import {
   Button,
   DEFAULT_VALUES,
   cn,
+  sound,
   toMotionSource,
   useMotionPref,
   useMotionTuning,
@@ -41,6 +42,8 @@ export function TuningPanel() {
   const { values, setValues, speed, setSpeed, reset } = useMotionTuning();
   const { pref, setPref } = useMotionPref();
   const [copied, setCopied] = useState(false);
+  const [muted, setMuted] = useState(sound.muted);
+  const [volume, setVolume] = useState(sound.volume);
 
   const patch = (fn: (draft: typeof values) => void) => {
     const next = structuredClone(values);
@@ -93,6 +96,40 @@ export function TuningPanel() {
         <p className="text-fg-faint text-12 leading-snug">
           Reduced motion replaces every movement with a 120ms fade, disables particles and screen
           shake, and stops the radar and clutch loops.
+        </p>
+      </Group>
+
+      <Group title="Sound (placeholder)">
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={muted ? "outline" : "solid"}
+            tone={muted ? "neutral" : "player"}
+            onClick={() => {
+              const next = !muted;
+              setMuted(next);
+              sound.setMuted(next);
+            }}
+          >
+            {muted ? "Muted" : "On"}
+          </Button>
+        </div>
+        <Slider
+          label="volume"
+          value={volume}
+          min={0}
+          max={1}
+          step={0.05}
+          decimals={2}
+          onChange={(v) => {
+            setVolume(v);
+            sound.setVolume(v);
+          }}
+        />
+        <p className="text-fg-faint text-12 leading-snug">
+          Six crude Web Audio oscillator tones, no asset files — countdown tick, final tick, test
+          pass (pitch rises per consecutive pass), test fail, submit, victory. Pulled forward from
+          Phase 4 only because §6.3 and §6.6 are timed to rhythm. The real library is still Phase 4.
         </p>
       </Group>
 

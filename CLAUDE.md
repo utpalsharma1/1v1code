@@ -103,7 +103,16 @@ We now have three warm colors — `--p2` magenta, `--fail` orange, `--grandmaste
 - vs `--fail`: **0.101** normal, 0.187 deuteranopia, 0.246 protanopia.
 - Clears 4.62:1 as handle text on `--surface` and 4.97:1 on `--ink`, which small text requires.
 
-Note that crimson sits *between* magenta and orange in hue, so inserting it necessarily reduces the minimum pairwise distance — it cannot beat the existing `--p2`/`--fail` pair (0.137 / 0.175 / 0.223) and asking it to would be geometrically impossible. What makes this safe is co-occurrence, not distance: tier color is suppressed inside the match HUD, and `--fail` only exists inside a match, so `--grandmaster` and `--fail` never appear on screen together. **If you ever surface a tier color inside the HUD, this analysis is void.**
+Note that crimson sits *between* magenta and orange in hue, so inserting it necessarily reduces the minimum pairwise distance — it cannot beat the existing `--p2`/`--fail` pair (0.137 / 0.175 / 0.223) and asking it to would be geometrically impossible. What makes this safe is **co-occurrence, not distance**.
+
+**The separation rule: tier color and match-state color never share a screen.**
+
+`--grandmaster` (0.101 from `--fail` in normal vision) is the closest pair in the palette, so they must never be co-present. Spectate (§7) is the screen that nearly broke this — it shows the full match HUD *and* a live emote stream carrying viewer handles, which would have put `--fail` on the test bars and `--grandmaster` on a handle at the same time. The resolution:
+
+- **Anywhere a live match HUD is on screen, handles render `--text-dim` with no tier color and no aura.** That covers the match screen, spectate, and replay playback. Identity there comes from the `P1`/`P2` chip and, where it matters, a small `RankBadge` — never from handle color.
+- Tier color keeps every surface where no match state exists: hub, leaderboards, profiles, match history, friend strips, season art. That is where most social browsing happens, so the "a glowing handle just walked in" moment survives essentially intact.
+
+Shifting `--fail` was the obvious alternative and it was tested and rejected. The warm quadrant already holds four colors — magenta, crimson, orange, amber — and a search for the `--fail` that maximises its minimum separation returns `#CD871C`, a dark goldenrod. Every candidate that meaningfully improves separation flees into the only free space, which is the gap between crimson and `--clock`'s amber, and arrives somewhere that no longer reads as an alarm and now competes semantically with the clock. `--fail` has exactly one job (§4) and the color has to do that job first. **Do not retune `--fail` to fix an adjacency problem — fix the adjacency.**
 
 **Colorblind rule:** player identity must never depend on hue alone. P1 is always left, always labelled `P1`, always uses a **solid** bar fill. P2 is always right, labelled `P2`, always uses a bar fill with a subtle 45° hatch texture. Verify at deuteranopia and protanopia.
 
@@ -145,7 +154,9 @@ Fighting-game HUDs slant. Adopt one consistent device and use it everywhere so t
 
 ### League color on handles (Phase 3)
 
-Outside a match, a player's handle renders in their **tier color everywhere it appears** — hub, leaderboards, profiles, spectator chat, match history, replay timelines, friend strips. Rank stops being a badge you click and becomes ambient identity you read at a glance. Legend takes the `--legend` gradient on the text itself.
+Outside a match, a player's handle renders in their **tier color everywhere it appears** — hub, leaderboards, profiles, match history, friend strips, season art. Rank stops being a badge you click and becomes ambient identity you read at a glance. Legend takes the `--legend` gradient on the text itself.
+
+Spectate and replay are the exceptions, because a match HUD is on screen there — see *the separation rule* above.
 
 #### Tier aura
 
@@ -173,7 +184,7 @@ A leaderboard where every handle glows is visual noise. The restraint is precise
 
 Never animate the aura, never pulse it, and never extend it downward to more tiers.
 
-**Inside a match, side color always wins.** A Grandmaster on the P1 side renders jade — never crimson. This is not a special case to code around: the handle component sits inside the `[data-side]` scope and inherits `--player` like everything else. If you ever find yourself branching on tier inside the match HUD, the component is in the wrong place in the tree. Tier aura is suppressed entirely inside the HUD — and the `--grandmaster` separation analysis above depends on that staying true.
+**Inside a match, side color always wins.** A Grandmaster on the P1 side renders jade — never crimson. This is not a special case to code around: the handle component sits inside the `[data-side]` scope and inherits `--player` like everything else. If you ever find yourself branching on tier inside the match HUD, the component is in the wrong place in the tree. Tier aura is suppressed entirely on any screen showing a live HUD — and the `--grandmaster` separation analysis above depends on that staying true.
 
 ---
 
@@ -199,6 +210,7 @@ export const spring = {
 
 **Hard rules:**
 - Animate `transform` and `opacity` only. Never animate `width`, `height`, `top`, `left`, or `box-shadow` on anything that runs during a match. Bars scale on the X axis with `transform-origin` set to the owning player's side.
+- **Looping motion is allowed only when it encodes live state, never as decoration.** A loop must be readable as a fact about the world: the queue radar sweeps because you are *actively searching*, and the clutch edge breathes because the opponent is *above 80%*. Both stop the instant the fact stops being true. Anything that loops without a live state behind it is decoration and does not ship — scattered ambient animation is exactly what makes an interface feel generated. This is a rule about meaning, not a quota: there is no fixed number of permitted loops, and a loop that passes this test needs no exception carved out for it.
 - Stagger list children by **40ms**, capped at 8 items (after that, fade the group).
 - Every interactive element has three visible states: rest, hover (`scale 1.02`, border → player/accent color, 160ms), press (`scale 0.97`, 90ms).
 - **Never animate the code editor's own content.** The editor is a workspace, it stays calm. All drama happens in the HUD around it.
@@ -215,7 +227,7 @@ This section is the product. Build it with more care than anything else in this 
 
 The Hub's **PLAY** button is the largest element on screen. On click it does not navigate — it transforms in place into a queue card, which expands downward with a spring. Inside:
 
-- A slow **radar sweep** rotating behind the player's rank badge (this is the one piece of ambient motion allowed to loop, because waiting needs a heartbeat).
+- A slow **radar sweep** rotating behind the player's rank badge. It loops because it encodes live state — you are searching right now — and it stops the moment you are not. See §5.
 - Elapsed time in tabular JetBrains Mono, counting up.
 - Live text: `Scanning 1420–1480 · 47 players in queue`. Widen the search band visibly every 10s and say so: `Widening search…`.
 - Cancel is always one click, always visible.
