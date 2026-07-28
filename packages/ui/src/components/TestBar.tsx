@@ -2,9 +2,9 @@
 
 import { motion, type Variants } from "framer-motion";
 import { useMemo } from "react";
-import { dur, ease, sec, shakeX, spring } from "../../motion";
+import { shakeX } from "../../motion";
 import { cn } from "../lib/cn";
-import { useReducedMotion } from "../lib/motion-pref";
+import { useMotion } from "../lib/motion-tuning";
 import type { CellState, Side } from "../lib/types";
 
 /**
@@ -23,6 +23,12 @@ export interface TestBarProps {
   passed?: number;
   showCount?: boolean;
   size?: "sm" | "md";
+  /**
+   * Bump to fire the near-miss shatter (§6.5): the opponent submitted and
+   * failed, so their filled cells crack and fall. The best spectator moment in
+   * the product — enormous relief for you, well-earned pain for them.
+   */
+  shatterKey?: number;
   className?: string;
 }
 
@@ -33,9 +39,10 @@ export function TestBar({
   passed = 0,
   showCount = true,
   size = "md",
+  shatterKey = 0,
   className,
 }: TestBarProps) {
-  const reduced = useReducedMotion();
+  const m = useMotion();
   const isP2 = side === "p2";
 
   const resolved = useMemo<CellState[]>(
@@ -71,9 +78,11 @@ export function TestBar({
         aria-label={`${side === "p1" ? "P1" : "P2"} tests passed`}
       >
         {segmented ? (
-          resolved.map((state, i) => <Cell key={i} state={state} reduced={reduced} />)
+          resolved.map((state, i) => (
+            <Cell key={i} state={state} index={i} shatterKey={shatterKey} />
+          ))
         ) : (
-          <ContinuousBar passed={passCount} total={total} reduced={reduced} />
+          <ContinuousBar passed={passCount} total={total} />
         )}
       </div>
 
@@ -90,45 +99,101 @@ export function TestBar({
 /* ── One test case ───────────────────────────────────────────────────────
    Pass: 90ms scale-Y pop plus a 40% white overlay decaying over 200ms.
    Fail: --fail flash, a 2px horizontal shake, then it settles to a dim
-   outline so the failure stays legible without staying loud. (§6.4) */
+   outline so the failure stays legible without staying loud. (§6.4)
+   Shatter: the whole filled bar cracks and falls (§6.5). */
 
-const cellVariants: Variants = {
-  idle: { scaleY: 1, x: 0 },
-  pass: {
-    scaleY: [1, 1.3, 1],
-    x: 0,
-    transition: { duration: sec(dur.instant), ease: ease.snap },
-  },
-  fail: {
-    scaleY: 1,
-    x: shakeX,
-    transition: { duration: sec(dur.base), ease: ease.inOut },
-  },
-};
+function Cell({
+  state,
+  index,
+  shatterKey,
+}: {
+  state: CellState;
+  index: number;
+  shatterKey: number;
+}) {
+  const m = useMotion();
+  const shattering = shatterKey > 0 && state === "pass";
 
-const whiteFlash: Variants = {
-  idle: { opacity: 0 },
-  pass: { opacity: [0.4, 0], transition: { duration: sec(dur.decay), ease: ease.out } },
-  fail: { opacity: 0 },
-};
+  const cellVariants: Variants = useMemo(
+    () => ({
+      idle: { scaleY: 1, x: 0, y: 0, rotate: 0, opacity: 1 },
+      pass: {
+        scaleY: [1, 1.3, 1],
+        x: 0,
+        y: 0,
+        rotate: 0,
+        opacity: 1,
+        transition: { duration: m.sec(m.dur.instant), ease: m.ease.snap },
+      },
+      fail: {
+        scaleY: 1,
+        y: 0,
+        rotate: 0,
+        opacity: 1,
+        x: shakeX,
+        transition: { duration: m.sec(m.dur.base), ease: m.ease.inOut },
+      },
+      shatter: {
+        y: 46,
+        rotate: (index % 2 === 0 ? 1 : -1) * (12 + (index % 5) * 4),
+        opacity: 0,
+        scaleY: 1,
+        transition: {
+          duration: m.sec(m.dur.slow),
+          ease: m.ease.inOut,
+          delay: m.stagger(index),
+        },
+      },
+    }),
+    [m, index],
+  );
 
-const failFlash: Variants = {
-  idle: { opacity: 0 },
-  pass: { opacity: 0 },
-  fail: { opacity: [1, 0], transition: { duration: sec(dur.decay), ease: ease.out } },
-};
+  const overlays: Record<string, Variants> = useMemo(
+    () => ({
+      white: {
+        idle: { opacity: 0 },
+        pass: {
+          opacity: [0.4, 0],
+          transition: { duration: m.sec(m.dur.decay), ease: m.ease.out },
+        },
+        fail: { opacity: 0 },
+        shatter: { opacity: 0 },
+      },
+      fail: {
+        idle: { opacity: 0 },
+        pass: { opacity: 0 },
+        fail: {
+          opacity: [1, 0],
+          transition: { duration: m.sec(m.dur.decay), ease: m.ease.out },
+        },
+        // The 200ms red flash that precedes the fall.
+        shatter: {
+          opacity: [0.9, 0],
+          transition: { duration: m.sec(m.dur.decay), ease: m.ease.out },
+        },
+      },
+    }),
+    [m],
+  );
 
-// Under reduced motion nothing moves: state changes read through color and the
-// same overlays, faded rather than popped.
-const staticVariants: Variants = { idle: {}, pass: {}, fail: {} };
+  // Under reduced motion nothing moves: state changes read through color and
+  // the same overlays, faded rather than popped or thrown.
+  const staticVariants: Variants = {
+    idle: { opacity: 1 },
+    pass: { opacity: 1 },
+    fail: { opacity: 1 },
+    shatter: { opacity: 0.2 },
+  };
 
-function Cell({ state, reduced }: { state: CellState; reduced: boolean }) {
+  const target = shattering ? "shatter" : state;
+
   return (
     <motion.div
       data-state={state}
       initial={false}
-      animate={state}
-      variants={reduced ? staticVariants : cellVariants}
+      animate={target}
+      variants={m.reduced ? staticVariants : cellVariants}
+      transition={m.reduced ? m.t({}) : undefined}
       className={cn(
         "relative h-full min-w-0 flex-1 overflow-hidden",
         "border transition-colors duration-[160ms]",
@@ -139,10 +204,14 @@ function Cell({ state, reduced }: { state: CellState; reduced: boolean }) {
     >
       <motion.span
         aria-hidden
-        variants={whiteFlash}
+        variants={overlays["white"]}
         className="absolute inset-0 bg-[var(--flash)]"
       />
-      <motion.span aria-hidden variants={failFlash} className="bg-fail absolute inset-0" />
+      <motion.span
+        aria-hidden
+        variants={overlays["fail"]}
+        className="bg-fail absolute inset-0"
+      />
     </motion.div>
   );
 }
@@ -150,23 +219,16 @@ function Cell({ state, reduced }: { state: CellState; reduced: boolean }) {
 /* ── Continuous fallback ─────────────────────────────────────────────────
    Scales on X with the origin on the owning player's side, so it still grows
    toward the center. No width animation — §5. */
-function ContinuousBar({
-  passed,
-  total,
-  reduced,
-}: {
-  passed: number;
-  total: number;
-  reduced: boolean;
-}) {
+function ContinuousBar({ passed, total }: { passed: number; total: number }) {
+  const m = useMotion();
   return (
     <div className="border-line relative h-full flex-1 border">
       <motion.div
         initial={false}
         animate={{ scaleX: total > 0 ? passed / total : 0 }}
-        transition={reduced ? { duration: sec(dur.fast) } : spring.bar}
+        transition={m.reduced ? { duration: m.sec(m.dur.fast) } : m.spring.bar}
         style={{ transformOrigin: "var(--player-origin)" }}
-        className="h-full w-full fill-player"
+        className="fill-player h-full w-full"
       />
     </div>
   );

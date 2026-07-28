@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, type HTMLMotionProps } from "framer-motion";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { cn } from "../lib/cn";
 import { useInteractive } from "../lib/interactive";
 import type { Side } from "../lib/types";
@@ -15,8 +15,10 @@ type Size = "sm" | "md" | "lg";
 // and animation handlers have Framer's signatures, not the DOM's.
 // `children` is narrowed back to ReactNode — Framer widens it to accept a
 // MotionValue, which a button label never is.
-export interface ButtonProps extends Omit<HTMLMotionProps<"button">, "children"> {
+export interface ButtonProps extends Omit<HTMLMotionProps<"button">, "children" | "ref"> {
   children?: ReactNode;
+  /** React 19 passes ref as an ordinary prop; §6.7 focuses Rematch by default. */
+  ref?: Ref<HTMLButtonElement>;
   variant?: Variant;
   tone?: Tone;
   size?: Size;

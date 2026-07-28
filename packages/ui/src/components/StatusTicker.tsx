@@ -1,9 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { dur, ease, transitionFor, tween } from "../../motion";
 import { cn } from "../lib/cn";
-import { useReducedMotion } from "../lib/motion-pref";
+import { useMotion } from "../lib/motion-tuning";
 import type { Side } from "../lib/types";
 
 /**
@@ -46,7 +45,8 @@ function describe(status: Status): { text: string; tone: string } {
 }
 
 export function StatusTicker({ status, side, align = "start", className }: StatusTickerProps) {
-  const reduced = useReducedMotion();
+  const m = useMotion();
+  const reduced = m.reduced;
   const { text, tone } = describe(status);
 
   return (
@@ -67,7 +67,7 @@ export function StatusTicker({ status, side, align = "start", className }: Statu
           initial={{ opacity: 0, y: reduced ? 0 : 4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: reduced ? 0 : -4 }}
-          transition={transitionFor(reduced, tween(dur.fast, ease.out))}
+          transition={m.t(m.tween(m.dur.fast, m.ease.out))}
           className={cn(
             "font-display absolute inset-0 text-12 leading-4 font-bold",
             "tracking-[var(--track-hud)] uppercase",

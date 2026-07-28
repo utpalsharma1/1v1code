@@ -2,9 +2,8 @@
 
 import { motion, useAnimationControls } from "framer-motion";
 import { useEffect } from "react";
-import { dur, ease, REDUCED_MS, sec, transitionFor, tween } from "../../motion";
 import { cn } from "../lib/cn";
-import { useReducedMotion } from "../lib/motion-pref";
+import { useMotion } from "../lib/motion-tuning";
 import type { Division, Side, Tier } from "../lib/types";
 import { RankBadge } from "./RankBadge";
 
@@ -34,7 +33,8 @@ export function Nameplate({
   size = "md",
   className,
 }: NameplateProps) {
-  const reduced = useReducedMotion();
+  const m = useMotion();
+  const reduced = m.reduced;
   const flash = useAnimationControls();
   const isP2 = side === "p2";
 
@@ -42,18 +42,16 @@ export function Nameplate({
     if (flashKey === 0) return;
     void flash.start({
       opacity: [1, 0],
-      transition: reduced
-        ? { duration: sec(REDUCED_MS), ease: "linear" }
-        : { duration: sec(dur.flash), ease: ease.out },
+      transition: m.t({ duration: m.sec(m.dur.flash), ease: m.ease.out }),
     });
-  }, [flashKey, flash, reduced]);
+  }, [flashKey, flash, m]);
 
   return (
     <motion.div
       data-side={side}
       data-state={state}
       animate={{ scale: state === "winner" && !reduced ? 1.04 : 1 }}
-      transition={transitionFor(reduced, tween(dur.base, ease.snap))}
+      transition={m.t(m.tween(m.dur.base, m.ease.snap))}
       className={cn(
         "clip-lean relative flex items-center border bg-surface",
         // P2 mirrors the whole plate so the two lean into each other.

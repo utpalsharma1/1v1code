@@ -1,5 +1,95 @@
 # PROGRESS
 
+## Phase 1 — The Moment Simulator ✅
+
+`/dev/hud`. Every beat of §6 fires on demand, beats chain into a full match, and every number in
+`motion.ts` is editable live so the feel can be tuned and the winning values exported.
+
+```
+pnpm dev     # http://localhost:3000/dev/hud
+pnpm clean   # wipes .next and .turbo — run after switching branches
+```
+
+### Beats, all implemented
+
+Queue (radar sweep, elapsed clock, widening band) · queue pop (dim → light sweep → 60ms-offset
+plate collision → flash → shake → staggered meta → VS overshoot, with independent accept pips) ·
+countdown `3·2·1·GO` with ring pulses · problem reveal (editors slide in from opposite edges,
+panel unfolds, title types at 28 chars/sec) · the full HUD (nameplates, test bars racing toward
+center, canvas pulse lines, status tickers, clock, round pips) · compile pulse · clutch state at
+80% and 90% · near-miss shatter · emote wheel on `Ctrl+E` with a 15s cooldown · submit pass ·
+submit fail · victory · defeat · rank-up.
+
+**Play full match** runs the whole sequence end to end, including a failed submit before the
+successful one, so the recovery beat gets exercised.
+
+### The tuning surface — the actual deliverable
+
+Right rail, bottom half. Live controls for every `motion.ts` value: all seven durations, all three
+cubic-beziers (with a curve preview), spring stiffness/damping/mass, stagger step and cap, and both
+shake amplitudes. **Copy motion.ts** emits the tuned values as source, ready to paste back into
+`packages/ui/motion.ts`. Hand me those numbers and I'll bake them in.
+
+`motion.ts` remains the single source of truth for the defaults — the tuning layer reads from it and
+overrides at runtime. With no provider, every consumer gets the unmodified values, so
+`/dev/kitchen-sink` and every future product surface are untouched by this.
+
+**Global speed, 0.25×–2×**, scales time correctly rather than just stretching durations: durations
+by 1/speed, spring stiffness by speed² and damping by speed. That holds the damping ratio
+ζ = c/2√(km) constant, so you change tempo without silently changing bounce. Scaling stiffness alone
+would have you tuning two things at once without knowing it.
+
+### Judgment calls worth reviewing
+
+- **Phase 0 primitives were migrated onto the tuning hook.** TestBar, Clock, Nameplate,
+  StatusTicker and the interactive (hover/press) hook now read from `useMotion()` instead of
+  importing `motion.ts` constants directly. Without this the exported numbers would only describe
+  the cinematics while the HUD's micro-animations quietly ignored them. §5's "no component invents
+  its own timing" still holds — they read the canonical values, just through a layer that can
+  override them.
+- **`ClutchEdge` loops**, which §5 otherwise reserves for the queue radar. §2 rule 3 names clutch
+  state as one of the five moments that get real cinematics, and §6.5 specifies a breathing cycle
+  explicitly, so this is sanctioned — but the two lines in the brief are in tension and it is worth
+  a decision. It only exists above 80% and stops entirely under reduced motion.
+- **The fake editor animates `filter`** on submit, because §6.6 requires a 4px blur. Not in §5's
+  banned list, and it is one-shot rather than during-match, but it is the one non-transform/opacity
+  animation in the build.
+- **Sound cues are logged, not played.** The library is Phase 4, but §6.3 and §6.6 are timed *to*
+  sound. The rail shows a running cue log so the timing can still be tuned now.
+- **`Ctrl+E`** is `preventDefault`ed; it collides with a browser shortcut in some setups.
+
+### Reduced motion
+
+Implemented for every beat in the same commit, per §5.9. Movement is replaced by 120ms opacity
+fades, particles and screen shake are disabled outright rather than shortened, the radar and clutch
+loops stop, and the typewriter resolves instantly. Toggle is in the rail (auto / full / reduced).
+
+### Not verified
+
+I still cannot screenshot. Typecheck and build pass, all three routes return 200, and the built CSS
+was audited — but **nobody has looked at these cinematics yet**. The timings are the brief's numbers
+taken literally, which is exactly what the tuning surface exists to correct.
+
+---
+
+## Decisions applied to master
+
+1. **`--grandmaster` is now `#FB1E1E`** — crimson, deliberately not `--p2`'s magenta, echoing
+   Codeforces' red top tier. `--legend`'s final stop matches. Verified in OKLab ΔE (WCAG ratio is
+   luminance-only and would score two obviously different hues as identical): 0.099 vs `--p2`,
+   0.101 vs `--fail`, and 4.62:1 as handle text. Full reasoning, including why it *cannot* beat the
+   existing `--p2`/`--fail` pair, is in CLAUDE.md §4.
+2. **Tier aura is its own device**, not an exception to the glow rule. `--tier-aura-faint` /
+   `--tier-aura-full` are `text-shadow`, which has no spread parameter at all — so an aura can never
+   quietly become a state glow. §5 needs no carve-out.
+3. **Problem ratings and Handles moved to §8**, now titled *Progression and identity*.
+4. **Matchmaking targets mean − 120**, per-mode, with an adaptive spread that widens with queue
+   time. Selecting at the average would have left ~25% of matches with neither player solving.
+   **Failed hack costs 30s on final elapsed time**, and the brief now says what that acts on.
+5. **Hack validator** is required, and lands in the Phase 2 problem schema rather than Phase 4.
+6. **`pnpm clean`** added. Run it after switching branches — `tsconfig` includes `.next/types`, so a
+   stale build from another branch fails typecheck on routes that no longer exist.
+
 ## Palette pass — explored, rejected, two fixes kept ✅
 
 A muted palette direction was built out and **rejected**. Three candidates (Risograph spot inks,

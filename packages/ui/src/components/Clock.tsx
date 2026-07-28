@@ -2,9 +2,8 @@
 
 import { motion, useAnimationControls } from "framer-motion";
 import { useEffect, useRef } from "react";
-import { dur, ease, sec } from "../../motion";
 import { cn } from "../lib/cn";
-import { useReducedMotion } from "../lib/motion-pref";
+import { useMotion } from "../lib/motion-tuning";
 
 const WARNING_MS = 60_000;
 const CRITICAL_MS = 10_000;
@@ -28,7 +27,8 @@ function format(ms: number): string {
 }
 
 export function Clock({ ms, size = "hud", pending = false, className }: ClockProps) {
-  const reduced = useReducedMotion();
+  const m = useMotion();
+  const reduced = m.reduced;
   const controls = useAnimationControls();
   const lastSecond = useRef(-1);
 
@@ -46,9 +46,9 @@ export function Clock({ ms, size = "hud", pending = false, className }: ClockPro
     if (!changed || !critical || reduced) return;
     void controls.start({
       scale: [1, 1.06, 1],
-      transition: { duration: sec(dur.instant), ease: ease.snap },
+      transition: { duration: m.sec(m.dur.instant), ease: m.ease.snap },
     });
-  }, [second, critical, reduced, controls]);
+  }, [second, critical, reduced, controls, m]);
 
   return (
     <motion.div

@@ -41,8 +41,10 @@
   --platinum: #2dd4bf;
   --diamond: #60a5fa;
   --master: #a855f7;
-  --grandmaster: #ff4d8d;
-  --legend: linear-gradient(100deg, #ffd76e, #ff8a3d, #ff4d8d);
+  /* Crimson, not magenta. Deliberately distinct from --p2 so a Grandmaster
+     badge never reads as a P2 element; see CLAUDE.md §4. */
+  --grandmaster: #fb1e1e;
+  --legend: linear-gradient(100deg, #ffd76e, #ff8a3d, #fb1e1e);
 
   /* ==========================================================================
      ADDITIONS beyond §4. Each is listed with the reason it was unavoidable,
@@ -63,6 +65,16 @@
   --scrim: #080b12d9; /* ink @ 85% */
   --flash: #ffffff66; /* white @ 40% */
   --flash-hard: #ffffff; /* the 60ms plate flash in §6.2 step 3 */
+
+  /* ── Tier aura ────────────────────────────────────────────────────────
+     NOT a state glow, and built so the two can never be confused — in code
+     or by eye. State glow is a box-shadow on a container, fires on change,
+     and is absent at rest. Tier aura is a text-shadow on a handle, sits at
+     rest, and has no spread parameter at all: text-shadow cannot take one,
+     which is exactly why it was chosen. Tighter radius, lower alpha.
+     Unused until Phase 3 ships handles. See CLAUDE.md §4. */
+  --tier-aura-faint: 0 0 6px color-mix(in oklab, var(--tier) 22%, transparent);
+  --tier-aura-full: 0 0 10px color-mix(in oklab, var(--tier) 38%, transparent);
 
   /* ── Geometry (§4 "Geometry") ───────────────────────────────────────── */
   --clip: 12px; /* the corner cut, everywhere */
@@ -199,6 +211,14 @@
 }
 .bg-legend {
   background: var(--legend);
+}
+
+/* Tier aura, for handles (Phase 3). Never box-shadow — see the token note. */
+.tier-aura-faint {
+  text-shadow: var(--tier-aura-faint);
+}
+.tier-aura-full {
+  text-shadow: var(--tier-aura-full);
 }
 
 /* ── Geometry utilities ─────────────────────────────────────────────────── */

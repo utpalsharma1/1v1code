@@ -9,7 +9,7 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "clean": "turbo run clean"
+    "clean": "node -e \"['apps/web/.next','apps/web/.turbo','packages/ui/.turbo','.turbo','apps/web/tsconfig.tsbuildinfo'].forEach(p=>require('fs').rmSync(p,{recursive:true,force:true}));console.log('cleaned')\""
   },
   "devDependencies": {
     "turbo": "^2.10.7",

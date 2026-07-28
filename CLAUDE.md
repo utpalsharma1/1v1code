@@ -87,9 +87,23 @@ Define these in `packages/ui/tokens.css` as CSS custom properties and expose thr
 --platinum:   #2DD4BF;
 --diamond:    #60A5FA;
 --master:     #A855F7;
---grandmaster:#FF4D8D;
---legend:     linear-gradient(100deg,#FFD76E,#FF8A3D,#FF4D8D);
+--grandmaster:#FB1E1E;   /* crimson — deliberately NOT --p2's magenta */
+--legend:     linear-gradient(100deg,#FFD76E,#FF8A3D,#FB1E1E);
+
+/* Tier aura — a different device from state glow. See "Tier aura" below. */
+--tier-aura-faint: 0 0 6px  color-mix(in oklab, var(--tier) 22%, transparent);
+--tier-aura-full:  0 0 10px color-mix(in oklab, var(--tier) 38%, transparent);
 ```
+
+**Grandmaster is crimson, not magenta, and that is load-bearing.** It used to be the same hex as `--p2`. When `--p2` moved it was left behind, which put a Grandmaster badge ~2% away from a P2 element — the one outcome worse than either matching or clearly differing, because it reads as a rendering bug. It is now pulled to crimson, which also echoes Codeforces' red top tier, and the ladder's `--legend` gradient ends on the same value so the top reads continuous.
+
+We now have three warm colors — `--p2` magenta, `--fail` orange, `--grandmaster` crimson — and they must not converge. Verified in OKLab ΔE, which is the right metric here; WCAG contrast ratio only measures luminance and would score two obviously different hues as identical:
+
+- vs `--p2`: **0.099** normal, 0.126 deuteranopia, 0.160 protanopia.
+- vs `--fail`: **0.101** normal, 0.187 deuteranopia, 0.246 protanopia.
+- Clears 4.62:1 as handle text on `--surface` and 4.97:1 on `--ink`, which small text requires.
+
+Note that crimson sits *between* magenta and orange in hue, so inserting it necessarily reduces the minimum pairwise distance — it cannot beat the existing `--p2`/`--fail` pair (0.137 / 0.175 / 0.223) and asking it to would be geometrically impossible. What makes this safe is co-occurrence, not distance: tier color is suppressed inside the match HUD, and `--fail` only exists inside a match, so `--grandmaster` and `--fail` never appear on screen together. **If you ever surface a tier color inside the HUD, this analysis is void.**
 
 **Colorblind rule:** player identity must never depend on hue alone. P1 is always left, always labelled `P1`, always uses a **solid** bar fill. P2 is always right, labelled `P2`, always uses a bar fill with a subtle 45° hatch texture. Verify at deuteranopia and protanopia.
 
@@ -108,7 +122,7 @@ It was rejected because the reference was fighting the brief. Risograph is a qui
 
 **The chroma above is a deliberate choice, not an oversight. Do not mute it.**
 
-**No difficulty colors.** Problem difficulty is a number on the player rating scale (§7), never an Easy/Medium/Hard color code. Difficulty green collides with P1, difficulty red collides with `--fail`, and a rating is more precise than three buckets anyway. Do not add a difficulty palette later.
+**No difficulty colors.** Problem difficulty is a number on the player rating scale (§8), never an Easy/Medium/Hard color code. Difficulty green collides with P1, difficulty red collides with `--fail`, and a rating is more precise than three buckets anyway. Do not add a difficulty palette later.
 
 ### Type
 
@@ -133,17 +147,33 @@ Fighting-game HUDs slant. Adopt one consistent device and use it everywhere so t
 
 Outside a match, a player's handle renders in their **tier color everywhere it appears** — hub, leaderboards, profiles, spectator chat, match history, replay timelines, friend strips. Rank stops being a badge you click and becomes ambient identity you read at a glance. Legend takes the `--legend` gradient on the text itself.
 
-**Glow scales with tier, and most tiers get none.**
+#### Tier aura
 
-- **Iron, Bronze, Silver, Gold** — flat tier color. No glow, ever.
-- **Platinum, Diamond** — a faint glow: `0 0 8px` at roughly a third of `--pX-glow`'s alpha.
-- **Master, Grandmaster, Legend** — the full `0 0 24px` treatment.
+**Tier aura is not state glow.** They are two different devices that happen to both be expressible as a shadow, and the moment you let them share a token they start drifting into each other. They are separated on purpose, in code and by eye:
 
-A leaderboard where every handle glows is visual noise, and it is a §5 violation dressed up as flair. The restraint is precisely what makes the top of the ladder feel earned: a glowing handle appearing in spectator chat should read as an **event** — someone important just walked in. If everything glows, nothing does.
+| | State glow (`--pX-glow`) | Tier aura (`--tier-aura-*`) |
+| --- | --- | --- |
+| property | `box-shadow` on a container | `text-shadow` on a handle |
+| when | on change, on hover, one-shot | at rest, permanently |
+| radius | 24px | 6–10px |
+| alpha | 25% | 22–38% of a *color-mix*, far weaker in practice |
+| spread | available | **impossible** — `text-shadow` has no spread parameter |
 
-This is the one glow permitted at rest, and it earns the exception by being rare and by never animating. Do not extend it downward to more tiers, and do not pulse it.
+That last row is the enforcement. The aura physically cannot grow a spread, so it can never quietly become a state glow, and a reviewer can tell which device they are looking at from the property name alone.
 
-**Inside a match, side color always wins.** A Grandmaster on the P1 side renders jade — never magenta. This is not a special case to code around: the handle component sits inside the `[data-side]` scope and inherits `--player` like everything else. If you ever find yourself branching on tier inside the match HUD, the component is in the wrong place in the tree. Tier glow is suppressed entirely inside the HUD.
+This means §5's rule needs no exception carved into it: **state glow is still never at rest.** Tier aura sits at rest under its own rule, below.
+
+**Aura scales with tier, and most tiers get none.**
+
+- **Iron, Bronze, Silver, Gold** — flat tier color. No aura, ever.
+- **Platinum, Diamond** — `--tier-aura-faint`.
+- **Master, Grandmaster, Legend** — `--tier-aura-full`. These values are a starting point, tuned by eye.
+
+A leaderboard where every handle glows is visual noise. The restraint is precisely what makes the top of the ladder feel earned: a handle with an aura appearing in spectator chat should read as an **event** — someone important just walked in. If everything glows, nothing does.
+
+Never animate the aura, never pulse it, and never extend it downward to more tiers.
+
+**Inside a match, side color always wins.** A Grandmaster on the P1 side renders jade — never crimson. This is not a special case to code around: the handle component sits inside the `[data-side]` scope and inherits `--player` like everything else. If you ever find yourself branching on tier inside the match HUD, the component is in the wrong place in the tree. Tier aura is suppressed entirely inside the HUD — and the `--grandmaster` separation analysis above depends on that staying true.
 
 ---
 
@@ -262,7 +292,9 @@ Budget: **3s**, and it is the only place in the product with a full-screen takeo
 
 ### 6.8 Hack phase — mode variant (Phase 4)
 
-A mode variant, not the default ranked flow. Chronologically it sits **between §6.6 and §6.7**: both players submit, and then a 60-second window opens in which each can write a counter-test input designed to break the other's solution. A landed hack scores and can flip the result of the match. A failed hack costs the attacker 60 seconds of clock in timed modes, or points in scored ones — it is a real risk, never a free swing.
+A mode variant, not the default ranked flow. Chronologically it sits **between §6.6 and §6.7**: both players submit, and then a 60-second window opens in which each can write a counter-test input designed to break the other's solution. A landed hack scores and can flip the result of the match.
+
+**A failed hack adds 30 seconds to the attacker's final elapsed time.** Be precise about what that penalty acts on: it is not deducted from a running clock, because the hack phase happens *after* both players have stopped solving and there is no clock left to take from. Final elapsed time is the tiebreak when both players pass, so the penalty is charged there — it can lose you a match you had already won on speed, without ever being able to un-solve a problem you solved. 30 seconds is deliberately less than the 60-second phase itself: a penalty larger than the window it lives in makes attempting a hack strictly irrational, which would kill the mechanic rather than price it.
 
 **Why this earns its place.** It means passing the tests is not safe. Edge cases acquire real weight, defensive thinking becomes worth as much as raw speed, and every match gets a second act instead of ending the instant somebody is faster. As a spectator moment it is better than the solve itself: watching someone read an opponent's code hunting for the unhandled empty input is far more legible drama than watching two people type. **If scope ever has to be cut, cut elsewhere first.**
 
@@ -277,7 +309,13 @@ The beat, at the level of §6.6:
 
 **Sound.** `hack_land` is the most violent sound in the library — a hard percussive break with a low tail, unmistakably distinct from `test_fail` and louder than anything except `victory`. `hack_fail` is a dull miss. `hack_reveal` is a low riser sitting under the source-code reveal in step 1.
 
-**Rules.** One hack attempt per player per phase. The counter-test must satisfy the problem's stated input constraints or it is rejected before it runs, and a rejection does not cost the penalty. Hacking is disabled in Blitz — 60 seconds of reading is longer than the match itself.
+**The validator is not optional — it is what makes the mechanic exist.** Every problem ships a **validator** alongside its test cases: a function that takes a candidate input and returns pass/fail against the problem's stated constraints. A submitted counter-test runs through the validator *before* it is ever run against the opponent's code, and a rejected input costs nothing.
+
+Without this, a "hack" is just a malformed input. Feed a solution `n = -1` when the statement says `1 ≤ n ≤ 10⁵` and of course it breaks — so does every correct solution, including the hacker's own. The mechanic collapses into who can think of the most out-of-spec garbage, which is neither interesting nor a test of anything. With a validator, a successful hack means precisely one thing: *your opponent's code is wrong on an input the problem explicitly permits.* That is the entire mechanic, and it does not survive without it.
+
+**Add the validator to the problem schema in Phase 2**, when problems are first modelled — not in Phase 4. Retrofitting a required field across a seeded problem set is exactly the kind of avoidable migration that makes a later phase slip, and a problem without a validator can never be used in a hack mode.
+
+**Rules.** One hack attempt per player per phase. Validator rejection is free and does not consume the attempt. Hacking is disabled in Blitz — 60 seconds of reading is longer than the match itself.
 
 ---
 
@@ -293,11 +331,29 @@ The beat, at the level of §6.6:
 
 **Profile.** Rank badge, per-topic rating radar chart (DP, graphs, greedy, strings, math), match history with mini pulse-line thumbnails, titles, rivalries, season recap card built for sharing.
 
+---
+
+## 8. Progression and identity
+
+Rating is Glicko-2 and stays hidden behind a tier ladder: **Iron → Bronze → Silver → Gold → Platinum → Diamond → Master → Grandmaster → Legend**, divisions IV→I, promotion series at tier boundaries, 5 placement matches, soft reset each season.
+
+Keep the grind separate from rank so losing players still progress: XP and account level earned for *playing*, a season track with free and premium lanes, coins, daily quests with streak freezes, achievements with real specificity ("win with under 10 seconds left", "win from 0/10 at the halfway mark", "beat someone 300 rating above you"), and auto-tracked rivalries.
+
+Cosmetics must fit the medium: editor themes, syntax palettes, keystroke sound packs, victory animations, nameplate frames, cursor trails, titles. **Never anything that affects gameplay.**
+
 ### Problem ratings (Phase 2)
 
-Every problem carries a rating **on the same numeric scale as players**. A 1600 problem is one that a 1600-rated player solves roughly half the time. One number, both sides of the system, no translation layer between them — a player who knows they are 1540 knows exactly what a 1700 problem means before they open it. This is the single cheapest legibility win available to us, and it is why we don't need difficulty buckets (§4).
+Every problem carries a rating **on the same numeric scale as players**. A 1600 problem is one that a 1600-rated player solves roughly half the time. One number, both sides of the system, no translation layer between them — a player who knows they are 1540 knows exactly what a 1700 problem means before they open it. This is the cheapest legibility win available to us, and it is why we don't need difficulty buckets (§4).
 
-**It also hands us matchmaking.** Problem difficulty is drawn from the mean of the two players' ratings, with a small spread — ±80 by default, *sampled* rather than fixed, so the same pairing doesn't always land dead center and a match can occasionally run harder or easier than either player expected. That variance is a feature: it produces the upsets that make a ladder interesting.
+**It also hands us matchmaking — but do not select at the average.** Selecting a problem at the mean of the two ratings means *each* player solves it about half the time, which means roughly a quarter of matches end with neither player solving anything. A dead match is the worst outcome in the product: no cinematics fire, nobody earns anything, and both players leave. Target **mean − 120** for ranked duels, so both players can realistically land it and the match is decided by speed and nerve rather than by whether anyone finishes at all.
+
+The offset is a **per-mode constant**, not a global:
+
+- **Ranked duel** — mean − 120.
+- **Blitz** — substantially lower again; the match is short and there is no time to think your way out of a hard problem.
+- **Bo3** — escalating across games. Open below the ranked offset and climb toward it by game three, so a series builds instead of flattening.
+
+**The spread is adaptive.** Sample the difficulty rather than fixing it, and widen the sampling window as queue time grows — exactly the way §6.1 already widens the rating band, and say so in the queue copy the same way. A player waiting ninety seconds should get a match, and a slightly off-target problem is enormously better than no opponent.
 
 **Ratings converge on real data.** Seed them with estimates and let matches correct them: after each match, update the problem from the outcome exactly the way a player is updated, treating the problem as the opponent. A problem nobody at its stated rating can finish is mis-rated, and the data will say so within a few dozen matches. Never hand-tune a rating that solve data disagrees with.
 
@@ -305,17 +361,7 @@ Surface the number on the problem card, in match history, on the replay timeline
 
 ### Handles
 
-Handles carry league color everywhere outside a match — the full rule, including which tiers glow and why most of them don't, is in §4 under *League color on handles*. Inside a match, side color wins; nothing in §6 ever renders a handle in tier color.
-
----
-
-## 8. Progression surfaces
-
-Rating is Glicko-2 and stays hidden behind a tier ladder: **Iron → Bronze → Silver → Gold → Platinum → Diamond → Master → Grandmaster → Legend**, divisions IV→I, promotion series at tier boundaries, 5 placement matches, soft reset each season.
-
-Keep the grind separate from rank so losing players still progress: XP and account level earned for *playing*, a season track with free and premium lanes, coins, daily quests with streak freezes, achievements with real specificity ("win with under 10 seconds left", "win from 0/10 at the halfway mark", "beat someone 300 rating above you"), and auto-tracked rivalries.
-
-Cosmetics must fit the medium: editor themes, syntax palettes, keystroke sound packs, victory animations, nameplate frames, cursor trails, titles. **Never anything that affects gameplay.**
+Handles carry league color everywhere outside a match — the full rule, including tier aura and why most tiers don't get one, is in §4 under *League color on handles*. Inside a match, side color wins; nothing in §6 ever renders a handle in tier color.
 
 ---
 
@@ -366,7 +412,7 @@ Do exactly one phase per session. Each phase ends fully designed, fully animated
 
 **Phase 1 — The Moment Simulator.** Before any networking, build `/dev/hud`: the complete match HUD with buttons that fire every cinematic on demand — queue pop, countdown, test pass, test fail, clutch state, submit pass, submit fail, victory, rank-up. *You are building this alone and will not have two humans to test with. This route is how you tune the feel, and it is the highest-leverage thing in the whole build.* Do not skip it, do not build it last.
 
-**Phase 2 — Real 1v1.** Auth, Postgres schema, 20 seeded problems, Socket.IO gateway, matchmaking on Redis, Monaco with delta streaming, Docker judge, the real match screen wired to Phase 1's animations, Glicko-2, **problem ratings on the player scale (§7) driving difficulty selection**, victory and rating flow.
+**Phase 2 — Real 1v1.** Auth, Postgres schema, 20 seeded problems **each with a validator (§6.8)**, Socket.IO gateway, matchmaking on Redis, Monaco with delta streaming, Docker judge, the real match screen wired to Phase 1's animations, Glicko-2, **problem ratings on the player scale (§8) driving difficulty selection at mean − 120**, victory and rating flow.
 
 **Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 
