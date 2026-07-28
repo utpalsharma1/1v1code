@@ -17,10 +17,14 @@ export function useScreenShake() {
   const fire = useCallback(
     (amplitude: number, ms: number) => {
       if (m.reduced) return;
+      // Amplitude decays across the oscillation: a real impulse loses energy,
+      // and constant amplitude reads as a rumble or a rendering glitch.
+      const x = m.shakeFrames(amplitude);
+      const y = m.shakeFrames(amplitude * 0.4).map((v, i) => (i % 2 ? -v : v));
       void controls.start({
-        x: [0, -amplitude, amplitude, -amplitude * 0.55, amplitude * 0.3, 0],
-        y: [0, amplitude * 0.35, -amplitude * 0.25, amplitude * 0.15, 0, 0],
-        transition: { duration: m.sec(ms), ease: m.ease.snap },
+        x,
+        y,
+        transition: { duration: m.sec(ms), ease: m.ease.out },
       });
     },
     [controls, m],
@@ -97,7 +101,9 @@ export function ClutchEdge({
         m.reduced
           ? m.t({})
           : {
-              duration: m.sec(1800),
+              // Slower reads as dread; faster reads as a notification. Clutch is
+              // meant to be felt peripherally, not watched.
+              duration: m.sec(m.dur.breathe),
               repeat: Infinity,
               ease: m.ease.inOut,
             }

@@ -32,6 +32,9 @@ export function QueuePop({
   flashKey: number;
 }) {
   const m = useMotion();
+  // ease.impact, not spring.heavy: the plates should *land*, not settle. An
+  // expo-out curve arrives hard with no rebound, which is what a collision
+  // looks like. The 60ms offset is what makes it read as a collision at all.
   const plateIn = (side: "p1" | "p2") => ({
     initial: m.reduced
       ? { opacity: 0 }
@@ -39,7 +42,11 @@ export function QueuePop({
     animate: m.reduced ? { opacity: 1 } : { opacity: 1, x: 0 },
     transition: m.reduced
       ? m.t({})
-      : { ...m.spring.heavy, delay: m.sec(side === "p2" ? 60 : 0) },
+      : {
+          duration: m.sec(m.dur.slow),
+          ease: m.ease.impact,
+          delay: m.sec(side === "p2" ? m.dur.flash : 0),
+        },
   });
 
   return (
@@ -47,7 +54,7 @@ export function QueuePop({
       className="fixed inset-0 z-50 grid place-items-center"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      exit={{ opacity: 0, transition: m.tween(m.dur.base, m.ease.in) }}
       transition={m.tween(m.dur.fast)}
     >
       {/* 1 — screen dims to 85% ink */}
@@ -93,9 +100,7 @@ export function QueuePop({
           className="relative grid place-items-center"
           initial={m.reduced ? { opacity: 0 } : { opacity: 0, scale: 1.6 }}
           animate={m.reduced ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-          transition={
-            m.reduced ? m.t({}) : { duration: m.sec(m.dur.slow), ease: m.ease.snap }
-          }
+          transition={m.reduced ? m.t({}) : m.spring.impact}
         >
           <span
             aria-hidden

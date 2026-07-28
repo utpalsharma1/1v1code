@@ -193,20 +193,57 @@ Never animate the aura, never pulse it, and never extend it downward to more tie
 Put these in one file, `packages/ui/motion.ts`, and import them. No component invents its own timing.
 
 ```ts
-export const dur = { instant: 90, fast: 160, base: 240, slow: 420, cine: 900 };
+export const dur = {
+  instant: 90,
+  fast:    160,
+  base:    240,
+  slow:    420,
+  cine:    900,
 
-export const ease = {
-  out:   [0.22, 1, 0.36, 1],      // default for entrances
-  inOut: [0.65, 0, 0.35, 1],      // for moves/transforms
-  snap:  [0.34, 1.56, 0.64, 1],   // slight overshoot — buttons, badges, pops
+  flash:   60,    // the 60ms white plate flash on arrival (§6.2)
+  decay:   200,   // white-overlay decay, border flare, near-miss flash (§6.4, §6.5)
+
+  beat:    140,   // held stillness before a big moment — tension lives in the pause
+  reveal:  165,   // per-test cadence in §6.6; 120ms reads frantic against a rising pitch
+  breathe: 2400,  // clutch cycle — slower reads as dread, faster as a notification
+  victory: 2800,  // mandatory portion of the victory cinematic
+  defeat:  1600,  // deliberately shorter — losing stings once and gets out of the way
+  skip:    700,   // after this, any input skips the remainder of a cinematic
+} as const;
+
+export const ease: Record<'out' | 'in' | 'inOut' | 'snap' | 'impact', Cubic> = {
+  out:    [0.22, 1, 0.36, 1],     // entrances
+  in:     [0.55, 0, 1, 0.45],     // exits accelerate away instead of drifting off
+  inOut:  [0.65, 0, 0.35, 1],     // moves and transforms
+  snap:   [0.34, 1.56, 0.64, 1],  // slight overshoot — buttons, badges, pops
+  impact: [0.16, 1, 0.30, 1],     // expo-out: arrives hard, lands rather than settles
 };
 
 export const spring = {
-  ui:    { type: 'spring', stiffness: 420, damping: 32, mass: 0.7 },
-  bar:   { type: 'spring', stiffness: 180, damping: 22 },  // health/test bars
-  heavy: { type: 'spring', stiffness: 120, damping: 18 },  // big cinematic panels
+  ui:     { type: 'spring', stiffness: 420, damping: 32, mass: 0.7  },  // ζ 0.93
+  bar:    { type: 'spring', stiffness: 200, damping: 26, mass: 1    },  // ζ 0.92
+  heavy:  { type: 'spring', stiffness: 130, damping: 19, mass: 1.15 },  // ζ 0.78
+  impact: { type: 'spring', stiffness: 600, damping: 30, mass: 1.1  },  // ζ 0.58
 };
+
+export const STAGGER_STEP = 40;
+export const STAGGER_CAP  = 8;
+
+export const shake = { light: 3, hard: 5, cycles: 3, decay: 0.62 };
 ```
+
+**Damping ratios are load-bearing, so they are stated.** ζ = c / (2√(k·m)), and it decides whether a spring overshoots:
+
+- `ui` — ζ 0.93, overshoot 0.03%. Effectively critically damped. Settles in ~175ms.
+- `bar` — ζ 0.92, overshoot 0.07%. **This one drives a value that must read as accurate**, so it must never visibly pass its target and snap back. Do not lower its damping.
+- `heavy` — ζ 0.78, overshoot 2.1% at ~470ms, settling ~484ms. A single soft overshoot reads as weight.
+- `impact` — ζ 0.58, overshoot 10.4%, then a 1.1% rebound 330ms later, then nothing. One hard landing plus a hint of a second. Below about ζ 0.5 the second rebound becomes clearly visible and it stops reading as an impact and starts reading as a bounce.
+
+**`ease.impact` and `spring.impact` are not interchangeable.** The expo-out curve arrives hard with *no* overshoot — use it where something must land, like the §6.2 nameplate collision. The spring overshoots 10% — use it where something must pop, like the `VS` badge or a rank-up badge assembling. Choosing the spring for a collision makes the plates bounce, which is the opposite of a collision.
+
+**Shake decays.** Amplitude × `decay`ⁿ across `cycles` oscillations. Constant amplitude reads as a rumble or a rendering glitch; decaying amplitude reads as an impulse, because that is what an impulse does.
+
+**Cinematics are skippable, and that is the real fix for repetition.** A sequence that is wonderful once is tiring on the fiftieth rematch. The answer is not a shorter cinematic — it is `dur.victory` / `dur.defeat` of mandatory playback, after which `dur.skip` arms any input to drop the rest. Defeat's mandatory portion is deliberately shorter than victory's.
 
 **Hard rules:**
 - Animate `transform` and `opacity` only. Never animate `width`, `height`, `top`, `left`, or `box-shadow` on anything that runs during a match. Bars scale on the X axis with `transform-origin` set to the owning player's side.

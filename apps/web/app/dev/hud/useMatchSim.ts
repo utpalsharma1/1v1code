@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { playCue, type CellState, type Emote, type FloatingEmote, type Side, type Status } from "@1v1/ui";
+import {
+  playCue,
+  useMotionTuning,
+  type CellState,
+  type Emote,
+  type FloatingEmote,
+  type MotionValues,
+  type Side,
+  type Status,
+} from "@1v1/ui";
 import { FakeTypist } from "./fakeTyping";
 
 /* ============================================================================
@@ -87,6 +96,12 @@ export function useMatchSim() {
 
   const speedRef = useRef(speed);
   speedRef.current = speed;
+
+  // Raw (unscaled) motion values: the sim's own `wait` already applies speed,
+  // so reading the speed-scaled values here would apply it twice.
+  const { values } = useMotionTuning();
+  const durRef = useRef<MotionValues["dur"]>(values.dur);
+  durRef.current = values.dur;
   const seq = useRef(0);
   const cancelled = useRef(false);
   const emoteId = useRef(0);
@@ -171,6 +186,9 @@ export function useMatchSim() {
 
   const countdown = useCallback(async () => {
     setOverlay("countdown");
+    // A held frame of stillness before the first tick. Tension lives in the
+    // pause before a reveal, not in the reveal.
+    await wait(durRef.current.beat);
     for (const beat of [3, 2, 1] as const) {
       setCountdownBeat(beat);
       cue("countdown_tick");
@@ -271,6 +289,9 @@ export function useMatchSim() {
       setStatus(side, { kind: "submitted" });
       const failAt = outcome === "fail" ? 6 : -1;
       let cells = emptyCells();
+      // The held beat before the panel drops. Editor dims, nothing moves, then
+      // the verdict arrives.
+      await wait(durRef.current.beat);
       setVerdict({ side, outcome: null, failedIndex: null, cells, burstKey: 0 });
       setOverlay("verdict");
       await wait(260);
@@ -291,7 +312,9 @@ export function useMatchSim() {
         cells[i] = "pass";
         cue("test_pass");
         setVerdict((v) => (v ? { ...v, cells } : v));
-        await wait(120);
+        // dur.reveal, not 120ms: with the rising semitone, ten tests at 120ms is
+        // ~8 notes/sec, which reads frantic. At 165 the ladder is countable.
+        await wait(durRef.current.reveal);
       }
 
       cue("victory_sting");

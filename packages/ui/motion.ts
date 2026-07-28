@@ -2,11 +2,15 @@
    1v1.code — motion system
    No component invents its own timing. Import from here or don't animate.
    Spec: CLAUDE.md §5.
+
+   These values are considered proposals, not measured findings. The tuning
+   surface at /dev/hud edits every one of them live and exports the result, so
+   they can be checked against real pixels later.
    ========================================================================= */
 
 import type { Transition } from "framer-motion";
 
-type Cubic = [number, number, number, number];
+export type Cubic = [number, number, number, number];
 
 /** Durations in milliseconds. */
 export const dur = {
@@ -16,25 +20,34 @@ export const dur = {
   slow: 420,
   cine: 900,
 
-  /* ADDITIONS beyond §5, per rule §13.2. §6 states these two literally and
-     neither is expressible on the scale above:
-       flash — the 60ms white plate flash on nameplate arrival (§6.2 step 3)
-       decay — the 200ms decay on a passing cell's white overlay, the nameplate
-               border flare, and the near-miss red flash (§6.4, §6.5) */
-  flash: 60,
-  decay: 200,
+  /* §6 states these two literally and neither fits the scale above. */
+  flash: 60, // the white plate flash on nameplate arrival (§6.2)
+  decay: 200, // white-overlay decay, border flare, near-miss flash (§6.4, §6.5)
+
+  /* Beat structure. Tension lives in the pause before a reveal, not in the
+     reveal — a cinematic that starts the instant you press the button has
+     nowhere to build from. */
+  beat: 140, // held stillness before a big moment
+  reveal: 165, // per-test cadence in the §6.6 sequential reveal
+  breathe: 2400, // clutch-edge cycle (§6.5)
+  victory: 2800, // mandatory portion of the victory cinematic (§6.7)
+  defeat: 1600, // deliberately shorter — losing stings once and gets out of the way
+  skip: 700, // after this, any input skips the remainder of a cinematic
 } as const;
 
-export const ease: Record<"out" | "inOut" | "snap", Cubic> = {
+export const ease: Record<"out" | "in" | "inOut" | "snap" | "impact", Cubic> = {
   out: [0.22, 1, 0.36, 1], // default for entrances
+  in: [0.55, 0, 1, 0.45], // exits accelerate away instead of drifting off
   inOut: [0.65, 0, 0.35, 1], // for moves/transforms
   snap: [0.34, 1.56, 0.64, 1], // slight overshoot — buttons, badges, pops
+  impact: [0.16, 1, 0.3, 1], // expo-out: arrives hard, lands rather than settles
 };
 
 export const spring = {
-  ui: { type: "spring", stiffness: 420, damping: 32, mass: 0.7 },
-  bar: { type: "spring", stiffness: 180, damping: 22 }, // health/test bars
-  heavy: { type: "spring", stiffness: 120, damping: 18 }, // big cinematic panels
+  ui: { type: "spring", stiffness: 420, damping: 32, mass: 0.7 }, // ζ 0.93
+  bar: { type: "spring", stiffness: 200, damping: 26, mass: 1 }, // ζ 0.92 — must read accurate
+  heavy: { type: "spring", stiffness: 130, damping: 19, mass: 1.15 }, // ζ 0.78
+  impact: { type: "spring", stiffness: 600, damping: 30, mass: 1.1 }, // ζ 0.58 — pops hard
 } satisfies Record<string, Transition>;
 
 /* ── Helpers ─────────────────────────────────────────────────────────────
@@ -69,13 +82,8 @@ export const interactive = {
   press: { scale: 0.97 },
 } as const;
 
-export const interactiveTransition = {
-  hover: tween(dur.fast, ease.out),
-  press: tween(dur.instant, ease.snap),
-} as const;
-
 /* ── Reduced motion (§5) ─────────────────────────────────────────────────
-   "Replace all movement with 120ms opacity fades." That number is not in the
+   "Replace all movement with 120ms opacity fades." That number is not on the
    §5 duration scale and cannot be derived from it, so it is named here rather
    than typed inline in a dozen components. */
 export const REDUCED_MS = 120;
@@ -125,5 +133,22 @@ export function motionSafe<T extends Record<string, unknown>>(
 /** The 2px horizontal shake on a failing test cell (§6.4). */
 export const shakeX = [0, -2, 2, -2, 0];
 
-/** Screen shake amplitudes, in px. Queue pop is 3, submit-pass is 5 (§6.2, §6.6). */
-export const shake = { light: 3, hard: 5 } as const;
+/**
+ * Screen shake (§6.2, §6.6).
+ *
+ * Amplitude decays across the oscillation. Constant amplitude reads as a rumble
+ * or as a rendering glitch; decaying amplitude reads as an impact, because that
+ * is what a real impulse does.
+ */
+export const shake = { light: 3, hard: 5, cycles: 3, decay: 0.62 } as const;
+
+/** Alternating, decaying keyframes: amplitude × decay^n over `cycles`. */
+export function shakeFrames(amplitude: number, cycles: number, decay: number): number[] {
+  const swings = Math.max(1, Math.round(cycles * 2));
+  const frames: number[] = [0];
+  for (let i = 0; i < swings; i++) {
+    frames.push((i % 2 === 0 ? 1 : -1) * amplitude * decay ** i);
+  }
+  frames.push(0);
+  return frames;
+}

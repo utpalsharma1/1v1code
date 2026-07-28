@@ -19,6 +19,8 @@ export interface VictoryOverlayProps {
   ratingTo: number;
   burstKey: number;
   rankUp?: { from: Tier; to: Tier; division?: Division } | null;
+  /** Fired when the player skips the remainder of the cinematic. */
+  onSkip?: () => void;
   onRematch?: () => void;
   onQueue?: () => void;
   onReplay?: () => void;
@@ -31,6 +33,7 @@ export function VictoryOverlay({
   ratingTo,
   burstKey,
   rankUp = null,
+  onSkip,
   onRematch,
   onQueue,
   onReplay,
@@ -39,10 +42,48 @@ export function VictoryOverlay({
   const m = useMotion();
   const won = winner === "p1";
   const rematchRef = useRef<HTMLButtonElement>(null);
+  const [settled, setSettled] = useState(false);
 
   useEffect(() => {
     rematchRef.current?.focus();
   }, []);
+
+  /* Defeat is deliberately shorter than victory. Losing should sting once and
+     get out of the way. Under reduced motion neither holds at all. */
+  const mandatory = m.reduced ? m.dur.slow : won ? m.dur.victory : m.dur.defeat;
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setSettled(true), mandatory);
+    return () => window.clearTimeout(id);
+  }, [mandatory]);
+
+  /* After dur.skip any input drops the rest of the cinematic. This is the real
+     fix for a sequence that is great once and tiring on the fiftieth rematch —
+     the answer is not a shorter cinematic, it is a skippable one. */
+  useEffect(() => {
+    if (settled) return;
+    let armed = false;
+    const arm = window.setTimeout(() => {
+      armed = true;
+    }, m.dur.skip);
+
+    const skip = (event: Event) => {
+      if (!armed) return;
+      // Don't treat activating the focused Rematch button as a skip.
+      if (event instanceof KeyboardEvent && ["Enter", " ", "Tab"].includes(event.key)) return;
+      if (event.target instanceof Element && event.target.closest("button")) return;
+      setSettled(true);
+      onSkip?.();
+    };
+
+    window.addEventListener("keydown", skip);
+    window.addEventListener("pointerdown", skip);
+    return () => {
+      window.clearTimeout(arm);
+      window.removeEventListener("keydown", skip);
+      window.removeEventListener("pointerdown", skip);
+    };
+  }, [settled, m.dur.skip, onSkip]);
 
   return (
     <motion.div
@@ -50,7 +91,7 @@ export function VictoryOverlay({
       className="fixed inset-0 z-50 grid place-items-center overflow-hidden"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      exit={{ opacity: 0, transition: m.tween(m.dur.base, m.ease.in) }}
       transition={m.tween(m.dur.base)}
     >
       <div className="absolute inset-0 bg-[var(--scrim)]" />
@@ -74,8 +115,8 @@ export function VictoryOverlay({
           transition={m.reduced ? m.t({}) : { ...m.spring.heavy }}
         >
           {won ? "VICTORY" : "DEFEAT"}
-          {/* Light sweep across the letterforms. */}
-          {!m.reduced && (
+          {/* Light sweep across the letterforms. Skipped once settled. */}
+          {!m.reduced && !settled && (
             <motion.span
               aria-hidden
               className="absolute inset-y-0 w-1/3"
@@ -94,7 +135,7 @@ export function VictoryOverlay({
           )}
         </motion.h1>
 
-        <RatingDelta from={ratingFrom} to={ratingTo} />
+        <RatingDelta from={ratingFrom} to={ratingTo} settled={settled} />
 
         {rankUp && <RankUp rankUp={rankUp} />}
 
@@ -118,13 +159,23 @@ export function VictoryOverlay({
 }
 
 /** Counts up (or down) digit by digit in tabular figures, with the delta floating. */
-function RatingDelta({ from, to }: { from: number; to: number }) {
+function RatingDelta({
+  from,
+  to,
+  settled,
+}: {
+  from: number;
+  to: number;
+  settled: boolean;
+}) {
   const m = useMotion();
   const [shown, setShown] = useState(from);
   const delta = to - from;
 
   useEffect(() => {
-    if (m.reduced) {
+    // Skipping jumps the counter to its final value rather than leaving it
+    // mid-count — the number is the payload, the count-up is the flourish.
+    if (m.reduced || settled) {
       setShown(to);
       return;
     }
@@ -138,7 +189,7 @@ function RatingDelta({ from, to }: { from: number; to: number }) {
       if (current === to) window.clearInterval(id);
     }, stepMs);
     return () => window.clearInterval(id);
-  }, [from, to, delta, m.reduced, m.dur.cine]);
+  }, [from, to, delta, m.reduced, m.dur.cine, settled]);
 
   return (
     <div className="relative flex items-center gap-3">
@@ -196,7 +247,8 @@ function RankUp({
           <motion.div
             initial={m.reduced ? { opacity: 0 } : { opacity: 0, scale: 0.4 }}
             animate={m.reduced ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-            transition={m.reduced ? m.t({}) : m.spring.heavy}
+            // spring.impact: the new badge should slam together, not ease in.
+            transition={m.reduced ? m.t({}) : m.spring.impact}
           >
             <RankBadge tier={rankUp.to} division={rankUp.division} size="lg" showLabel />
           </motion.div>

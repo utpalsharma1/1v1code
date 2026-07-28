@@ -23,19 +23,52 @@ import {
    source ready to paste back. motion.ts stays the source of truth for defaults.
    ========================================================================= */
 
-const DUR_KEYS: DurKey[] = ["instant", "fast", "base", "slow", "cine", "flash", "decay"];
-const EASE_KEYS: EaseKey[] = ["out", "inOut", "snap"];
-const SPRING_KEYS: SpringKey[] = ["ui", "bar", "heavy"];
+const DUR_KEYS: DurKey[] = [
+  "instant",
+  "fast",
+  "base",
+  "slow",
+  "cine",
+  "flash",
+  "decay",
+  "beat",
+  "reveal",
+  "breathe",
+  "victory",
+  "defeat",
+  "skip",
+];
+const EASE_KEYS: EaseKey[] = ["out", "in", "inOut", "snap", "impact"];
+const SPRING_KEYS: SpringKey[] = ["ui", "bar", "heavy", "impact"];
+
+const DUR_MAX: Partial<Record<DurKey, number>> = {
+  cine: 2400,
+  breathe: 6000,
+  victory: 6000,
+  defeat: 4000,
+};
+
+const DUR_NOTE: Partial<Record<DurKey, string>> = {
+  beat: "held pause before a big moment",
+  reveal: "per-test cadence in §6.6",
+  breathe: "clutch edge cycle",
+  victory: "mandatory portion",
+  defeat: "shorter than victory, on purpose",
+  skip: "after this, input skips the rest",
+};
 
 const EASE_NOTE: Record<EaseKey, string> = {
   out: "entrances",
+  in: "exits — accelerate away",
   inOut: "moves & transforms",
   snap: "overshoot — buttons, pops",
+  impact: "arrives hard, lands not settles",
 };
 const SPRING_NOTE: Record<SpringKey, string> = {
-  ui: "small UI",
-  bar: "test bars",
-  heavy: "cinematic panels",
+  ui: "small UI · ζ 0.93",
+  bar: "test bars · ζ 0.92, must read accurate",
+  heavy: "cinematic panels · ζ 0.78",
+  impact: "pops hard · ζ 0.58, 10% overshoot",
 };
 
 export function TuningPanel() {
@@ -138,9 +171,10 @@ export function TuningPanel() {
           <Slider
             key={key}
             label={key}
+            note={DUR_NOTE[key]}
             value={values.dur[key]}
             min={20}
-            max={key === "cine" ? 2400 : 1200}
+            max={DUR_MAX[key] ?? 1200}
             step={10}
             onChange={(v) => patch((d) => void (d.dur[key] = v))}
           />
@@ -256,6 +290,25 @@ export function TuningPanel() {
           decimals={1}
           onChange={(v) => patch((d) => void (d.shake.hard = v))}
         />
+        <Slider
+          label="shake cycles"
+          note="oscillations before it stops"
+          value={values.shake.cycles}
+          min={1}
+          max={8}
+          step={1}
+          onChange={(v) => patch((d) => void (d.shake.cycles = v))}
+        />
+        <Slider
+          label="shake decay"
+          note="amplitude × decay^n — impact, not rumble"
+          value={values.shake.decay}
+          min={0.2}
+          max={0.95}
+          step={0.01}
+          decimals={2}
+          onChange={(v) => patch((d) => void (d.shake.decay = v))}
+        />
       </Group>
 
       <div className="flex flex-col gap-2">
@@ -295,6 +348,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 function Slider({
   label,
+  note,
   value,
   min,
   max,
@@ -304,6 +358,7 @@ function Slider({
   onChange,
 }: {
   label: string;
+  note?: string;
   value: number;
   min: number;
   max: number;
@@ -315,8 +370,11 @@ function Slider({
   return (
     <label className="flex flex-col gap-1">
       <span className="flex items-baseline justify-between gap-2">
-        <span className="text-fg-dim text-12">{label}</span>
-        <span className="tabular text-fg text-12">
+        <span className="text-fg-dim min-w-0 truncate text-12">
+          {label}
+          {note && <span className="text-fg-faint"> · {note}</span>}
+        </span>
+        <span className="tabular text-fg shrink-0 text-12">
           {value.toFixed(decimals)}
           {suffix}
         </span>

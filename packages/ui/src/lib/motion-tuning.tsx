@@ -28,12 +28,14 @@ import {
   REDUCED_MS,
   sec,
   shake as DEFAULT_SHAKE,
+  shakeFrames,
   STAGGER_CAP,
   STAGGER_STEP,
+  type Cubic,
 } from "../../motion";
 import { useReducedMotion } from "./motion-pref";
 
-export type Cubic = [number, number, number, number];
+export type { Cubic };
 export type DurKey = keyof typeof DEFAULT_DUR;
 export type EaseKey = keyof typeof DEFAULT_EASE;
 export type SpringKey = keyof typeof DEFAULT_SPRING;
@@ -50,20 +52,23 @@ export interface MotionValues {
   spring: Record<SpringKey, SpringValue>;
   staggerStep: number;
   staggerCap: number;
-  shake: { light: number; hard: number };
+  shake: { light: number; hard: number; cycles: number; decay: number };
 }
 
 export const DEFAULT_VALUES: MotionValues = {
   dur: { ...DEFAULT_DUR },
   ease: {
     out: [...DEFAULT_EASE.out] as Cubic,
+    in: [...DEFAULT_EASE.in] as Cubic,
     inOut: [...DEFAULT_EASE.inOut] as Cubic,
     snap: [...DEFAULT_EASE.snap] as Cubic,
+    impact: [...DEFAULT_EASE.impact] as Cubic,
   },
   spring: {
     ui: { ...DEFAULT_SPRING.ui },
     bar: { ...DEFAULT_SPRING.bar },
     heavy: { ...DEFAULT_SPRING.heavy },
+    impact: { ...DEFAULT_SPRING.impact },
   },
   staggerStep: STAGGER_STEP,
   staggerCap: STAGGER_CAP,
@@ -109,7 +114,9 @@ export interface Motion {
   dur: Record<DurKey, number>;
   ease: Record<EaseKey, Cubic>;
   spring: Record<SpringKey, Transition>;
-  shake: { light: number; hard: number };
+  shake: { light: number; hard: number; cycles: number; decay: number };
+  /** Decaying alternating keyframes for a screen shake of the given amplitude. */
+  shakeFrames: (amplitude: number) => number[];
   /** Seconds of delay for the nth staggered child, capped per §5. */
   stagger: (index: number) => number;
   /** A tween from a duration in ms. */
@@ -165,6 +172,8 @@ export function useMotion(): Motion {
       ease: values.ease,
       spring,
       shake: values.shake,
+      shakeFrames: (amplitude: number) =>
+        shakeFrames(amplitude, values.shake.cycles, values.shake.decay),
       stagger: (index: number) =>
         s(Math.min(index, values.staggerCap) * values.staggerStep * scale),
       tween,
@@ -185,33 +194,48 @@ export function toMotionSource(values: MotionValues): string {
       v.damping,
     )}${v.mass === undefined ? "" : `, mass: ${Number(v.mass.toFixed(2))}` } }`;
 
+  const d = (k: DurKey) => Math.round(values.dur[k]);
+
   return `export const dur = {
-  instant: ${Math.round(values.dur.instant)},
-  fast: ${Math.round(values.dur.fast)},
-  base: ${Math.round(values.dur.base)},
-  slow: ${Math.round(values.dur.slow)},
-  cine: ${Math.round(values.dur.cine)},
-  flash: ${Math.round(values.dur.flash)},
-  decay: ${Math.round(values.dur.decay)},
+  instant: ${d("instant")},
+  fast:    ${d("fast")},
+  base:    ${d("base")},
+  slow:    ${d("slow")},
+  cine:    ${d("cine")},
+
+  flash:   ${d("flash")},
+  decay:   ${d("decay")},
+
+  beat:    ${d("beat")},
+  reveal:  ${d("reveal")},
+  breathe: ${d("breathe")},
+  victory: ${d("victory")},
+  defeat:  ${d("defeat")},
+  skip:    ${d("skip")},
 } as const;
 
-export const ease: Record<'out' | 'inOut' | 'snap', Cubic> = {
-  out:   ${cubic(values.ease.out)},
-  inOut: ${cubic(values.ease.inOut)},
-  snap:  ${cubic(values.ease.snap)},
+export const ease: Record<'out' | 'in' | 'inOut' | 'snap' | 'impact', Cubic> = {
+  out:    ${cubic(values.ease.out)},
+  in:     ${cubic(values.ease.in)},
+  inOut:  ${cubic(values.ease.inOut)},
+  snap:   ${cubic(values.ease.snap)},
+  impact: ${cubic(values.ease.impact)},
 };
 
 export const spring = {
-  ui:    ${sp(values.spring.ui)},
-  bar:   ${sp(values.spring.bar)},
-  heavy: ${sp(values.spring.heavy)},
+  ui:     ${sp(values.spring.ui)},
+  bar:    ${sp(values.spring.bar)},
+  heavy:  ${sp(values.spring.heavy)},
+  impact: ${sp(values.spring.impact)},
 } satisfies Record<string, Transition>;
 
 export const STAGGER_STEP = ${Math.round(values.staggerStep)};
-export const STAGGER_CAP = ${Math.round(values.staggerCap)};
+export const STAGGER_CAP  = ${Math.round(values.staggerCap)};
 
 export const shake = { light: ${Number(values.shake.light.toFixed(1))}, hard: ${Number(
     values.shake.hard.toFixed(1),
+  )}, cycles: ${Math.round(values.shake.cycles)}, decay: ${Number(
+    values.shake.decay.toFixed(2),
   )} } as const;`;
 }
 

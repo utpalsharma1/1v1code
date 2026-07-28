@@ -32,7 +32,7 @@ export function Countdown({ beat }: { beat: 3 | 2 | 1 | 0 | null }) {
             className="font-display text-fg relative text-72 leading-none font-extrabold tracking-[var(--track-display)] tabular-nums"
             initial={m.reduced ? { opacity: 0 } : { scale: 1.4, opacity: 0 }}
             animate={m.reduced ? { opacity: 1 } : { scale: 1, opacity: 1 }}
-            exit={{ opacity: 0 }}
+            exit={{ opacity: 0, transition: m.t(m.tween(m.dur.fast, m.ease.in)) }}
             transition={
               m.reduced ? m.t({}) : { duration: m.sec(m.dur.base), ease: m.ease.snap }
             }

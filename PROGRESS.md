@@ -39,6 +39,44 @@ by 1/speed, spring stiffness by speed² and damping by speed. That holds the dam
 ζ = c/2√(km) constant, so you change tempo without silently changing bounce. Scaling stiffness alone
 would have you tuning two things at once without knowing it.
 
+### Revised motion set baked in
+
+The proposed `motion.ts` is now the default: six new durations, `ease.in` and `ease.impact`,
+`spring.impact`, mass on `bar`/`heavy`, and decaying shake. CLAUDE.md §5 carries the full set with
+a rationale per line. The tuning panel covers every new value, and the export emits them.
+
+**Damping ratios, computed rather than assumed** (ζ = c / 2√(k·m)):
+
+| spring | ζ | overshoot 1st / 2nd | settle |
+| --- | --- | --- | --- |
+| `ui` 420/32/0.7 | 0.933 | 0.03% / — | 175ms |
+| `bar` 200/26/1 | 0.919 | 0.07% / — | 308ms |
+| `heavy` 130/19/1.15 | 0.777 | 2.07% / 0.04% | 484ms |
+| `impact` 600/30/1.1 | 0.584 | 10.44% / 1.09% | 293ms |
+
+Two premises in the proposal didn't survive checking, and one number is a judgment call — all three
+are written up in the session report. Short version: `bar`'s old overshoot could not have caused a
+false pass (it only drives the continuous >20-test bar, never the segmented cells), `heavy` came out
+*less* damped than before rather than weightier, and `impact` rebounds twice — 23px then 2.4px on a
+220px travel.
+
+### New-token audit
+
+- `ease.in` applied to every exit that was drifting away on a decelerating curve: verdict panel,
+  victory overlay, queue pop, queue card, countdown digits, emote wheel.
+- `ease.impact` on the §6.2 nameplate collision; `spring.impact` on the `VS` badge and the rank-up
+  badge assembly. The two are deliberately not interchangeable — see §5.
+- `dur.beat` before the countdown's first tick and before the verdict panel drops.
+- `dur.reveal` replaces the hardcoded 120ms test cadence.
+- `dur.breathe` replaces the hardcoded 1800ms clutch cycle.
+- `dur.victory` / `dur.defeat` / `dur.skip` drive the new skippable victory cinematic.
+- Shake now generates decaying alternating keyframes from `cycles` and `decay`.
+
+**Two gaps the audit exposed, both fixed:** §6.7's *"the loser's plate slides off-screen"* was never
+implemented — the HUD now takes an `endgame` prop that crosses the winner's plate toward the center
+and accelerates the loser's off on `ease.in`. And `shatterKey` was missing from `HUDPlayer`, so the
+near-miss shatter had been wired through the simulator but never reached the TestBar. It fires now.
+
 ### Follow-ups applied after first review
 
 - **§5's looping rule was reworded, not the code.** Looping motion is now allowed whenever it

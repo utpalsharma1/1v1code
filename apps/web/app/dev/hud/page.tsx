@@ -123,6 +123,7 @@ function Simulator() {
           clockMs={sim.clockMs}
           clockPending={sim.clockPending}
           won={{ p1: 1, p2: 0 }}
+          endgame={sim.victory?.winner ?? null}
         />
 
         <main className="grid min-h-0 flex-1 grid-cols-[1fr_minmax(280px,360px)_1fr] gap-3 p-3 max-lg:grid-cols-1">

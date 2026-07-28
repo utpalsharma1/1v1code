@@ -46,7 +46,11 @@ export function QueueCard({
       className="clip-lean border-player relative w-full max-w-md overflow-hidden border bg-surface p-6"
       initial={m.reduced ? { opacity: 0 } : { opacity: 0, scaleY: 0.7 }}
       animate={m.reduced ? { opacity: 1 } : { opacity: 1, scaleY: 1 }}
-      exit={m.reduced ? { opacity: 0 } : { opacity: 0, scaleY: 0.7 }}
+      exit={{
+        opacity: 0,
+        ...(m.reduced ? {} : { scaleY: 0.7 }),
+        transition: m.t(m.tween(m.dur.base, m.ease.in)),
+      }}
       style={{ transformOrigin: "top" }}
       transition={m.reduced ? m.t({}) : m.spring.heavy}
     >

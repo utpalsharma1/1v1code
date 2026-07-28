@@ -42,7 +42,13 @@ export function VerdictPanel({
       className="pointer-events-none fixed inset-x-0 top-0 z-50 grid place-items-center px-6 pt-6"
       initial={m.reduced ? { opacity: 0 } : { opacity: 0, y: -80 }}
       animate={m.reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      exit={m.reduced ? { opacity: 0 } : { opacity: 0, y: -40 }}
+      // Exits accelerate away. §6.6: on a fail the panel leaves in 240ms —
+      // never make a losing player wait on an animation.
+      exit={{
+        opacity: 0,
+        ...(m.reduced ? {} : { y: -60 }),
+        transition: m.t(m.tween(m.dur.base, m.ease.in)),
+      }}
       transition={m.reduced ? m.t({}) : m.spring.heavy}
     >
       <div
