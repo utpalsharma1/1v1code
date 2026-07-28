@@ -1,0 +1,10 @@
+# The repo was authored on Windows and moved to WSL2 Linux, which turned every
+# CRLF into an LF and made eight files look wholly rewritten. Normalise to LF in
+# the index so the platform a file was last touched on never shows up as a diff.
+* text=auto eol=lf
+
+# Binary-ish assets that must never be line-ending mangled.
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.ico binary
