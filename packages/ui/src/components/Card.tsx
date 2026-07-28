@@ -34,9 +34,10 @@ export function Card({
         "relative border",
         clip ? "clip-lean" : "rounded-card",
         tone === "surface" ? "bg-surface" : "bg-elevated",
-        owned
-          ? "border-player shadow-[0_0_24px_var(--player-glow)]"
-          : "border-line",
+        // Ownership carries on the border and the lean, never on a resting
+        // glow — a card that glows for a whole match is glow-at-rest by
+        // another name, which §4 forbids. Glow is for events.
+        owned ? "border-player" : "border-line",
         className,
       )}
       {...rest}

@@ -19,11 +19,14 @@
   --text-dim: #93a3bc;
   --text-faint: #5c6c85;
 
-  /* ── Player identity — the core of the system ───────────────────────── */
-  --p1: #3ddc97; /* jade — left corner */
-  --p1-glow: #3ddc9740;
-  --p2: #ff4d8d; /* magenta — right corner */
-  --p2-glow: #ff4d8d40;
+  /* ── Player identity — the core of the system ─────────────────────────
+     MATCHED PAIR. Never retune one without re-checking the other; see the
+     "Player color constraint" note in CLAUDE.md §4 for the numbers these
+     values are holding. */
+  --p1: #2bd98e; /* jade — left corner */
+  --p1-glow: #2bd98e40;
+  --p2: #ff337c; /* magenta — right corner */
+  --p2-glow: #ff337c40;
 
   /* ── State — each has exactly one job ───────────────────────────────── */
   --clock: #ffc53d; /* time pressure ONLY */

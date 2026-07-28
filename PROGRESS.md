@@ -1,5 +1,47 @@
 # PROGRESS
 
+## Palette pass — explored, rejected, two fixes kept ✅
+
+A muted palette direction was built out and **rejected**. Three candidates (Risograph spot inks,
+*Hyper Light Drifter* aubergine, faded arcade-cabinet sideart) were rendered against the full
+kitchen sink and compared side by side at `/dev/palette`. They live on branch **`palette-pass`**,
+which is intentionally **not merged and must not be deleted** — it is the record of what was tried.
+
+Rejected because the reference was fighting the brief: riso is a quiet print medium, §2 is a
+fighting game, and arcade cabinets are saturated. The warmed base, bone text, and grain overlay
+were turned down with it. Phase 0's chroma, base, and text color all stand. The reasoning is
+recorded permanently in CLAUDE.md §4 under *Palette provenance* so no future session re-mutes it.
+
+Two fixes were taken off that branch, and nothing else:
+
+1. **Glow audit.** `Card owned` and `Nameplate active` glowed continuously — `active` lasts the
+   whole match, so that was glow-at-rest by another name and a real §5 defect. Both now carry
+   ownership on the player border and the mirrored lean alone. Verified by grepping the **built**
+   CSS: the only surviving shadows are Button `:hover`, Nameplate `winner`, Clock under ten
+   seconds, and the focus ring. CLAUDE.md §4 now states the rule and the audit method.
+2. **Player color pair retuned** to `--p1: #2BD98E` / `--p2: #FF337C` — the Phase 0 hues at −5%
+   lightness. This fixes a real bug: `--fail` against P2 under deuteranopia was 1.24, meaning a
+   failing cell and a filled P2 cell were near-indistinguishable in the same bar (§6.4). Now 1.60.
+   P1/P2 deuteranopia separation also rises 1.70 → 2.02, and chroma rises with it — they are more
+   electric, not less. The paired constraint is documented in CLAUDE.md §4 and in `tokens.css`.
+
+**Not taken:** the warm base, bone text, grain overlay, halved glow radius, and the
+`--glow-r` / `--glow-r-lg` tokenization. All remain on `palette-pass` only.
+
+**Known inconsistency, deliberately left alone:** `--grandmaster` and the last stop of `--legend`
+are still `#FF4D8D`, the old P2 value, so they now sit ~2% off the new `--p2`. Phase 0 had them
+identical. Either they should track P2 or they are independent tier colors — that is a call to
+make, not something to change silently.
+
+## Three mechanics specced (no implementation)
+
+Written into CLAUDE.md at the detail level of the existing sections, with motion and sound beats:
+
+- **League color on handles** — §4 (color and glow rules) + §7 (where they surface). **Phase 3.**
+- **Problem ratings on the player scale** — §7 + §12. **Phase 2.** Includes the explicit §4 ban on
+  Easy/Medium/Hard color coding.
+- **Hack phase** — new §6.8 + §9 sounds + §10 events + §12. **Phase 4.**
+
 ## Phase 0 — Foundation ✅
 
 Monorepo, token system, motion system, typography, seven `packages/ui` primitives, and

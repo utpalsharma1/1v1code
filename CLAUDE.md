@@ -69,10 +69,10 @@ Define these in `packages/ui/tokens.css` as CSS custom properties and expose thr
 --text-faint: #5C6C85;
 
 /* Player identity — the core of the system */
---p1:         #3DDC97;   /* jade — left corner */
---p1-glow:    #3DDC9740;
---p2:         #FF4D8D;   /* magenta — right corner */
---p2-glow:    #FF4D8D40;
+--p1:         #2BD98E;   /* jade — left corner */
+--p1-glow:    #2BD98E40;
+--p2:         #FF337C;   /* magenta — right corner */
+--p2-glow:    #FF337C40;
 
 /* State — each has exactly one job */
 --clock:      #FFC53D;   /* time pressure ONLY */
@@ -93,6 +93,23 @@ Define these in `packages/ui/tokens.css` as CSS custom properties and expose thr
 
 **Colorblind rule:** player identity must never depend on hue alone. P1 is always left, always labelled `P1`, always uses a **solid** bar fill. P2 is always right, labelled `P2`, always uses a bar fill with a subtle 45° hatch texture. Verify at deuteranopia and protanopia.
 
+**Player color constraint — P1 and P2 are a matched pair. Never retune one alone.** These two values are holding four numbers at once, and moving either one moves all four:
+
+- P1/P2 separation under deuteranopia is **2.02**. This is a hard floor of **1.70** — below that the two corners are genuinely indistinguishable to a deuteranope and the whole identity system falls back on position and label alone.
+- P1/P2 separation under protanopia is 4.60, and 1.90 in normal vision.
+- `--fail` against P2 under deuteranopia is **1.60**. Earlier values put this at 1.24, which meant a failing cell and a filled P2 cell were near-identical to a deuteranope — a real bug, since §6.4 uses those two states side by side in the same bar.
+- Both sit at mid-lightness on purpose, so that P-colored text clears 4.5:1 on `--surface` *and* `--ink` text clears 4.5:1 on a solid P-colored button. Those two requirements pull in opposite directions and mid-lightness is where they both pass.
+
+The values above are the original Phase 0 hues at −5% lightness. That drop raises chroma (0.624 → 0.682 for P1, 0.698 → 0.800 for P2) as well as separation — it makes them *more* electric, not less. Dropping only P1 lands deuteranopia at 1.56 and breaks the floor. Verify with a dichromat simulation, not by eye.
+
+**Palette provenance — read this before muting anything.** A fully muted direction was explored and rejected. It pulled P1 and P2 down to Risograph spot-ink chroma — Hunter Green `#407060` against Wine `#914E72` — on a warm charcoal ground with bone text and a low-opacity film-grain overlay, alongside two further candidates grounded in *Hyper Light Drifter* and in sun-faded arcade-cabinet sideart. All three were built out against the full kitchen sink and compared side by side. The work survives on branch `palette-pass` and was deliberately not merged.
+
+It was rejected because the reference was fighting the brief. Risograph is a quiet print medium and restraint is the entire point of it; §2 is a fighting game, and arcade cabinets are saturated. The warmed base, the bone text, and the grain overlay were all judged alongside it and turned down with it.
+
+**The chroma above is a deliberate choice, not an oversight. Do not mute it.**
+
+**No difficulty colors.** Problem difficulty is a number on the player rating scale (§7), never an Easy/Medium/Hard color code. Difficulty green collides with P1, difficulty red collides with `--fail`, and a rating is more precise than three buckets anyway. Do not add a difficulty palette later.
+
 ### Type
 
 - **Display / headings / HUD:** `Martian Mono` — uppercase, weight 700–800, `letter-spacing: -0.02em`, used with restraint. A competitive coding arena whose headlines are monospace is the point; do not substitute a generic geometric sans.
@@ -108,7 +125,25 @@ Fighting-game HUDs slant. Adopt one consistent device and use it everywhere so t
 - **Clipped corner:** primary containers use `clip-path: polygon(...)` to cut the top-left and bottom-right corners at 12px. Bars, nameplates, buttons, badges.
 - P1 elements cut on one diagonal, P2 elements mirror it. The two sides visually lean into each other.
 - Radius elsewhere: `4px` small, `8px` cards. Never pill-shaped, never fully rounded — softness is off-brief.
-- Borders are `1px solid var(--line)`; active/owned elements get a `1px` player-colored border plus an outer `0 0 24px var(--pX-glow)`.
+- Borders are `1px solid var(--line)`. An element that belongs to a player takes a `1px` player-colored border, and that plus the mirrored corner cut is the *entire* ownership signal.
+- **Glow is for events, never for rest.** `0 0 24px var(--pX-glow)` fires on hover, on a state *change*, and on the victory flare. It never sits on an element for the duration of a match. A nameplate that glows for eight straight minutes is ambient animation wearing a disguise, it violates §5's "spend the motion budget on five moments", and it is the single loudest tell that an interface was generated rather than designed. This was a real defect in Phase 0 — `Card owned` and `Nameplate active` both glowed continuously — and it has been fixed.
+- Audit glow by grepping the **built** CSS for shadow declarations, never the source. Every surviving rule must be a `:hover`, a one-shot event class, or the sub-ten-second clock. Reading the source misses what the utility classes actually compile to.
+
+### League color on handles (Phase 3)
+
+Outside a match, a player's handle renders in their **tier color everywhere it appears** — hub, leaderboards, profiles, spectator chat, match history, replay timelines, friend strips. Rank stops being a badge you click and becomes ambient identity you read at a glance. Legend takes the `--legend` gradient on the text itself.
+
+**Glow scales with tier, and most tiers get none.**
+
+- **Iron, Bronze, Silver, Gold** — flat tier color. No glow, ever.
+- **Platinum, Diamond** — a faint glow: `0 0 8px` at roughly a third of `--pX-glow`'s alpha.
+- **Master, Grandmaster, Legend** — the full `0 0 24px` treatment.
+
+A leaderboard where every handle glows is visual noise, and it is a §5 violation dressed up as flair. The restraint is precisely what makes the top of the ladder feel earned: a glowing handle appearing in spectator chat should read as an **event** — someone important just walked in. If everything glows, nothing does.
+
+This is the one glow permitted at rest, and it earns the exception by being rare and by never animating. Do not extend it downward to more tiers, and do not pulse it.
+
+**Inside a match, side color always wins.** A Grandmaster on the P1 side renders jade — never magenta. This is not a special case to code around: the handle component sits inside the `[data-side]` scope and inherits `--player` like everything else. If you ever find yourself branching on tier inside the match HUD, the component is in the wrong place in the tree. Tier glow is suppressed entirely inside the HUD.
 
 ---
 
@@ -225,6 +260,25 @@ Budget: **3s**, and it is the only place in the product with a full-screen takeo
 - If it triggers a rank-up, chain into the rank-up cinematic: old badge shatters, new badge assembles from fragments with a radial light burst in that tier's color. Rank-ups should feel like they cost something to earn.
 - Four buttons, always: **Rematch · Queue again · Watch replay · Back to Hub**. `Rematch` is primary and focused by default.
 
+### 6.8 Hack phase — mode variant (Phase 4)
+
+A mode variant, not the default ranked flow. Chronologically it sits **between §6.6 and §6.7**: both players submit, and then a 60-second window opens in which each can write a counter-test input designed to break the other's solution. A landed hack scores and can flip the result of the match. A failed hack costs the attacker 60 seconds of clock in timed modes, or points in scored ones — it is a real risk, never a free swing.
+
+**Why this earns its place.** It means passing the tests is not safe. Edge cases acquire real weight, defensive thinking becomes worth as much as raw speed, and every match gets a second act instead of ending the instant somebody is faster. As a spectator moment it is better than the solve itself: watching someone read an opponent's code hunting for the unhandled empty input is far more legible drama than watching two people type. **If scope ever has to be cut, cut elsewhere first.**
+
+The beat, at the level of §6.6:
+
+1. **The reveal.** The opponent's source becomes visible and read-only, and that reveal is its own moment — build it as one, don't just swap a panel. Both editors slide outward to the screen edges, the opponent's source rises into the center from below with `spring.heavy`, and the syntax highlighting resolves over `dur.slow` rather than arriving all at once. It should feel like evidence being handed to you. Note that §5 still holds: the *panel* moves, the code inside it does not.
+2. **The clock.** 60 seconds on the existing `Clock` component, which takes its sub-ten-second treatment unchanged — `--clock` color, one 90ms pop per tick. Do not build a second timer.
+3. **Composing.** A single input field in `--ff-code` beneath the source, with a live size/format counter against the problem's stated input constraints. A hack must never be rejected on a technicality the player could not see coming.
+4. **Resolution.** The submitted input runs against the opponent's code. The verdict resolves the way §6.6 does — sequentially, never batched.
+5. **Hack lands.** The victim's test bar **shatters**: take the near-miss shatter from §6.5 and escalate it hard. Every filled cell fractures and falls rather than just the leading edge, the bar's frame cracks along its corner cut, screen shake at `shake.hard`, and the attacker's half of the HUD floods with their player color from the outer edge inward. This is the most violent thing in the product and it should look like it.
+6. **Hack fails.** The attacker's own bar takes a 200ms `--fail` flash, the penalty is deducted with the number floating up and fading, and the panel clears in `dur.base`. Same principle as §6.6: failure stings for about a second and then gets out of the way.
+
+**Sound.** `hack_land` is the most violent sound in the library — a hard percussive break with a low tail, unmistakably distinct from `test_fail` and louder than anything except `victory`. `hack_fail` is a dull miss. `hack_reveal` is a low riser sitting under the source-code reveal in step 1.
+
+**Rules.** One hack attempt per player per phase. The counter-test must satisfy the problem's stated input constraints or it is rejected before it runs, and a rejection does not cost the penalty. Hacking is disabled in Blitz — 60 seconds of reading is longer than the match itself.
+
 ---
 
 ## 7. Other screens
@@ -238,6 +292,20 @@ Budget: **3s**, and it is the only place in the product with a full-screen takeo
 **Replay.** Keystroke-level scrubber, variable speed (0.5×–8×), both players synced. Timeline markers for compiles, submissions, and idle pauses over 20s. A **divergence marker** auto-detecting where the match was decided. A time breakdown: reading / thinking / typing / debugging.
 
 **Profile.** Rank badge, per-topic rating radar chart (DP, graphs, greedy, strings, math), match history with mini pulse-line thumbnails, titles, rivalries, season recap card built for sharing.
+
+### Problem ratings (Phase 2)
+
+Every problem carries a rating **on the same numeric scale as players**. A 1600 problem is one that a 1600-rated player solves roughly half the time. One number, both sides of the system, no translation layer between them — a player who knows they are 1540 knows exactly what a 1700 problem means before they open it. This is the single cheapest legibility win available to us, and it is why we don't need difficulty buckets (§4).
+
+**It also hands us matchmaking.** Problem difficulty is drawn from the mean of the two players' ratings, with a small spread — ±80 by default, *sampled* rather than fixed, so the same pairing doesn't always land dead center and a match can occasionally run harder or easier than either player expected. That variance is a feature: it produces the upsets that make a ladder interesting.
+
+**Ratings converge on real data.** Seed them with estimates and let matches correct them: after each match, update the problem from the outcome exactly the way a player is updated, treating the problem as the opponent. A problem nobody at its stated rating can finish is mis-rated, and the data will say so within a few dozen matches. Never hand-tune a rating that solve data disagrees with.
+
+Surface the number on the problem card, in match history, on the replay timeline, and in the post-match summary. Never as a letter grade, never as a bucket, never color-coded — see §4.
+
+### Handles
+
+Handles carry league color everywhere outside a match — the full rule, including which tiers glow and why most of them don't, is in §4 under *League color on handles*. Inside a match, side color wins; nothing in §6 ever renders a handle in tier color.
 
 ---
 
@@ -257,6 +325,8 @@ Ship a small library, on by default, one master toggle plus a volume slider. It 
 
 `queue_pop` (low impact) · `countdown_tick` ×3 + higher final · `test_pass` (short tick, pitch rises with each consecutive pass) · `test_fail` (dull thud) · `submit` (whoosh) · `victory` (rising sting) · `defeat` (falling) · `rank_up` (chord) · `clutch_ambient` (sub-bass loop, fades in above 80%) · `emote` (soft pop).
 
+Ships with the hack phase (§6.8, Phase 4): `hack_reveal` (low riser) · `hack_land` (hard percussive break with a low tail — the most violent sound in the library, louder than everything except `victory`) · `hack_fail` (dull miss).
+
 Use the Web Audio API with a preloaded buffer pool. Never `<audio>` tags — the latency will ruin the timing.
 
 ---
@@ -267,10 +337,12 @@ Define every event once in `packages/proto` with zod schemas. Client and server 
 
 ```
 client → server:  queue.join, queue.leave, match.accept, editor.delta,
-                  code.run, code.submit, emote.send, draft.ban
+                  code.run, code.submit, emote.send, draft.ban,
+                  hack.submit                                    (Phase 4)
 
 server → client:  queue.status, match.found, match.start, opponent.status,
-                  opponent.pulse, test.result, match.end, spectator.join
+                  opponent.pulse, test.result, match.end, spectator.join,
+                  hack.open, hack.result                         (Phase 4)
 ```
 
 - Editor deltas: batched at ~50ms, sequence-numbered, with periodic full snapshots every 30s for late-joining spectators.
@@ -294,11 +366,11 @@ Do exactly one phase per session. Each phase ends fully designed, fully animated
 
 **Phase 1 — The Moment Simulator.** Before any networking, build `/dev/hud`: the complete match HUD with buttons that fire every cinematic on demand — queue pop, countdown, test pass, test fail, clutch state, submit pass, submit fail, victory, rank-up. *You are building this alone and will not have two humans to test with. This route is how you tune the feel, and it is the highest-leverage thing in the whole build.* Do not skip it, do not build it last.
 
-**Phase 2 — Real 1v1.** Auth, Postgres schema, 20 seeded problems, Socket.IO gateway, matchmaking on Redis, Monaco with delta streaming, Docker judge, the real match screen wired to Phase 1's animations, Glicko-2, victory and rating flow.
+**Phase 2 — Real 1v1.** Auth, Postgres schema, 20 seeded problems, Socket.IO gateway, matchmaking on Redis, Monaco with delta streaming, Docker judge, the real match screen wired to Phase 1's animations, Glicko-2, **problem ratings on the player scale (§7) driving difficulty selection**, victory and rating flow.
 
-**Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban.
+**Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 
-**Phase 4 — Depth.** Bo3, Blitz, Debug Duel, Ghost Races (race a stored replay — this makes the site feel populated at zero cost and solves the empty-queue problem), tournaments, sound library, cosmetics.
+**Phase 4 — Depth.** Bo3, Blitz, Debug Duel, **hack phase (§6.8)**, Ghost Races (race a stored replay — this makes the site feel populated at zero cost and solves the empty-queue problem), tournaments, sound library, cosmetics.
 
 ---
 
