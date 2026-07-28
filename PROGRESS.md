@@ -1,5 +1,110 @@
 # PROGRESS
 
+## Judge hardening ✅ verified
+
+Six items plus a rate limit, all verified by execution. §11 now carries the whole flag set, the
+compile-budget rules, the monotonic-clock rule, and the `nproc` trap written up as a warning.
+
+**Suite: 14/14 pass**, up from 10, including two new counterpart tests.
+
+### 1. Positive control
+
+A canary runs before anything else, per language image: Python must print `42`, and the C++ image
+must compile a program into the exec-mounted tmpfs and run it. If either fails the suite prints a
+**VOID** banner and aborts — it does not skip, it does not continue, and it exits non-zero.
+
+Verified by deliberately re-introducing `--ulimit nproc=64:64` and re-running:
+
+```
+canary FAIL 1v1-judge-python3: expected "42", got "(nothing)"
+            — exec /usr/local/bin/python3: resource temporarily unavailable
+canary FAIL 1v1-judge-cpp17:  ... exec /usr/bin/sh: resource temporarily unavailable
+CONTAINMENT SUITE VOID
+ℹ pass 0   ℹ fail 0   exit 1
+```
+
+The old suite reported **10/10 green** on that exact breakage. Every containment test now also
+asserts the *mechanism* fired — pid ceiling reached (>8 forks, <200), exit 137 or `MemoryError`,
+`outputCapped` true with >128 KB actually captured, `CapEff` readable and zero, files opened before
+the nofile cap bit. "No escape observed" is no longer sufficient to pass anything.
+
+### 2. Compile time is separate from run time
+
+**Answer to the question: compilation runs in the same container as execution** (one container per
+submission, per §11) **but on its own budget** — 10s wall clock and 10s CPU, independent of the 5s
+per-test execution limit. Splitting it into a second container would mean shuttling the binary
+between containers over stdout, which buys nothing the separate budget doesn't already give.
+
+New verdicts `COMPILE_TIMEOUT` and `COMPILE_MEMORY` in proto and the Prisma schema. Resource
+exhaustion is no longer reported as `COMPILE_ERROR`, which would tell a player their correct code
+is malformed.
+
+Two traps found while building this, both caught by running it:
+
+- **`RLIMIT_AS` is wrong for a compiler.** It caps virtual address space, and g++ reserves far more
+  VA than it resides — a 208 MB ceiling rejected a plain `#include <bits/stdc++.h>`. The compiler
+  is now bounded by the cgroup only. The execution path keeps `RLIMIT_AS`.
+- **Never raise a hard rlimit in the container.** `--ulimit` already pinned `nofile` to 64 and
+  `fsize` to 8 MB; asking for more inside `preexec_fn` throws `ValueError` and surfaces as an opaque
+  *"Exception occurred in preexec_fn"*. All limits now clamp to the existing hard ceiling.
+
+### 3. Compile bomb
+
+Preprocessor token explosion — eight-fold expansion nested four deep, ~16M tokens from five lines.
+Contained in **1.9s** as `COMPILE_MEMORY`. Required one fix: g++ is a driver, so when the cgroup
+kills `cc1plus` the driver survives and prints *"Killed signal terminated program cc1plus"*; without
+mapping that, the most effective compile bomb in existence reads as a syntax error.
+
+Paired with **"a legitimate heavy include still compiles"** — `bits/stdc++.h` must reach `ACCEPTED`.
+A limit that rejects correct programs is a worse bug than the one it prevents.
+
+### 4. Worker resilience and orphan reaping
+
+Malformed jobs are now rejected in-loop rather than thrown to the generic handler, which slept a
+second before retrying — anyone able to push to the queue could have throttled the worker to one job
+per second with garbage. `uncaughtException` and `unhandledRejection` log and continue. Verified
+against unparseable payloads, missing fields and a bogus language enum: all three rejected cleanly,
+worker alive.
+
+`apps/judge/src/reaper.ts` runs as its **own process** and kills any container labelled
+`com.1v1.judge=1` older than 30s. It deliberately does not import the worker — the case it exists
+for is the worker dying. Verified: killed a 5s-old container at a 2s threshold, none left behind.
+
+### 5. Concurrency and what it costs
+
+**Default 4 slots, hard ceiling 16.** Concurrency is a straight multiplier on worst-case memory:
+**256 MB × slots**, so 4 = 1 GB. Size against measured free memory, not core count — these jobs are
+memory-bound long before CPU-bound, and each container is already pinned to half a core.
+
+Measured job times: Python 5 tests ≈ **1.8s**, C++ 5 tests ≈ **5.5s** (compilation dominates at
+~4s). At a mixed ~3.5s average and 4 slots that is roughly **1.1 jobs/second sustained**. A burst of
+20 simultaneous submissions drains in about **18s**, with the last player waiting that long for a
+verdict. Sustained arrival above ~1.1/s grows the queue without bound — which is the intended
+failure mode: the queue backs up, the machine does not fall over.
+
+### 6. fsize and nofile, verified rather than assumed
+
+Both are per-process rlimits, so neither repeats the `nproc` mistake — but that was checked, not
+assumed. `fsize` capped at 8 MB (verified: a 400 MB write to /tmp fails while a small write
+succeeds); `nofile` capped at 64 (verified: some files open, then the limit bites). The canary
+re-ran green after both, which is the actual point of the exercise.
+
+### Rate limit
+
+Per-identity, two fixed windows: **3 per 10s** and **30 per 5min**. Keyed on user id when signed in,
+source address otherwise. Verified: three submissions returned 200, the fourth returned **429** with
+`Retry-After`.
+
+### One bug found along the way that is not in your list
+
+**`Date.now()` is not monotonic on this host.** The WSL2 system clock was measured stepping
+*backward* 2514ms inside a 20-second window, which made a container that ran 6.4 real seconds report
+3.8 and produced a genuinely impossible test result (`timedOut` true at 3812ms on a 6000ms timer).
+All judge duration measurement now uses `process.hrtime.bigint()`. This is not cosmetic: submission
+runtimes could have gone negative, and in 2B **final elapsed time is the match tiebreak** (§6.8).
+
+---
+
 ## Phase 2A — Persistence and execution ✅ verified end to end
 
 ## Environment

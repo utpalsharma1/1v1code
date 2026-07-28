@@ -30,12 +30,50 @@ import time
 # A submission that prints in a loop must not be able to fill the disk or the
 # pipe. Truncate hard and report OUTPUT_LIMIT.
 MAX_OUTPUT_BYTES = 256 * 1024
+
+# Compilation is a separate budget from execution, and it has to be. A compiler
+# is an arbitrary-computation engine: recursive template instantiation, #include
+# explosion and constexpr loops are all Turing-complete workloads that happen
+# before a single line of the program runs. Charging them against the 5s
+# execution limit would kill correct heavy-template C++ for being slow to build,
+# and leaving them untimed is a live denial-of-service hole.
 MAX_COMPILE_SECONDS = 10
+
+# The compiler gets its own memory ceiling *below* the container's, so that a
+# template bomb hits RLIMIT_AS and dies cleanly instead of tripping the cgroup
+# OOM killer — which may pick the runner as its victim and take the judge down
+# with it. That was the shape of the print-flood bug; the same trap applies here.
+COMPILE_MEMORY_RESERVE = 48 * 1024 * 1024
 
 
 def emit(obj):
     sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
     sys.stdout.flush()
+
+
+def set_limit(which, soft):
+    """
+    Lower a resource limit, never raise it.
+
+    The container's --ulimit flags already pin several hard limits, and a
+    non-root process cannot raise a hard limit: asking for more than the
+    ceiling raises ValueError inside preexec_fn, which surfaces as an opaque
+    "Exception occurred in preexec_fn" and kills the job before it starts.
+    Clamp to whatever the hard limit already is.
+    """
+    try:
+        current_soft, hard = resource.getrlimit(which)
+    except (ValueError, OSError):
+        return
+    if hard != resource.RLIM_INFINITY:
+        soft = min(soft, hard)
+        target_hard = hard
+    else:
+        target_hard = soft
+    try:
+        resource.setrlimit(which, (soft, target_hard))
+    except (ValueError, OSError):
+        pass
 
 
 def limits(memory_bytes):
@@ -45,13 +83,99 @@ def limits(memory_bytes):
         # Belt to the cgroup's braces. The cgroup memory limit is what actually
         # contains the process; RLIMIT_AS makes the failure a clean allocation
         # error instead of an OOM kill where possible.
-        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024 * 1024, 8 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        set_limit(resource.RLIMIT_AS, memory_bytes)
+        set_limit(resource.RLIMIT_FSIZE, 8 * 1024 * 1024)
+        set_limit(resource.RLIMIT_NOFILE, 64)
+        set_limit(resource.RLIMIT_CORE, 0)
         os.setsid()
 
     return apply
+
+
+def compile_step(argv, memory_bytes):
+    """
+    Runs a compiler under its own wall clock and its own memory ceiling.
+
+    Returns (status, message) where status is OK, COMPILE_ERROR,
+    COMPILE_TIMEOUT or COMPILE_MEMORY.
+    """
+    budget = max(64 * 1024 * 1024, memory_bytes - COMPILE_MEMORY_RESERVE)
+
+    def apply():
+        set_limit(resource.RLIMIT_CORE, 0)
+        # A CPU-seconds ceiling as well as the wall clock: a compile bomb that
+        # spins without allocating would otherwise sit at 100% until the wall
+        # clock fires, and SIGXCPU cuts that short.
+        set_limit(resource.RLIMIT_CPU, MAX_COMPILE_SECONDS)
+        os.setsid()
+
+        # Deliberately NO RLIMIT_AS here, unlike the execution path.
+        #
+        # RLIMIT_AS caps virtual address space, not resident memory, and a
+        # modern C++ compiler reserves vastly more VA than it ever resides:
+        # a plain `#include <bits/stdc++.h>` blew a 208 MB AS ceiling while
+        # using a fraction of that in RSS. Any AS limit tight enough to bound
+        # real memory rejects correct programs, which is a worse failure than
+        # the one it prevents.
+        #
+        # The cgroup memory limit is the real containment and it bounds RSS
+        # properly. A compile bomb trips it and returns SIGKILL, which
+        # compile_step maps to COMPILE_MEMORY. The runner survives because the
+        # OOM killer scores by memory used and the compiler is, by a wide
+        # margin, the fattest process in the cgroup.
+
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=apply,
+            cwd="/tmp",
+            env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp"},
+        )
+    except OSError as exc:
+        return "COMPILE_ERROR", f"could not start compiler: {exc}"
+
+    try:
+        _, err = proc.communicate(timeout=MAX_COMPILE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), 9)
+        except OSError:
+            pass
+        proc.kill()
+        proc.communicate()
+        return (
+            "COMPILE_TIMEOUT",
+            f"compilation exceeded {MAX_COMPILE_SECONDS}s",
+        )
+
+    if proc.returncode == 0:
+        return "OK", ""
+
+    text = err.decode("utf-8", "replace")
+    # SIGKILL from the cgroup, SIGXCPU from RLIMIT_CPU, or a compiler that says
+    # it ran out of memory — all of these are resource exhaustion, not a
+    # syntax error, and reporting them as COMPILE_ERROR would tell the player
+    # their correct code is malformed.
+    if proc.returncode in (-9, 137):
+        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling"
+    if proc.returncode in (-24, 152):
+        return "COMPILE_TIMEOUT", f"compiler exceeded {MAX_COMPILE_SECONDS}s of CPU"
+
+    lowered = text.lower()
+    # g++ is a driver: when the cgroup OOM-kills cc1plus, the driver itself
+    # survives and exits non-zero, reporting "Killed signal terminated program
+    # cc1plus". Without this the most effective compile bomb in existence gets
+    # reported to the player as a syntax error in their own code.
+    if (
+        "out of memory" in lowered
+        or "memory exhausted" in lowered
+        or "killed signal terminated" in lowered
+        or "internal compiler error: killed" in lowered
+    ):
+        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling"
+    return "COMPILE_ERROR", text[:4000]
 
 
 def run_once(argv, stdin_data, timeout_s, memory_bytes):
@@ -183,19 +307,11 @@ def main():
         with open(src, "w") as handle:
             handle.write(source)
         emit({"kind": "compiling"})
-        compile_proc = subprocess.run(
-            ["g++", "-std=c++17", "-O2", "-o", binary, src],
-            capture_output=True,
-            timeout=MAX_COMPILE_SECONDS,
-            cwd="/tmp",
+        status, message = compile_step(
+            ["g++", "-std=c++17", "-O2", "-o", binary, src], memory_bytes
         )
-        if compile_proc.returncode != 0:
-            emit(
-                {
-                    "kind": "compile-failed",
-                    "message": compile_proc.stderr.decode("utf-8", "replace")[:4000],
-                }
-            )
+        if status != "OK":
+            emit({"kind": "compile-failed", "verdict": status, "message": message})
             return
         argv = [binary]
     elif language == "PYTHON3":
@@ -205,18 +321,17 @@ def main():
         # Syntax-check up front so a typo reports COMPILE_ERROR rather than
         # failing every test case identically.
         emit({"kind": "compiling"})
-        check = subprocess.run(
-            [sys.executable, "-c", "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)", src],
-            capture_output=True,
-            timeout=MAX_COMPILE_SECONDS,
+        status, message = compile_step(
+            [
+                sys.executable,
+                "-c",
+                "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)",
+                src,
+            ],
+            memory_bytes,
         )
-        if check.returncode != 0:
-            emit(
-                {
-                    "kind": "compile-failed",
-                    "message": check.stderr.decode("utf-8", "replace")[:4000],
-                }
-            )
+        if status != "OK":
+            emit({"kind": "compile-failed", "verdict": status, "message": message})
             return
         argv = [sys.executable, src]
     else:

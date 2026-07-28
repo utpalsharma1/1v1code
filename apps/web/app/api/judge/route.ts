@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { JUDGE_QUEUE_KEY, JudgeJobSchema, judgeChannel, type JudgeEvent } from "@1v1/proto";
 import { prisma } from "@1v1/db";
+import { checkRateLimit, rateLimitIdentity } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,6 +14,16 @@ export const runtime = "nodejs";
 const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
 
 export async function POST(request: Request): Promise<Response> {
+  // Before any work: the judge pool is small and cheap to saturate.
+  const identity = rateLimitIdentity(null, request);
+  const rate = await checkRateLimit(identity);
+  if (!rate.allowed) {
+    return Response.json(
+      { error: `Rate limit exceeded (${rate.limit}). Try again in ${rate.retryAfter}s.` },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfter) } },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();

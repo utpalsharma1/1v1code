@@ -16,11 +16,33 @@ import {
   type JudgeJob,
   type Verdict,
 } from "@1v1/proto";
-import { CONTAINER_WALL_CLOCK_MS, IMAGES, dockerAvailable, runSandboxed } from "./sandbox.ts";
+import {
+  CONTAINER_WALL_CLOCK_MS,
+  IMAGES,
+  dockerAvailable,
+  monotonicMs,
+  runSandboxed,
+} from "./sandbox.ts";
 
 const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
-const CONCURRENCY = Number(process.env["JUDGE_CONCURRENCY"] ?? "2");
 const STRICT = process.env["JUDGE_STRICT"] !== "0";
+
+/* ── Concurrency (see section 11) ────────────────────────────────────────
+   Every slot can hold a container at the full per-submission memory limit, so
+   concurrency is a straight multiplier on worst-case RAM: 256 MB x slots. The
+   cap exists because the failure mode of getting this wrong is not a slow
+   judge, it is the host swapping or the OOM killer picking a victim at random
+   — and once that happens the queue is the least of your problems.
+
+   The default of 4 is deliberately conservative (1 GB worst case). Raise it
+   only against measured free memory, not against core count: these workloads
+   are memory-bound long before they are CPU-bound, and each container is
+   already pinned to half a core. */
+const MAX_CONCURRENCY = 16;
+const CONCURRENCY = Math.max(
+  1,
+  Math.min(MAX_CONCURRENCY, Number(process.env["JUDGE_CONCURRENCY"] ?? "4")),
+);
 
 const publisher = new Redis(REDIS_URL);
 const consumer = new Redis(REDIS_URL);
@@ -31,7 +53,9 @@ async function publish(event: JudgeEvent): Promise<void> {
 
 async function judge(job: JudgeJob): Promise<void> {
   const image = IMAGES[job.language];
-  const started = Date.now();
+  // Monotonic: a backward system-clock step would otherwise report a negative
+  // runtime, and in 2B elapsed time decides matches.
+  const started = monotonicMs();
 
   // Held in an object rather than as locals: these are written from the
   // streaming callback, and TypeScript's control-flow analysis can't see
@@ -77,17 +101,27 @@ async function judge(job: JudgeJob): Promise<void> {
         case "compiling":
           pending.push(publish({ kind: "compiling", jobId: job.jobId }));
           break;
-        case "compile-failed":
+        case "compile-failed": {
+          // A template bomb or an OOM during compilation is resource
+          // exhaustion, not malformed source. Reporting either as
+          // COMPILE_ERROR would tell a player their correct code is broken.
+          const raw = String(message["verdict"] ?? "COMPILE_ERROR");
+          const compileVerdict: Verdict =
+            raw === "COMPILE_TIMEOUT" || raw === "COMPILE_MEMORY"
+              ? (raw as Verdict)
+              : "COMPILE_ERROR";
           state.sawTerminal = true;
-          state.final = "COMPILE_ERROR";
+          state.final = compileVerdict;
           pending.push(
             publish({
               kind: "compile-failed",
               jobId: job.jobId,
+              verdict: compileVerdict,
               message: String(message["message"] ?? "").slice(0, 4000),
             }),
           );
           break;
+        }
         case "running":
           pending.push(
             publish({ kind: "running", jobId: job.jobId, total: job.tests.length }),
@@ -131,7 +165,11 @@ async function judge(job: JudgeJob): Promise<void> {
     state.final = state.passed === job.tests.length ? "ACCEPTED" : "INTERNAL_ERROR";
   }
 
-  if (state.final === "COMPILE_ERROR") {
+  if (
+    state.final === "COMPILE_ERROR" ||
+    state.final === "COMPILE_TIMEOUT" ||
+    state.final === "COMPILE_MEMORY"
+  ) {
     await publish({
       kind: "done",
       jobId: job.jobId,
@@ -139,7 +177,7 @@ async function judge(job: JudgeJob): Promise<void> {
       passed: 0,
       total: job.tests.length,
       failedAt: null,
-      runtimeMs: Date.now() - started,
+      runtimeMs: monotonicMs() - started,
     });
     return;
   }
@@ -151,7 +189,7 @@ async function judge(job: JudgeJob): Promise<void> {
     passed: state.passed,
     total: job.tests.length,
     failedAt: state.failedAt,
-    runtimeMs: Date.now() - started,
+    runtimeMs: monotonicMs() - started,
   });
 }
 
@@ -160,7 +198,20 @@ async function loop(slot: number): Promise<void> {
     try {
       const popped = await consumer.brpop(JUDGE_QUEUE_KEY, 0);
       if (!popped) continue;
-      const parsed = JudgeJobSchema.safeParse(JSON.parse(popped[1]));
+
+      // Parse defensively rather than letting a throw reach the outer handler.
+      // That path sleeps a second before retrying, so anyone who can push to
+      // the queue could throttle the worker to one job per second just by
+      // filling it with garbage.
+      let raw: unknown;
+      try {
+        raw = JSON.parse(popped[1]);
+      } catch {
+        console.error(`[slot ${slot}] rejected unparseable job payload`);
+        continue;
+      }
+
+      const parsed = JudgeJobSchema.safeParse(raw);
       if (!parsed.success) {
         console.error(`[slot ${slot}] rejected malformed job:`, parsed.error.issues[0]?.message);
         continue;
@@ -195,7 +246,20 @@ async function main(): Promise<void> {
     console.warn(`WARNING: ${message}`);
   }
 
-  console.log(`Judge worker up: ${CONCURRENCY} slot(s), queue "${JUDGE_QUEUE_KEY}"`);
+  /* No single submission may take down the worker, whatever it does. The
+     per-job try/catch in loop() covers the expected paths; these two cover the
+     unexpected ones. A judge that dies on a malformed job is a denial of
+     service that any player can trigger on purpose. */
+  process.on("uncaughtException", (error) => {
+    console.error("uncaught exception (worker continues):", error);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("unhandled rejection (worker continues):", reason);
+  });
+
+  console.log(
+    `Judge worker up: ${CONCURRENCY} slot(s) = ${CONCURRENCY * 256} MB worst case, queue "${JUDGE_QUEUE_KEY}"`,
+  );
   await Promise.all(Array.from({ length: CONCURRENCY }, (_, i) => loop(i)));
 }
 

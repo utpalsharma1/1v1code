@@ -449,7 +449,62 @@ server → client:  queue.status, match.found, match.start, opponent.status,
 
 ## 11. Judge
 
-Docker, one container per submission, from prebuilt per-language images. `--network none`, `--memory 256m`, `--cpus 0.5`, `--pids-limit 64`, read-only rootfs, non-root user, 5s wall-clock kill. Judge workers pull from a Redis queue and stream per-test-case results back as they complete — **the sequential test reveal in §6.6 depends on results streaming individually, so do not batch them**. Languages: C++17, Python 3, Java, JavaScript.
+Docker, one container per submission, from prebuilt per-language images. Judge workers pull from a Redis queue and stream per-test-case results back as they complete — **the sequential test reveal in §6.6 depends on results streaming individually, so do not batch them**. Languages: C++17, Python 3, Java, JavaScript.
+
+Nothing is bind-mounted. The job goes in over stdin and JSONL results come back on stdout, which removes mount-based escapes from the design entirely.
+
+### The flag set
+
+```
+--network none            --read-only
+--memory 256m             --user 1000:1000
+--memory-swap 256m        --cap-drop ALL
+--cpus 0.5                --security-opt no-new-privileges
+--pids-limit 64           --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777
+--ulimit nofile=64:64     --ulimit fsize=8388608:8388608     --ulimit core=0:0
+--label com.1v1.judge=1
+```
+
+- **`--memory-swap` must equal `--memory`.** Without it Docker grants swap equal to the limit, so `256m` silently means 512m.
+- **`--tmpfs /tmp` is `exec` on purpose.** A compiled binary has to run from somewhere, and the process is executing attacker code by definition; `noexec` there breaks C++ without removing any capability the attacker lacks.
+- **The wall clock is enforced by the worker, not Docker.** There is no kill-after-N-seconds flag — `--stop-timeout` only affects `docker stop`. Kill the *container* by name, never the CLI process: killing the client orphans the container and it keeps burning CPU.
+- **Output is capped in code**, 1 MB at the worker and 256 KB per test in the runner. Docker will not do this for you.
+
+### Do not add `--ulimit nproc`
+
+**This is the most important line in this section.** It looks like the natural companion to `--pids-limit` and it is not: `RLIMIT_NPROC` is enforced **per-UID and system-wide, and is not namespaced by the container**. With `--user 1000:1000` on a host whose own login user is uid 1000, the host's processes count against the container's allowance and `exec` fails with `EAGAIN` before a single instruction runs.
+
+It was added once, as belt-and-braces, and it silently broke the entire sandbox — while the containment suite reported ten of ten passing, because "no escape was observed" is trivially true of a container that never executed anything. `--pids-limit` is the cgroup-scoped tool that actually does this job. Every other `--ulimit` above is per-process and therefore safe, but **verify rather than assume** — that distinction is the whole lesson.
+
+### Compilation is a separate budget from execution
+
+A compiler is an arbitrary-computation engine. Recursive template instantiation, preprocessor token explosion and `constexpr` loops are Turing-complete workloads that run *before* a single line of the program does, so the execution limit is structurally incapable of catching them.
+
+- Compilation gets **10s wall clock and 10s of CPU**, separate from the 5s per-test execution limit. Charging build time against the execution limit would kill correct heavy-template C++ for being slow to compile.
+- Distinct verdicts: **`COMPILE_ERROR`, `COMPILE_TIMEOUT`, `COMPILE_MEMORY`.** Resource exhaustion is not a syntax error, and reporting it as one tells a player their correct code is malformed.
+- Memory is bounded by the container cgroup, **not** by `RLIMIT_AS`, for the compiler specifically. `RLIMIT_AS` caps virtual address space and g++ reserves vastly more VA than it resides — a 208 MB AS ceiling rejected a plain `#include <bits/stdc++.h>`. Any AS limit tight enough to bound real memory rejects correct programs. The execution path still uses `RLIMIT_AS`, where user programs have no such appetite.
+- `g++` is a driver: when the cgroup kills `cc1plus`, the driver survives and prints *"Killed signal terminated program cc1plus"*. Map that to `COMPILE_MEMORY` or the most effective compile bomb in existence reads as a syntax error.
+- Never raise a hard rlimit inside the container. `--ulimit` has already pinned several, and a non-root process asking for more gets `ValueError` inside `preexec_fn` — which surfaces as an opaque *"Exception occurred in preexec_fn"* and kills the job before it starts. Clamp; only ever lower.
+
+### Never measure duration with the wall clock
+
+`Date.now()` is not monotonic. On the WSL2 development host the system clock was measured **stepping backward 2514ms inside a 20-second window**, which made a container that ran for 6.4 real seconds report 3.8. Every duration — a test's runtime, a wall-clock decision, and in §6.8 a match's final elapsed time, which is the tiebreak — must come from `process.hrtime.bigint()` or `time.monotonic()`. Use the wall clock for *when*, never for *how long*.
+
+### Resilience and capacity
+
+- **No single submission may take down the worker.** Parse defensively: a `JSON.parse` throw that reaches the generic handler makes the worker sleep before retrying, so anyone able to push to the queue can throttle it to one job per second with garbage. Malformed payloads are rejected and logged in-loop.
+- **An orphan reaper runs as its own process**, killing any container labelled `com.1v1.judge=1` older than 30s. It deliberately does not import or depend on the worker: the case it exists for is the worker dying, and a reaper that dies with it is decoration.
+- **Concurrency is a straight multiplier on worst-case memory** — 256 MB × slots. Default 4 (1 GB), hard ceiling 16. Size it against measured free memory, not core count: these jobs are memory-bound long before they are CPU-bound, and each container is already pinned to half a core.
+- **Rate-limit submissions per user**, not just per connection. The pool is small by design and therefore cheap to saturate; a single `while true` around a submit call is enough to make the queue unbounded for everyone.
+
+### The containment suite is not optional, and it needs a positive control
+
+Every claim above gets a test that **actually attempts the escape** — and two rules that were learned by getting them wrong:
+
+1. **Positive control first.** A canary program with known output runs before anything else, per language image. If it fails the suite reports **VOID** and refuses to continue, because every containment result after a dead canary is meaningless. A green tick on meaningless results is worse than a red one.
+2. **Assert the mechanism, not the absence.** "The fork bomb did not escape" is satisfied by a container that never forked. Assert the pid ceiling was *reached*, that the exit code was *137*, that the verdict was *`OUTPUT_LIMIT`*. Absence of a bad outcome is not evidence of containment.
+
+Pair every containment test with its counterpart — the compile bomb next to a legitimate heavy `#include`, the nofile cap next to a program that must still open files. A limit that rejects correct programs is a worse bug than the one it prevents.
 
 ---
 
@@ -467,7 +522,13 @@ Do exactly one phase per session. Each phase ends fully designed, fully animated
 
 Judge security is verified, never assumed. Every containment claim in §11 gets a test that actually attempts the escape — network call, fork bomb, memory exhaustion, infinite loop, unbounded stdout, filesystem write — and proves it is contained.
 
-**Phase 2B — Realtime.** Socket.IO gateway, `packages/proto` extended with zod schemas for every socket event, Redis matchmaking, Monaco with delta streaming, the real match screen wired to Phase 1's animations, Glicko-2, the bot opponent from §13.6, and the append-only JSONL event log that becomes the replay.
+**Phase 2B — A real match, no keystroke relay.** `packages/proto` carrying zod schemas for every socket event, imported by both client and server. Socket.IO gateway with presence and reconnection. Redis matchmaking with the §6.1 band widening and §8's mean − 120 difficulty with adaptive spread. An **explicit match lifecycle state machine** — `QUEUED · MATCHED · ACCEPTING · COUNTDOWN · LIVE · JUDGING · ENDED · ABANDONED` — with named states rather than ad-hoc booleans, and every transition logged. The append-only **JSONL event log written from the first commit, not retrofitted**: replay is a pure function of that log, so the log has to be complete before anything reads it. Auth finished end to end — registration UI, login, session cookie round-trip, a real user in the database. Submission rows actually persisted. The real match screen wired to Phase 1's animations, with Monaco local-only. The bot opponent from §13.6, reusing the four-state typing model so its pulse line looks human. Glicko-2 with real rating updates.
+
+Four things to design deliberately rather than improvise, because each one is a state machine hole that only shows up in production: **reconnection** (grace period, what the opponent sees, how state resyncs, when it becomes a forfeit); **abandonment** (tab closed, no reconnect — forfeit rules and rating consequence); **nobody solves** (a dead match still needs an ending and a screen); and **idempotency on accept and submit** (the server must never start a match twice or double-count a submission).
+
+On **Glicko-2**: it is defined over rating *periods*, not per-game updates. Applying it per match is acceptable, but **RD must grow with time elapsed since a player's last match** or inactive players keep artificially confident ratings and the ladder stops self-correcting.
+
+**Phase 2C — Keystroke relay.** Monaco delta streaming, ~50ms batching, sequence numbers, and periodic full snapshots so late-joining spectators can catch up.
 
 **Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 

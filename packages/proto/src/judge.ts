@@ -21,6 +21,8 @@ export const VerdictSchema = z.enum([
   "MEMORY_LIMIT",
   "RUNTIME_ERROR",
   "COMPILE_ERROR",
+  "COMPILE_TIMEOUT",
+  "COMPILE_MEMORY",
   "OUTPUT_LIMIT",
   "INTERNAL_ERROR",
 ]);
@@ -54,6 +56,9 @@ export const JudgeEventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("compile-failed"),
     jobId: z.string(),
+    /** COMPILE_ERROR, COMPILE_TIMEOUT or COMPILE_MEMORY — a template bomb is
+     *  not a syntax error and must not be reported as one. */
+    verdict: VerdictSchema,
     message: z.string(),
   }),
   z.object({ kind: z.literal("running"), jobId: z.string(), total: z.number().int() }),

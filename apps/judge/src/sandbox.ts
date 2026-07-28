@@ -13,6 +13,21 @@
 import { spawn } from "node:child_process";
 import type { JudgeJob } from "@1v1/proto";
 
+/**
+ * Elapsed-time source. Never `Date.now()`.
+ *
+ * The system clock is not monotonic and on this host it demonstrably is not:
+ * WSL2 was measured stepping backward 2514ms inside a 20-second window, which
+ * made a container that ran for 6.4 real seconds report 3.8. Every duration in
+ * the judge — a test's runtime, a wall-clock decision, and in Phase 2B a match's
+ * elapsed time, which is the tiebreak — has to come from a clock that only ever
+ * moves forward. Use Date.now() for "what time is it", never for "how long".
+ */
+export const monotonicMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
+
+/** Every judge container carries this so the reaper can find orphans. */
+export const JUDGE_LABEL = "com.1v1.judge=1";
+
 export const IMAGES: Record<JudgeJob["language"], string> = {
   CPP17: "1v1-judge-cpp17",
   PYTHON3: "1v1-judge-python3",
@@ -55,6 +70,10 @@ export function dockerArgs(opts: SandboxOptions): string[] {
     "run",
     "--rm",
     "--interactive",
+
+    // How the reaper finds us. A name prefix would work until someone renames
+    // a container; a label is part of the contract.
+    "--label", JUDGE_LABEL,
 
     // §11
     "--network", "none",
@@ -120,7 +139,7 @@ export function runSandboxed(
   const args = dockerArgs(opts);
   args.splice(1, 0, "--name", containerName);
 
-  const started = Date.now();
+  const started = monotonicMs();
 
   return new Promise<SandboxResult>((resolve) => {
     const child = spawn("docker", args, { windowsHide: true });
@@ -180,7 +199,7 @@ export function runSandboxed(
         exitCode,
         timedOut,
         outputCapped,
-        durationMs: Date.now() - started,
+        durationMs: monotonicMs() - started,
       });
     };
 

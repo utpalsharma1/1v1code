@@ -8,7 +8,8 @@
     "start": "node --experimental-strip-types src/index.ts",
     "test": "node --experimental-strip-types --test src/security.test.ts",
     "images": "docker build -f images/cpp17.Dockerfile -t 1v1-judge-cpp17 images && docker build -f images/python3.Dockerfile -t 1v1-judge-python3 images",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "reaper": "node --experimental-strip-types src/reaper.ts"
   },
   "dependencies": {
     "@1v1/proto": "workspace:*",
