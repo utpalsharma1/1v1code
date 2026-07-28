@@ -1,5 +1,67 @@
 # PROGRESS
 
+## Phase 2B — STOPPED PARTWAY, needs splitting
+
+**I am stopping and asking for a split rather than pushing through.** You pre-authorised this and I
+think it is clearly the right call: what remains is not "a bit more work", it is the entire
+networking and UI half of 2B, and doing it badly in the time left would produce an end-to-end demo
+held together with assumptions I could not verify.
+
+### Done this session
+
+Both spec rules, which you wanted before any 2B code, and the **pure, fully-tested core** that the
+networking layer will sit on. **31 tests, all passing.**
+
+| | |
+| --- | --- |
+| §11 | Time discipline as a system-wide rule, with the three-field event contract |
+| §6.9 | New: receipt order decides matches, and the `JUDGING` hold |
+| `packages/core/time.ts` | `monotonicMs`, `Stopwatch`, `Deadline` |
+| `packages/core/glicko.ts` | Glicko-2 + RD decay, **8 tests** |
+| `packages/core/match-machine.ts` | 8-state lifecycle, **15 tests** |
+| `packages/core/event-log.ts` | JSONL log with `seq`/`offsetMs`/`wallMs`, **8 tests** |
+
+**Glicko-2 is verified against Glickman's published worked example** — 1464.06 / 151.52 / 0.05999,
+which is the only real check on the volatility solver since every other step is closed-form.
+
+**On the rating-period question:** RD growth is applied lazily rather than on a schedule.
+`decayedDeviation` computes `φ* = √(φ² + σ²·t)` with `t` in rating periods (one period = one day) and
+runs on both players immediately before every match update. Without it, per-match application means
+an inactive player is simply never touched, so the system stays maximally confident about someone it
+has not observed in a year. Tested: a returning player's rating moves further than an active one's.
+
+**The fairness property from §6.9 is a test, not a comment.** `receipt order decides the match, not
+verdict order` drives p1 submitting first, p2's verdict returning first — exactly what happens when
+p1 wrote C++ (~5.5s) and p2 wrote Python (~1.8s) — and asserts p1 wins.
+
+**The clock property is a test too.** `ORDERING SURVIVES A BACKWARD CLOCK STEP` builds a log whose
+later events carry *earlier* wall clocks, asserts replay order is unaffected, and then asserts that
+sorting by timestamp really would have corrupted it. That is the 2514ms WSL2 clock step encoded as a
+regression test.
+
+Also added `erasableSyntaxOnly` to the base tsconfig: this repo runs `.ts` directly through Node's
+strip-only loader, which rejects enums, namespaces and parameter properties at *runtime*. A
+parameter property in the event log was caught that way; the flag turns it into a compile error.
+
+### Not started — the proposed split
+
+**2B-1 (this session, done):** contracts, time, ratings, state machine, event log.
+
+**2B-2 — the gateway.** `packages/proto` socket schemas; Socket.IO gateway with presence,
+reconnection and the grace-period timers; Redis matchmaking with §6.1 band widening and §8's
+mean − 120 with adaptive spread; the state machine wired to real sockets with every transition
+logged; the JSONL log written for real matches. Deliverable: two tabs match, accept, count down, and
+reach `LIVE` with a real event log on disk.
+
+**2B-3 — the match.** Auth UI end to end; submission persistence; the match screen wired to Phase 1's
+animations with Monaco local-only; the bot opponent reusing `FakeTypist`; Glicko-2 applied to real
+match outcomes. Deliverable: your end-to-end — register, queue, match, solve, submit, verdicts
+stream, rating changes.
+
+I would rather hand you 2B-2 and 2B-3 working than 2B looking finished.
+
+---
+
 ## Judge hardening ✅ verified
 
 Six items plus a rate limit, all verified by execution. §11 now carries the whole flag set, the

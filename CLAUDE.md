@@ -366,6 +366,22 @@ Without this, a "hack" is just a malformed input. Feed a solution `n = -1` when 
 
 **Rules.** One hack attempt per player per phase. Validator rejection is free and does not consume the attempt. Hacking is disabled in Blitz — 60 seconds of reading is longer than the match itself.
 
+### 6.9 Ordering and match resolution
+
+**Receipt order decides the match. Verdict order never does.** This is a fairness rule, not a timing detail, and it is easy to get wrong by accident.
+
+The judge is a queue with finite slots (§11: four by default). A C++ submission takes ~5.5s against Python's ~1.8s, so once the queue has any depth at all, **the order verdicts come back is not the order submissions were made**. If "first correct submission wins" reads verdict time, or the elapsed-time tiebreak reads when judging finished, a player loses a match because somebody else's job happened to be ahead of theirs in a queue they cannot see. That is indistinguishable from cheating, from the losing player's point of view.
+
+- **Stamp receipt at the gateway the instant a submission arrives, before it is queued, on the monotonic clock.** That stamp is the sole authority for win order and for the §6.8 elapsed-time tiebreak.
+- **Queue wait and judge duration are diagnostics.** Log them, show them in the post-match summary if useful, and never let either become an input to the result.
+- The receipt stamp is what gets written to the event log and what the `Submission` row stores as its ordering key.
+
+**The match holds in `JUDGING` until every outstanding submission has resolved.** It does not end the moment the first `ACCEPTED` arrives. Consider both players submitting a correct solution 200ms apart while the first is still being judged: ending on first-verdict would hand the match to whoever's job finished first, which is the queue's decision, not the players'.
+
+So: entering `JUDGING` records the set of outstanding submissions. Each verdict resolves one. The match resolves only when that set is empty, and then it is decided by **receipt order among the accepted submissions**. A player whose submission was received first and passes wins, even if their verdict arrived second.
+
+If a player submits again while already in `JUDGING`, the earlier submission keeps its receipt stamp — a later submission cannot improve your position in the ordering, only your correctness.
+
 ---
 
 ## 7. Other screens
@@ -486,9 +502,27 @@ A compiler is an arbitrary-computation engine. Recursive template instantiation,
 - `g++` is a driver: when the cgroup kills `cc1plus`, the driver survives and prints *"Killed signal terminated program cc1plus"*. Map that to `COMPILE_MEMORY` or the most effective compile bomb in existence reads as a syntax error.
 - Never raise a hard rlimit inside the container. `--ulimit` has already pinned several, and a non-root process asking for more gets `ValueError` inside `preexec_fn` — which surfaces as an opaque *"Exception occurred in preexec_fn"* and kills the job before it starts. Clamp; only ever lower.
 
-### Never measure duration with the wall clock
+### Time discipline — a system-wide rule, not a judge detail
 
-`Date.now()` is not monotonic. On the WSL2 development host the system clock was measured **stepping backward 2514ms inside a 20-second window**, which made a container that ran for 6.4 real seconds report 3.8. Every duration — a test's runtime, a wall-clock decision, and in §6.8 a match's final elapsed time, which is the tiebreak — must come from `process.hrtime.bigint()` or `time.monotonic()`. Use the wall clock for *when*, never for *how long*.
+`Date.now()` is not monotonic. On the WSL2 development host the system clock was measured **stepping backward 2514ms inside a 20-second window**, which made a container that ran for 6.4 real seconds report 3.8 and produced a test result that was arithmetically impossible.
+
+**The rule: every duration, ordering decision, and timeout in the product comes from a monotonic clock. The wall clock is only ever used for a timestamp a human reads.**
+
+That means `process.hrtime.bigint()` on the server and `performance.now()` in the browser — never `Date.now()`, never `new Date()`. It applies to:
+
+- the server-authoritative match clock (§10) and the §6.3 countdown
+- rate-limit windows and reconnect grace periods
+- queue-time band widening (§6.1) and the adaptive difficulty spread (§8)
+- submission receipt order and the elapsed-time tiebreak (§6.9)
+- every timeout anywhere in the gateway
+
+**The event log is where this matters most.** Replay is a pure function of the log (§10), so ordering has to be recoverable from the log alone and must never depend on a timestamp that can move backward. Every event carries three fields and they have distinct jobs:
+
+- **`seq`** — a monotonic integer assigned at ingest, gapless per match. **Replay orders by this and only this.**
+- **`offsetMs`** — monotonic milliseconds since match start, for scrubbing and for the replay timeline.
+- **`wallMs`** — wall-clock milliseconds, **for display only**. Never sort by it, never diff it, never compare it across processes.
+
+A replay that sorts by timestamp is a replay that reorders itself when the host clock drifts. Sort by `seq`.
 
 ### Resilience and capacity
 

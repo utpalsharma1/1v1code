@@ -11,6 +11,11 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": true,
+    // apps/judge, packages/core and the seed scripts all run .ts directly
+    // through Node's strip-only loader, which rejects any TypeScript that
+    // needs real code generation — enums, namespaces, parameter properties.
+    // This turns that runtime failure into a compile error.
+    "erasableSyntaxOnly": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

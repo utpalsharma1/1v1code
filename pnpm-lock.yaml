@@ -77,6 +77,15 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/core:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/db:
     dependencies:
       '@prisma/client':
