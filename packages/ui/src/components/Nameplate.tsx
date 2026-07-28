@@ -60,7 +60,10 @@ export function Nameplate({
         isP2 ? "flex-row-reverse" : "flex-row",
         size === "lg" ? "gap-4 py-3 pr-5 pl-5" : "gap-3 py-2 pr-4 pl-4",
         state === "idle" && "border-line",
-        state === "active" && "border-player shadow-[0_0_var(--glow-r)_var(--player-glow)]",
+        // `active` lasts the whole match, so it is a resting state and gets no
+        // glow — the player-colored border already separates it from `idle`.
+        // `winner` is a one-shot event and keeps the large flare.
+        state === "active" && "border-player",
         state === "winner" && "border-player shadow-[0_0_var(--glow-r-lg)_var(--player-glow)]",
         state === "loser" && "border-line opacity-60 grayscale",
         "transition-colors duration-[240ms]",

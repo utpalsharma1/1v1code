@@ -5,35 +5,55 @@ import { Button, Card, cn } from "@1v1/ui";
 import { chroma, contrast, simulate } from "./color";
 import "../palettes.css";
 
-type PaletteId = "current" | "riso" | "oxide" | "cabinet";
+type PaletteId = "current" | "final" | "riso" | "oxide" | "cabinet";
 type Grain = "off" | "grain" | "dither";
 
-const PALETTES: { id: PaletteId; name: string; ref: string; note: string }[] = [
+interface Palette {
+  id: PaletteId;
+  name: string;
+  ref: string;
+  note: string;
+}
+
+/** The live decision: master's palette against the proposal. */
+const PRIMARY: Palette[] = [
   {
     id: "current",
-    name: "Current",
-    ref: "Phase 0 — generated",
-    note: "Here for comparison. Full-chroma jade and hot pink on blue-black.",
+    name: "Current (master)",
+    ref: "Phase 0 — blue-black ground, blue-white text",
+    note: "Shipped palette. Same glow rules as Final, so the only variable here is color.",
   },
+  {
+    id: "final",
+    name: "D · Final",
+    ref: "Phase 0 hues at -5% lightness on a warm charcoal ground",
+    note: "Electric players, quiet warm ground, restrained glow, grain.",
+  },
+];
+
+/** Kept so the rejected direction stays inspectable rather than just described. */
+const REJECTED: Palette[] = [
   {
     id: "riso",
     name: "A · Riso",
     ref: "Risograph spot inks — Hunter Green #407060 / Wine #914E72",
-    note: "Soy ink on uncoated stock. Flattest and warmest. Physically incapable of neon.",
+    note: "Rejected: riso is a quiet print medium, the product is a fighting game.",
   },
   {
     id: "oxide",
     name: "B · Oxide",
     ref: "Hyper Light Drifter — aubergine ground, oxidized copper",
-    note: "Most chroma of the three. Reads most obviously as a game.",
+    note: "Rejected with A — muting the players was the wrong variable.",
   },
   {
     id: "cabinet",
     name: "C · Cabinet",
     ref: "Sun-faded arcade cabinet sideart",
-    note: "Lowest chroma. Chalky sage and faded rose on warm neutral grey.",
+    note: "Rejected with A — lowest chroma, furthest from the brief.",
   },
 ];
+
+const ALL = [...PRIMARY, ...REJECTED];
 
 const SWATCHES = [
   "--ink",
@@ -63,19 +83,24 @@ const CHECKS: { label: string; fg: string; bg: string; min: number }[] = [
   { label: "info on surface", fg: "--info", bg: "--surface", min: 4.5 },
 ];
 
-type Resolved = Record<PaletteId, Record<string, string>>;
+type Resolved = Partial<Record<PaletteId, Record<string, string>>>;
+
+const cols = (n: number, first: string) => ({
+  gridTemplateColumns: `${first} repeat(${n}, minmax(0, 1fr))`,
+});
 
 export default function PalettePage() {
   const [grain, setGrain] = useState<Grain>("grain");
   const [zoom, setZoom] = useState(0.5);
   const [solo, setSolo] = useState<PaletteId | null>(null);
-  const [resolved, setResolved] = useState<Resolved | null>(null);
+  const [showRejected, setShowRejected] = useState(false);
+  const [resolved, setResolved] = useState<Resolved>({});
 
   // Read the palettes back out of CSS rather than duplicating hex in TS.
-  // palettes.css stays the single source of truth for the candidates.
+  // palettes.css stays the single source of truth for every candidate.
   useEffect(() => {
-    const out = {} as Resolved;
-    for (const p of PALETTES) {
+    const out: Resolved = {};
+    for (const p of ALL) {
       const el = document.querySelector<HTMLElement>(`[data-probe="${p.id}"]`);
       if (!el) continue;
       const cs = getComputedStyle(el);
@@ -86,13 +111,14 @@ export default function PalettePage() {
     setResolved(out);
   }, []);
 
-  const shown = solo ? PALETTES.filter((p) => p.id === solo) : PALETTES;
+  const listed = showRejected ? ALL : PRIMARY;
+  const shown = solo ? ALL.filter((p) => p.id === solo) : listed;
 
   return (
     <div className="mx-auto flex max-w-[1440px] flex-col gap-10 px-6 py-10">
       {/* Hidden probes: each carries a palette so getComputedStyle can read it. */}
       <div className="hidden">
-        {PALETTES.map((p) => (
+        {ALL.map((p) => (
           <div
             key={p.id}
             data-probe={p.id}
@@ -103,17 +129,17 @@ export default function PalettePage() {
 
       <header className="flex flex-col gap-4">
         <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-          Palette pass · proposal
+          Palette pass · revision 2
         </p>
         <h1 className="font-display text-fg text-34 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
-          Pick a palette
+          Current vs Final
         </h1>
         <p className="text-fg-dim max-w-3xl text-14 leading-relaxed">
-          Three candidates, each grounded in a named reference rather than generated. All of them
-          halve the glow radius (24px → 12px), pull chroma down by roughly half to three-quarters,
-          warm the base off blue, and swap blue-white text for bone. Nothing here is applied yet —
-          <span className="text-fg"> tokens.css is untouched</span>. These are scoped overrides in{" "}
-          <span className="tabular text-fg">app/dev/palettes.css</span>.
+          <span className="text-fg">D · Final</span> keeps the four things the first pass got right
+          — warm ground, bone text, halved glow, grain — and reverts the one it got wrong: the
+          players are electric again. Both frames below run the same audited glow rules, so the
+          only variable between them is color. Nothing is applied yet;{" "}
+          <span className="text-fg">tokens.css still holds the Phase 0 values</span>.
         </p>
       </header>
 
@@ -154,9 +180,9 @@ export default function PalettePage() {
             tone={solo === null ? "player" : "neutral"}
             onClick={() => setSolo(null)}
           >
-            All
+            Side by side
           </Button>
-          {PALETTES.map((p) => (
+          {(showRejected ? ALL : PRIMARY).map((p) => (
             <Button
               key={p.id}
               size="sm"
@@ -168,15 +194,32 @@ export default function PalettePage() {
             </Button>
           ))}
         </ControlGroup>
+
+        <ControlGroup label="Rejected candidates">
+          <Button
+            size="sm"
+            variant={showRejected ? "solid" : "outline"}
+            tone={showRejected ? "player" : "neutral"}
+            onClick={() => {
+              setShowRejected((v) => !v);
+              setSolo(null);
+            }}
+          >
+            {showRejected ? "Hide A/B/C" : "Show A/B/C"}
+          </Button>
+        </ControlGroup>
       </div>
 
       {/* ── Swatches ──────────────────────────────────────────────────────── */}
       <section>
         <SectionTitle>Swatches</SectionTitle>
         <div className="overflow-x-auto">
-          <div className="grid min-w-[720px] grid-cols-[160px_repeat(4,1fr)] gap-x-4">
+          <div
+            className="grid min-w-[560px] gap-x-4"
+            style={cols(listed.length, "160px")}
+          >
             <div />
-            {PALETTES.map((p) => (
+            {listed.map((p) => (
               <div key={p.id} className="pb-3">
                 <p className="font-display text-fg text-13 font-bold tracking-[var(--track-hud)] uppercase">
                   {p.name}
@@ -186,7 +229,7 @@ export default function PalettePage() {
             ))}
 
             {SWATCHES.map((token) => (
-              <Row key={token} token={token} resolved={resolved} />
+              <Row key={token} token={token} palettes={listed} resolved={resolved} />
             ))}
           </div>
         </div>
@@ -196,14 +239,17 @@ export default function PalettePage() {
       <section>
         <SectionTitle>Contrast &amp; colorblind separation</SectionTitle>
         <p className="text-fg-dim mb-4 max-w-3xl text-13 leading-relaxed">
-          Computed live from the CSS above. Muting both players to the same lightness collapses
-          their separation under deuteranopia, so P1 is deliberately kept lighter than P2 in every
-          candidate. §4&apos;s other three carriers — side, label, hatch — still do most of the work.
+          Computed live from the CSS above. The -5% lightness drop is not cosmetic: it raises
+          deuteranopia separation from 1.70 to 2.02 and pulls <span className="tabular">--fail</span>{" "}
+          away from P2 (1.24 to 1.60). Dropping only P1 would have landed at 1.56, under the floor.
         </p>
         <div className="overflow-x-auto">
-          <div className="grid min-w-[720px] grid-cols-[220px_repeat(4,1fr)] gap-x-4 gap-y-1">
+          <div
+            className="grid min-w-[560px] gap-x-4 gap-y-1"
+            style={cols(listed.length, "220px")}
+          >
             <div />
-            {PALETTES.map((p) => (
+            {listed.map((p) => (
               <p
                 key={p.id}
                 className="font-display text-fg-dim pb-2 text-12 font-bold tracking-[var(--track-hud)] uppercase"
@@ -213,16 +259,17 @@ export default function PalettePage() {
             ))}
 
             {CHECKS.map((check) => (
-              <CheckRow key={check.label} check={check} resolved={resolved} />
+              <CheckRow
+                key={check.label}
+                check={check}
+                palettes={listed}
+                resolved={resolved}
+              />
             ))}
 
             <MetricRow
-              label="P1/P2 sep — normal"
-              resolved={resolved}
-              compute={(t) => contrast(t["--p1"] ?? "", t["--p2"] ?? "")}
-            />
-            <MetricRow
-              label="P1/P2 sep — deuteranopia"
+              label="P1/P2 sep — deuteranopia (floor 1.70)"
+              palettes={listed}
               resolved={resolved}
               compute={(t) =>
                 contrast(
@@ -230,9 +277,11 @@ export default function PalettePage() {
                   simulate(t["--p2"] ?? "", "deut") ?? "",
                 )
               }
+              floor={1.7}
             />
             <MetricRow
               label="P1/P2 sep — protanopia"
+              palettes={listed}
               resolved={resolved}
               compute={(t) =>
                 contrast(
@@ -243,14 +292,23 @@ export default function PalettePage() {
             />
             <MetricRow
               label="chroma — P1"
+              palettes={listed}
               resolved={resolved}
               compute={(t) => chroma(t["--p1"] ?? "")}
               digits={3}
             />
             <MetricRow
               label="chroma — P2"
+              palettes={listed}
               resolved={resolved}
               compute={(t) => chroma(t["--p2"] ?? "")}
+              digits={3}
+            />
+            <MetricRow
+              label="chroma — ground (--ink)"
+              palettes={listed}
+              resolved={resolved}
+              compute={(t) => chroma(t["--ink"] ?? "")}
               digits={3}
             />
           </div>
@@ -287,14 +345,30 @@ export default function PalettePage() {
         </div>
       </section>
 
-      <Card title="What happens next" className="max-w-3xl">
+      <Card title="Glow audit" className="max-w-3xl">
         <p className="text-fg-dim text-13 leading-relaxed">
-          Tell me which one — and whether you want grain, dither, or neither. I&apos;ll fold the
-          winner into <span className="tabular text-fg">packages/ui/tokens.css</span>, update
-          CLAUDE.md §4 to match, delete{" "}
-          <span className="tabular text-fg">app/dev/palettes.css</span> and this route, and stop.
-          Still no Phase 1.
+          Every glow in the codebase, after the audit — verified by reading the built CSS, not the
+          source:
         </p>
+        <ul className="text-fg-dim mt-3 flex flex-col gap-1.5 text-13">
+          <li>
+            <span className="text-player">hover</span> — Button, player tone only. Neutral and fail
+            tones resolve <span className="tabular">--tone-glow</span> to transparent.
+          </li>
+          <li>
+            <span className="text-player">event</span> — Nameplate <span className="tabular">winner</span>,
+            at <span className="tabular">--glow-r-lg</span>.
+          </li>
+          <li>
+            <span className="text-clock">10s state</span> — Clock under ten seconds, halved with
+            everything else.
+          </li>
+          <li>
+            <span className="text-fg-faint">removed</span> — Card <span className="tabular">owned</span>{" "}
+            and Nameplate <span className="tabular">active</span> both glowed for the entire match.
+            Ownership now reads through the player border and the lean.
+          </li>
+        </ul>
       </Card>
     </div>
   );
@@ -321,12 +395,20 @@ function ControlGroup({ label, children }: { label: string; children: React.Reac
   );
 }
 
-function Row({ token, resolved }: { token: string; resolved: Resolved | null }) {
+function Row({
+  token,
+  palettes,
+  resolved,
+}: {
+  token: string;
+  palettes: Palette[];
+  resolved: Resolved;
+}) {
   return (
     <>
       <div className="tabular text-fg-faint flex items-center py-1 text-12">{token}</div>
-      {PALETTES.map((p) => {
-        const value = resolved?.[p.id]?.[token] ?? "";
+      {palettes.map((p) => {
+        const value = resolved[p.id]?.[token] ?? "";
         return (
           <div key={p.id} className="flex items-center gap-2 py-1">
             <span
@@ -343,16 +425,18 @@ function Row({ token, resolved }: { token: string; resolved: Resolved | null }) 
 
 function CheckRow({
   check,
+  palettes,
   resolved,
 }: {
   check: (typeof CHECKS)[number];
-  resolved: Resolved | null;
+  palettes: Palette[];
+  resolved: Resolved;
 }) {
   return (
     <>
       <div className="text-fg-dim py-0.5 text-12">{check.label}</div>
-      {PALETTES.map((p) => {
-        const tokens = resolved?.[p.id];
+      {palettes.map((p) => {
+        const tokens = resolved[p.id];
         const value = tokens ? contrast(tokens[check.fg] ?? "", tokens[check.bg] ?? "") : null;
         const pass = value !== null && value >= check.min;
         return (
@@ -370,25 +454,33 @@ function CheckRow({
 
 function MetricRow({
   label,
+  palettes,
   resolved,
   compute,
   digits = 2,
+  floor,
 }: {
   label: string;
-  resolved: Resolved | null;
+  palettes: Palette[];
+  resolved: Resolved;
   compute: (tokens: Record<string, string>) => number | null;
   digits?: number;
+  floor?: number;
 }) {
   return (
     <>
       <div className="text-fg-faint border-line mt-1 border-t pt-1 text-12">{label}</div>
-      {PALETTES.map((p) => {
-        const tokens = resolved?.[p.id];
+      {palettes.map((p) => {
+        const tokens = resolved[p.id];
         const value = tokens ? compute(tokens) : null;
+        const under = floor !== undefined && value !== null && value < floor;
         return (
           <div
             key={p.id}
-            className="tabular text-fg-dim border-line mt-1 border-t pt-1 text-12"
+            className={cn(
+              "tabular border-line mt-1 border-t pt-1 text-12",
+              under ? "text-fail" : "text-fg-dim",
+            )}
           >
             {value === null ? "—" : value.toFixed(digits)}
           </div>

@@ -15,6 +15,62 @@
    Delete this file once a winner is folded into tokens.css.
    ========================================================================= */
 
+/* --- D / FINAL -------------------------------------------------------------
+   The proposal. Keeps what the pass got right and reverts what it got wrong.
+
+   Electric players on a warm, quiet, textured ground. The chroma was never the
+   problem: the tells were glow-at-rest, blue-white text, and an untextured
+   surface. Saturation is earned by the ground being calm, not by the colors
+   being dull.
+
+   P1/P2 are the Phase 0 hues at -5% lightness, which seats them on the surface
+   instead of floating above it. That drop *raises* chroma (0.624 -> 0.682 and
+   0.698 -> 0.800) and, more importantly, raises deuteranopia separation from
+   1.70 to 2.02 and --fail-vs-P2 separation from 1.24 to 1.60. Dropping only P1
+   would have pushed deuteranopia to 1.56 -- below the floor. Do not change one
+   without re-checking the other. */
+:root[data-palette="final"],
+[data-palette="final"] {
+  --ink: #14120f; /* warm charcoal, near-neutral: chroma 0.020 vs 0.039 blue-black */
+  --surface: #1d1b17;
+  --elevated: #272420;
+  --line: #3a362f;
+  --line-hot: #524c42;
+
+  --text: #ece6da; /* bone */
+  --text-dim: #a79e8e;
+  --text-faint: #7b7365;
+
+  --p1: #2bd98e; /* Phase 0 jade, -5% lightness */
+  --p1-glow: #2bd98e30; /* alpha tightened 25% -> 19% */
+  --p2: #ff337c; /* Phase 0 magenta, -5% lightness */
+  --p2-glow: #ff337c30;
+
+  /* State colors stay at full Phase 0 chroma. They are events, not ground. */
+  --clock: #ffc53d;
+  --fail: #ff6b35;
+  --info: #4cc9f0;
+
+  /* Tiers keep Phase 0 chroma, except the two neutrals: Phase 0's iron and
+     silver were blue-grey and would smuggle the blue cast back in. */
+  --iron: #767068;
+  --bronze: #b06b3a;
+  --silver: #b4afa2;
+  --gold: #f0b429;
+  --platinum: #2dd4bf;
+  --diamond: #60a5fa;
+  --master: #a855f7;
+  --grandmaster: #ff337c;
+  --legend: linear-gradient(100deg, #ffd76e, #ff8a3d, #ff337c);
+  --legend-flat: #ff8a3d;
+
+  --scrim: #14120fd9;
+  --glow-r: 12px; /* halved from 24px */
+  --glow-r-lg: 20px;
+  --grain-opacity: 0.05;
+  --dither-opacity: 0.035;
+}
+
 /* --- A / RISO --------------------------------------------------------------
    Reference: the Risograph spot-ink library -- Hunter Green (#407060) against
    Wine (#914E72), on warm charcoal standing in for ink-heavy uncoated stock.

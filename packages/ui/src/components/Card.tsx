@@ -34,9 +34,10 @@ export function Card({
         "relative border",
         clip ? "clip-lean" : "rounded-card",
         tone === "surface" ? "bg-surface" : "bg-elevated",
-        owned
-          ? "border-player shadow-[0_0_var(--glow-r)_var(--player-glow)]"
-          : "border-line",
+        // Ownership is carried by the border and the lean, not by a glow.
+        // Glow is reserved for events (§ glow audit) — a card that glows for
+        // the whole match is exactly the "everything glows" tell.
+        owned ? "border-player" : "border-line",
         className,
       )}
       {...rest}

@@ -61,7 +61,9 @@ export function Clock({ ms, size = "hud", pending = false, className }: ClockPro
         pending && "text-fg-faint",
         !pending && !warning && "text-fg",
         !pending && warning && "text-clock",
-        critical && "drop-shadow-[0_0_24px_var(--clock)]",
+        // The only glow that persists at rest, and it lasts ten seconds by
+        // definition. Halved with everything else rather than removed.
+        critical && "drop-shadow-[0_0_var(--glow-r)_var(--clock)]",
         className,
       )}
     >
