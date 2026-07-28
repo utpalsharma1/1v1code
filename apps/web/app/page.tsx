@@ -30,6 +30,19 @@ export default function Home() {
           </span>
           <span className="text-player font-display text-20">→</span>
         </Link>
+
+        <Link
+          href="/dev/palette"
+          className="clip-p1 border-line group flex items-center justify-between border bg-surface px-5 py-4 transition-colors duration-[160ms] hover:border-[var(--player)]"
+        >
+          <span>
+            <span className="font-display text-fg block text-16 font-bold tracking-[var(--track-display)] uppercase">
+              Palette pass
+            </span>
+            <span className="text-fg-faint text-13">Three candidates, side by side</span>
+          </span>
+          <span className="text-player font-display text-20">→</span>
+        </Link>
       </nav>
     </main>
   );

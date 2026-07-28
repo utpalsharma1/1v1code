@@ -1,0 +1,176 @@
+/* ============================================================================
+   Palette candidates -- proposal only.
+
+   These are scoped overrides. tokens.css is untouched; nothing here applies
+   until an element carries [data-palette]. On <html> a palette drives the whole
+   app (including the @theme-derived --color-* vars, which resolve at :root). On
+   any other element it drives direct var() reads, which is what the swatch
+   comparison on /dev/palette relies on. One source, no duplicated hex.
+
+   Each block is written twice: `:root[data-palette=x]` outranks tokens.css's
+   `:root` deterministically (0,2,0 vs 0,1,0), and the bare `[data-palette=x]`
+   catches non-root probe elements. Without the :root form the two selectors tie
+   at equal specificity and the winner depends on CSS file order.
+
+   Delete this file once a winner is folded into tokens.css.
+   ========================================================================= */
+
+/* --- A / RISO --------------------------------------------------------------
+   Reference: the Risograph spot-ink library -- Hunter Green (#407060) against
+   Wine (#914E72), on warm charcoal standing in for ink-heavy uncoated stock.
+   Soy inks are physically incapable of neon; that is the entire point.
+   Flattest and warmest of the three. */
+:root[data-palette="riso"],
+[data-palette="riso"] {
+  --ink: #15120f;
+  --surface: #1e1a16;
+  --elevated: #292420;
+  --line: #3a332c;
+  --line-hot: #514840;
+
+  --text: #ede6da; /* bone */
+  --text-dim: #a79c8c;
+  --text-faint: #7c7264;
+
+  --p1: #6fae8e; /* aged verdigris */
+  --p1-glow: #6fae8e30;
+  --p2: #bc7295; /* dusty raspberry */
+  --p2-glow: #bc729530;
+
+  --clock: #c9974a; /* Riso Flat Gold */
+  --fail: #c87252; /* Riso Brick */
+  --info: #6f91ac;
+
+  --iron: #6c6660;
+  --bronze: #8a5f4a;
+  --silver: #a8a296;
+  --gold: #c9974a;
+  --platinum: #4e8f86;
+  --diamond: #6f93b8;
+  --master: #8672a3;
+  --grandmaster: #bc7295;
+  --legend: linear-gradient(100deg, #d8b06a, #c8794a, #bc7295);
+  --legend-flat: #c8794a;
+
+  --scrim: #15120fd9;
+  --glow-r: 12px;
+  --glow-r-lg: 20px;
+  --grain-opacity: 0.05;
+  --dither-opacity: 0.035;
+}
+
+/* --- B / OXIDE -------------------------------------------------------------
+   Reference: Hyper Light Drifter's key art -- aubergine-black ground with
+   oxidized-copper green and a rose magenta. The most chroma of the three and
+   the most obviously "a game". */
+:root[data-palette="oxide"],
+[data-palette="oxide"] {
+  --ink: #15111b;
+  --surface: #1f1926;
+  --elevated: #2b2434;
+  --line: #3d3348;
+  --line-hot: #564a63;
+
+  --text: #e6dfe4; /* warm off-white, faint mauve cast */
+  --text-dim: #a79bab;
+  --text-faint: #7a6e7f;
+
+  --p1: #5cb096; /* oxidized copper */
+  --p1-glow: #5cb09630;
+  --p2: #c66e8c; /* dusty rose */
+  --p2-glow: #c66e8c30;
+
+  --clock: #d9a441;
+  --fail: #d26c51;
+  --info: #7c9ac0;
+
+  --iron: #6b6675;
+  --bronze: #8a6250;
+  --silver: #a39baa;
+  --gold: #d9a441;
+  --platinum: #4e9e8e;
+  --diamond: #7c9ac0;
+  --master: #9070b8;
+  --grandmaster: #c66e8c;
+  --legend: linear-gradient(100deg, #e2b968, #d4794e, #c66e8c);
+  --legend-flat: #d4794e;
+
+  --scrim: #15111bd9;
+  --glow-r: 12px;
+  --glow-r-lg: 20px;
+  --grain-opacity: 0.045;
+  --dither-opacity: 0.03;
+}
+
+/* --- C / CABINET -----------------------------------------------------------
+   Reference: sun-faded screen-printed arcade cabinet sideart -- vinyl that has
+   sat in a window for thirty years. Lowest chroma of the three, warm neutral
+   grey ground, chalky sage and faded rose. The most "worn", the least "game". */
+:root[data-palette="cabinet"],
+[data-palette="cabinet"] {
+  --ink: #171614;
+  --surface: #21201d;
+  --elevated: #2c2a26;
+  --line: #3c3934;
+  --line-hot: #545049;
+
+  --text: #e4e0d6; /* warm grey-bone */
+  --text-dim: #a29d91;
+  --text-faint: #787268;
+
+  --p1: #7fac8e; /* chalky sage */
+  --p1-glow: #7fac8e30;
+  --p2: #c27b8a; /* faded rose */
+  --p2-glow: #c27b8a30;
+
+  --clock: #c9a44c;
+  --fail: #c57055;
+  --info: #7392a5;
+
+  --iron: #6e6960;
+  --bronze: #8c6450;
+  --silver: #a5a093;
+  --gold: #c9a44c;
+  --platinum: #5c9184;
+  --diamond: #7392a5;
+  --master: #8b7ba0;
+  --grandmaster: #c27b8a;
+  --legend: linear-gradient(100deg, #d6b26c, #c4794f, #c27b8a);
+  --legend-flat: #c4794f;
+
+  --scrim: #171614d9;
+  --glow-r: 12px;
+  --glow-r-lg: 20px;
+  --grain-opacity: 0.055;
+  --dither-opacity: 0.04;
+}
+
+/* --- Texture ---------------------------------------------------------------
+   A single static, fixed layer. It never animates and never repaints, so it
+   costs one composited quad.
+
+   Deliberately no mix-blend-mode: blending a full-viewport layer forces the
+   page into a blend group on every frame, and section 5 sets a hard 60fps floor
+   with a canvas pulse graph and a live HUD already on screen. Low-opacity light
+   noise over a dark ground gets most of the look for none of the cost. */
+:root[data-grain="grain"] body::after,
+:root[data-grain="dither"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+/* Film grain: monochrome fractal noise, tiled. */
+:root[data-grain="grain"] body::after {
+  opacity: var(--grain-opacity, 0.05);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Dot screen: the risograph half-tone, 3px pitch. */
+:root[data-grain="dither"] body::after {
+  opacity: var(--dither-opacity, 0.035);
+  background-image: radial-gradient(circle at 50% 50%, var(--text) 0.5px, transparent 0.6px);
+  background-size: 3px 3px;
+}

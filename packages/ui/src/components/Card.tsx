@@ -35,7 +35,7 @@ export function Card({
         clip ? "clip-lean" : "rounded-card",
         tone === "surface" ? "bg-surface" : "bg-elevated",
         owned
-          ? "border-player shadow-[0_0_24px_var(--player-glow)]"
+          ? "border-player shadow-[0_0_var(--glow-r)_var(--player-glow)]"
           : "border-line",
         className,
       )}

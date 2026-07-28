@@ -62,6 +62,11 @@
   --flash-hard: #ffffff; /* the 60ms plate flash in §6.2 step 3 */
 
   /* ── Geometry (§4 "Geometry") ───────────────────────────────────────── */
+  /* Glow radius, tokenized so a palette can change it. §4 states 24px; these
+     defaults reproduce it exactly. --glow-r-lg is the winner-nameplate flare. */
+  --glow-r: 24px;
+  --glow-r-lg: 40px;
+
   --clip: 12px; /* the corner cut, everywhere */
   --clip-sm: 8px; /* small controls where 12px would eat the label */
   --r-sm: 4px;
@@ -192,7 +197,7 @@
   background: var(--player-fill);
 }
 .glow-player {
-  box-shadow: 0 0 24px var(--player-glow);
+  box-shadow: 0 0 var(--glow-r) var(--player-glow);
 }
 .bg-legend {
   background: var(--legend);

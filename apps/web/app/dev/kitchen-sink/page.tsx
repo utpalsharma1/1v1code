@@ -19,6 +19,7 @@ import {
   type Side,
 } from "@1v1/ui";
 import { TestBar } from "@1v1/ui";
+import "../palettes.css";
 
 const SECTIONS = [
   ["color", "Color"],
@@ -33,7 +34,33 @@ const SECTIONS = [
   ["ticker", "StatusTicker"],
 ] as const;
 
+/**
+ * Applies ?palette= and ?grain= to this document's root. /dev/palette renders
+ * this page in iframes to compare candidates — each iframe is its own document,
+ * which is the only way to show several palettes at once given that the
+ * @theme-derived --color-* vars resolve once at :root.
+ *
+ * Reads location directly rather than useSearchParams(), which would force a
+ * Suspense boundary and dynamic rendering on a static dev route.
+ */
+function usePaletteFromUrl() {
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const palette = query.get("palette");
+    const grain = query.get("grain");
+    const root = document.documentElement;
+
+    if (palette && palette !== "current") root.dataset["palette"] = palette;
+    else delete root.dataset["palette"];
+
+    if (grain && grain !== "off") root.dataset["grain"] = grain;
+    else delete root.dataset["grain"];
+  }, []);
+}
+
 export default function KitchenSink() {
+  usePaletteFromUrl();
+
   return (
     <div className="mx-auto flex max-w-[1280px] gap-10 px-6 py-10 max-lg:flex-col">
       <Rail />

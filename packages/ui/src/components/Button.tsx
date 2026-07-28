@@ -46,12 +46,12 @@ const TONE: Record<Tone, string> = {
 const VARIANT: Record<Variant, string> = {
   solid: cn(
     "bg-[var(--tone)] text-ink border border-[var(--tone)]",
-    "hover:shadow-[0_0_24px_var(--tone-glow)]",
+    "hover:shadow-[0_0_var(--glow-r)_var(--tone-glow)]",
   ),
   outline: cn(
     "bg-transparent text-fg border border-line",
     "hover:border-[var(--tone)] hover:text-[var(--tone)]",
-    "hover:shadow-[0_0_24px_var(--tone-glow)]",
+    "hover:shadow-[0_0_var(--glow-r)_var(--tone-glow)]",
   ),
   ghost: cn(
     "bg-transparent text-fg-dim border border-transparent",
