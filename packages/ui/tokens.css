@@ -1,0 +1,247 @@
+/* ============================================================================
+   1v1.code — design tokens
+   The single source of truth for color, type, and geometry.
+   Nothing downstream may hardcode a hex, a radius, or a clip-path.
+   Spec: CLAUDE.md §4.
+   ========================================================================= */
+
+:root {
+  /* ── Base ──────────────────────────────────────────────────────────────
+     Deep ink with a blue cast, never pure black (pure black kills depth). */
+  --ink: #080b12; /* app background */
+  --surface: #0f1520; /* cards, panels */
+  --elevated: #18202e; /* modals, popovers, hovered rows */
+  --line: #232e42; /* borders, dividers */
+  --line-hot: #35435e; /* focused borders */
+
+  /* ── Text ───────────────────────────────────────────────────────────── */
+  --text: #e8eff8;
+  --text-dim: #93a3bc;
+  --text-faint: #5c6c85;
+
+  /* ── Player identity — the core of the system ───────────────────────── */
+  --p1: #3ddc97; /* jade — left corner */
+  --p1-glow: #3ddc9740;
+  --p2: #ff4d8d; /* magenta — right corner */
+  --p2-glow: #ff4d8d40;
+
+  /* ── State — each has exactly one job ───────────────────────────────── */
+  --clock: #ffc53d; /* time pressure ONLY */
+  --fail: #ff6b35; /* failed tests, compile errors ONLY */
+  --info: #4cc9f0; /* neutral system messages */
+
+  /* ── Rank tiers ─────────────────────────────────────────────────────── */
+  --iron: #6b7280;
+  --bronze: #b06b3a;
+  --silver: #9fb3c8;
+  --gold: #f0b429;
+  --platinum: #2dd4bf;
+  --diamond: #60a5fa;
+  --master: #a855f7;
+  --grandmaster: #ff4d8d;
+  --legend: linear-gradient(100deg, #ffd76e, #ff8a3d, #ff4d8d);
+
+  /* ==========================================================================
+     ADDITIONS beyond §4. Each is listed with the reason it was unavoidable,
+     per rule §13.2. Nothing here invents a new hue that isn't already a token.
+     ========================================================================= */
+
+  /* --legend is a gradient, so it cannot be used anywhere a single color is
+     required (border-color, text-color, box-shadow). Flat companion: */
+  --legend-flat: #ff8a3d;
+
+  /* §13.9 mandates a visible keyboard focus ring everywhere, but §4 defines no
+     focus token. --info is the neutral system color, so focus borrows it
+     rather than introducing a new hue. */
+  --focus: var(--info);
+
+  /* §6.2 step 1 dims the screen to 85% ink; §6.4 pops a cell with a 40% white
+     overlay; §6.6 blurs the editor. Those need named values, not magic ones. */
+  --scrim: #080b12d9; /* ink @ 85% */
+  --flash: #ffffff66; /* white @ 40% */
+  --flash-hard: #ffffff; /* the 60ms plate flash in §6.2 step 3 */
+
+  /* ── Geometry (§4 "Geometry") ───────────────────────────────────────── */
+  --clip: 12px; /* the corner cut, everywhere */
+  --clip-sm: 8px; /* small controls where 12px would eat the label */
+  --r-sm: 4px;
+  --r-card: 8px;
+  --hair: 1px; /* every border in the system is 1px */
+
+  /* The signature shape. P1 cuts top-left / bottom-right; P2 mirrors it so the
+     two sides lean into each other. --clip-flat is for neutral chrome that
+     belongs to neither player. */
+  --clip-p1: polygon(
+    var(--clip) 0,
+    100% 0,
+    100% calc(100% - var(--clip)),
+    calc(100% - var(--clip)) 100%,
+    0 100%,
+    0 var(--clip)
+  );
+  --clip-p2: polygon(
+    0 0,
+    calc(100% - var(--clip)) 0,
+    100% var(--clip),
+    100% 100%,
+    var(--clip) 100%,
+    0 calc(100% - var(--clip))
+  );
+  --clip-p1-sm: polygon(
+    var(--clip-sm) 0,
+    100% 0,
+    100% calc(100% - var(--clip-sm)),
+    calc(100% - var(--clip-sm)) 100%,
+    0 100%,
+    0 var(--clip-sm)
+  );
+  --clip-p2-sm: polygon(
+    0 0,
+    calc(100% - var(--clip-sm)) 0,
+    100% var(--clip-sm),
+    100% 100%,
+    var(--clip-sm) 100%,
+    0 calc(100% - var(--clip-sm))
+  );
+
+  /* ── Type (§4 "Type") ───────────────────────────────────────────────── */
+  /* The --font-* vars are injected by next/font in apps/web. The fallbacks
+     keep packages/ui renderable on its own. */
+  --ff-display: var(--font-martian), ui-monospace, "Cascadia Mono", monospace;
+  --ff-body: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --ff-code: var(--font-jetbrains), ui-monospace, "Cascadia Mono", monospace;
+
+  /* Scale — 12/13/14/16/20/26/34/48/72. The match clock is 72. Nothing else. */
+  --t-12: 0.75rem;
+  --t-13: 0.8125rem;
+  --t-14: 0.875rem;
+  --t-16: 1rem;
+  --t-20: 1.25rem;
+  --t-26: 1.625rem;
+  --t-34: 2.125rem;
+  --t-48: 3rem;
+  --t-72: 4.5rem;
+
+  --track-display: -0.02em; /* §4: display type is tight */
+  --track-hud: 0.08em; /* small-caps HUD labels need the opposite */
+
+  /* ── Player context ──────────────────────────────────────────────────
+     Components never branch on which player they belong to. They read
+     --player / --player-glow / --player-fill and inherit from the nearest
+     [data-side] ancestor. This is §2 rule 1 made mechanical.
+
+     Root default is P1: from your own point of view you are always P1. */
+  --player: var(--p1);
+  --player-glow: var(--p1-glow);
+  --player-fill: var(--p1);
+  --player-clip: var(--clip-p1);
+  --player-clip-sm: var(--clip-p1-sm);
+  --player-origin: left; /* P1 bars grow rightward, toward the center */
+}
+
+/* ── Colorblind safety (§4) ───────────────────────────────────────────────
+   Player identity must never rest on hue alone. P1 fills solid; P2 fills with
+   a 45° hatch. Position (left/right) and the literal P1/P2 label carry the
+   same information a third and fourth time. */
+[data-side="p1"] {
+  --player: var(--p1);
+  --player-glow: var(--p1-glow);
+  --player-fill: var(--p1);
+  --player-clip: var(--clip-p1);
+  --player-clip-sm: var(--clip-p1-sm);
+  --player-origin: left;
+}
+
+[data-side="p2"] {
+  --player: var(--p2);
+  --player-glow: var(--p2-glow);
+  --player-fill: repeating-linear-gradient(
+    45deg,
+    var(--p2) 0 3px,
+    color-mix(in oklab, var(--p2) 62%, black) 3px 6px
+  );
+  --player-clip: var(--clip-p2);
+  --player-clip-sm: var(--clip-p2-sm);
+  --player-origin: right; /* P2 bars grow leftward, toward the center */
+}
+
+/* ── Player-colored utilities ───────────────────────────────────────────
+   These are hand-written rather than generated through Tailwind's @theme, and
+   they have to be. A custom property declared inside @theme is substituted at
+   computed-value time on :root, so `--color-player: var(--player)` would freeze
+   to P1's jade and never pick up a [data-side="p2"] ancestor. Declaring the
+   real property here resolves --player against the element that uses it.
+
+   .fill-player also has to set `background`, not `background-color`: P2's fill
+   is a repeating gradient, which background-color would silently discard.
+
+   Two consequences worth knowing before you use them:
+     · Do NOT add --color-player to @theme — it would generate colliding names.
+     · Tailwind cannot build variants of a hand-written class, so `hover:` and
+       friends must use the arbitrary form: hover:text-[var(--player)]. */
+.text-player {
+  color: var(--player);
+}
+.border-player {
+  border-color: var(--player);
+}
+.bg-player {
+  background: var(--player);
+}
+.fill-player {
+  background: var(--player-fill);
+}
+.glow-player {
+  box-shadow: 0 0 24px var(--player-glow);
+}
+.bg-legend {
+  background: var(--legend);
+}
+
+/* ── Geometry utilities ─────────────────────────────────────────────────── */
+.clip-lean {
+  clip-path: var(--player-clip);
+}
+.clip-lean-sm {
+  clip-path: var(--player-clip-sm);
+}
+.clip-p1 {
+  clip-path: var(--clip-p1);
+}
+.clip-p2 {
+  clip-path: var(--clip-p2);
+}
+
+/* ── Focus (§13.9) ──────────────────────────────────────────────────────
+   clip-path crops outline, so focus is drawn as a double box-shadow that sits
+   inside the shape. Applied on :focus-visible only — never on mouse press. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 2px var(--ink),
+    inset 0 0 0 4px var(--focus);
+}
+
+/* ── Numerals ───────────────────────────────────────────────────────────
+   Every timer, score, rating, and stat. Digits must never jitter. */
+.tabular {
+  font-family: var(--ff-code);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ── Reduced motion (§5) ────────────────────────────────────────────────
+   Honors the OS setting and the manual in-app toggle, which writes
+   data-motion="reduced" onto <html>. Ambient loops (radar sweep, clutch
+   breathing) stop entirely; discrete state changes keep their 120ms opacity
+   fade so nothing becomes illegible. Framer Motion transitions are handled
+   separately in motion.ts — this covers CSS-driven motion only. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .ambient {
+    animation: none !important;
+  }
+}
+
+:root[data-motion="reduced"] .ambient {
+  animation: none !important;
+}

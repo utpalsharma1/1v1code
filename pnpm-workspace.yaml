@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm blocks lifecycle scripts unless explicitly allowed.
+# sharp is Next's image optimizer; oxide is Tailwind v4's native engine.
+allowBuilds:
+  sharp: true
+  "@tailwindcss/oxide": true

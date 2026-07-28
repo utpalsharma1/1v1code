@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm config get prefix)",
+      "PowerShell(npm install -g pnpm@latest 2>&1)",
+      "PowerShell($env:Path = \"C:\\\\Users\\\\Asus\\\\AppData\\\\Roaming\\\\npm;\" + $env:Path; pnpm -v)",
+      "PowerShell(pnpm -v)",
+      "PowerShell($pkgs = @\\('next','react','react-dom','tailwindcss','@tailwindcss/postcss','framer-motion','zustand','@tanstack/react-query','typescript','turbo','@types/react','@types/node','@types/react-dom'\\); foreach \\($p in $pkgs\\) { $v = npm view $p version; Write-Output \"$p = $v\" })",
+      "PowerShell(Write-Output \"next15 = $\\(npm view next@15 version --json | ConvertFrom-Json | Select-Object -Last 1\\)\"; Write-Output \"ts5 = $\\(npm view typescript@5 version --json | ConvertFrom-Json | Select-Object -Last 1\\)\"; Write-Output \"eslint9 = $\\(npm view eslint@9 version --json | ConvertFrom-Json | Select-Object -Last 1\\)\"; Write-Output \"eslintconfignext15 = $\\(npm view eslint-config-next@15 version --json | ConvertFrom-Json | Select-Object -Last 1\\)\")",
+      "PowerShell(pnpm install 2>&1)",
+      "PowerShell(pnpm run typecheck 2>&1)",
+      "PowerShell(pnpm run build 2>&1)",
+      "PowerShell(Start-Process -FilePath \"C:\\\\Users\\\\Asus\\\\AppData\\\\Roaming\\\\npm\\\\pnpm.cmd\" -ArgumentList \"--filter\",\"@1v1/web\",\"start\" -WorkingDirectory \"c:\\\\Users\\\\Asus\\\\Documents\\\\1v1.code\" -WindowStyle Hidden; Start-Sleep -Seconds 9; foreach \\($p in \"/\",\"/dev/kitchen-sink\"\\) { try { $r = Invoke-WebRequest -Uri \"http://localhost:3000$p\" -UseBasicParsing -TimeoutSec 25; Write-Output \"$p -> HTTP $\\($r.StatusCode\\), $\\([math]::Round\\($r.RawContentLength/1kb,1\\)\\)kb\" } catch { Write-Output \"$p -> FAILED: $\\($_.Exception.Message\\)\" } })",
+      "PowerShell($h = \\(Invoke-WebRequest -Uri \"http://localhost:3000/dev/kitchen-sink\" -UseBasicParsing -TimeoutSec 25\\).Content; foreach \\($probe in 'KITCHEN SINK|Kitchen sink','data-side=\"p2\"','fill-player','clip-lean','P1','P2','07:42','arjun_dev','Grandmaster|grandmaster','running tests'\\) { $hit = if \\($h -match $probe\\) { \"OK  \" } else { \"MISS\" }; Write-Output \"$hit $probe\" }; Write-Output \"---\"; if \\($h -match 'data-motion'\\) { Write-Output \"OK   motion bootstrap present\" } else { Write-Output \"MISS motion bootstrap\" })",
+      "PowerShell($h = \\(Invoke-WebRequest -Uri \"http://localhost:3000/dev/kitchen-sink\" -UseBasicParsing -TimeoutSec 25\\).Content; if \\($h -match '1v1\\\\.motion'\\) { Write-Output \"OK   bootstrap script inlined\" } else { Write-Output \"MISS bootstrap script\" }; $i = $h.IndexOf\\('<head>'\\); if \\($i -ge 0\\) { Write-Output $h.Substring\\($i, [Math]::Min\\(700, $h.Length - $i\\)\\) } else { Write-Output \"no literal <head> tag; first 500 chars:\"; Write-Output $h.Substring\\(0,500\\) })",
+      "PowerShell(Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Set-Location \"c:\\\\Users\\\\Asus\\\\Documents\\\\1v1.code\"; git init -q; git add -A; git status --short | Measure-Object | ForEach-Object { \"staged files: $\\($_.Count\\)\" })",
+      "PowerShell(Set-Location \"c:\\\\Users\\\\Asus\\\\Documents\\\\1v1.code\"; $n = git config user.name; $e = git config user.email; Write-Output \"user.name=$n\"; Write-Output \"user.email=$e\"; git rev-parse --abbrev-ref HEAD 2>$null; git log --oneline -1 2>$null)"
+    ]
+  }
+}

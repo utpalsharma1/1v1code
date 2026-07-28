@@ -1,0 +1,112 @@
+@import "tailwindcss";
+@import "@1v1/ui/tokens.css";
+
+/* @1v1/ui ships source, and pnpm symlinks it, so Tailwind's automatic content
+   detection won't walk into it. Point at it explicitly. */
+@source "../../../packages/ui/src";
+
+/* ============================================================================
+   Tailwind theme — the bridge from tokens.css to utility classes.
+
+   The `initial` resets wipe Tailwind's default palette and type scale so that
+   `bg-red-500` or `text-sm` simply do not exist. §13.2 says tokens only; this
+   makes that a build-time guarantee rather than a code-review habit.
+
+   Player-relative colors are deliberately absent here — see the note in
+   tokens.css about @theme substituting at :root.
+   ========================================================================= */
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-ink: var(--ink);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-line: var(--line);
+  --color-line-hot: var(--line-hot);
+
+  --color-fg: var(--text);
+  --color-fg-dim: var(--text-dim);
+  --color-fg-faint: var(--text-faint);
+
+  --color-p1: var(--p1);
+  --color-p2: var(--p2);
+
+  --color-clock: var(--clock);
+  --color-fail: var(--fail);
+  --color-info: var(--info);
+
+  --color-iron: var(--iron);
+  --color-bronze: var(--bronze);
+  --color-silver: var(--silver);
+  --color-gold: var(--gold);
+  --color-platinum: var(--platinum);
+  --color-diamond: var(--diamond);
+  --color-master: var(--master);
+  --color-grandmaster: var(--grandmaster);
+  --color-legend: var(--legend-flat);
+
+  --font-display: var(--ff-display);
+  --font-body: var(--ff-body);
+  --font-code: var(--ff-code);
+  --default-font-family: var(--ff-body);
+
+  --text-12: var(--t-12);
+  --text-13: var(--t-13);
+  --text-14: var(--t-14);
+  --text-16: var(--t-16);
+  --text-20: var(--t-20);
+  --text-26: var(--t-26);
+  --text-34: var(--t-34);
+  --text-48: var(--t-48);
+  --text-72: var(--t-72);
+
+  --radius-sm: var(--r-sm);
+  --radius-card: var(--r-card);
+}
+
+@layer base {
+  html {
+    background: var(--ink);
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--ff-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--player-glow);
+    color: var(--text);
+  }
+
+  /* Focus is never invisible (§13.9). Components that clip their corners opt
+     into .focus-ring instead, since clip-path crops an outline. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--ink);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border: 2px solid var(--ink);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--line-hot);
+  }
+}
