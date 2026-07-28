@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "preserve",
+    // The workspace packages ship source and are typechecked from here. They
+    // use explicit .ts specifiers so bare Node (the judge worker, the seed and
+    // verify scripts) can resolve them; a bundler is happy either way.
+    "allowImportingTsExtensions": true,
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./*"]

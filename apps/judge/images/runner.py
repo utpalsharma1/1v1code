@@ -20,9 +20,12 @@ definition. Everything else is read-only.
 import json
 import os
 import resource
+import selectors
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 # A submission that prints in a loop must not be able to fill the disk or the
 # pipe. Truncate hard and report OUTPUT_LIMIT.
@@ -52,16 +55,22 @@ def limits(memory_bytes):
 
 
 def run_once(argv, stdin_data, timeout_s, memory_bytes):
-    """Returns (verdict, stdout, elapsed_ms)."""
-    import time
+    """
+    Returns (verdict, stdout, elapsed_ms).
 
+    Reads the child's stdout incrementally with a hard byte cap rather than via
+    communicate(). communicate() buffers everything in memory first, so a
+    `while True: print(...)` loop grows the *runner's* heap until the container's
+    own cgroup limit kills the runner — the flood is contained, but the judge
+    dies with it and reports INTERNAL_ERROR instead of OUTPUT_LIMIT.
+    """
     started = time.monotonic()
     try:
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             preexec_fn=limits(memory_bytes),
             cwd="/tmp",
             env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
@@ -69,29 +78,84 @@ def run_once(argv, stdin_data, timeout_s, memory_bytes):
     except OSError:
         return "RUNTIME_ERROR", "", 0
 
-    truncated = False
-    try:
-        out, _ = proc.communicate(input=stdin_data.encode(), timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    # Feed stdin from a thread: a large input can fill the pipe buffer and block
+    # here forever if the child never reads it.
+    def feed():
         try:
-            os.killpg(proc.pid, 9)
+            proc.stdin.write(stdin_data.encode())
+            proc.stdin.close()
         except OSError:
             pass
-        proc.communicate()
-        return "TIME_LIMIT", "", int((time.monotonic() - started) * 1000)
+
+    threading.Thread(target=feed, daemon=True).start()
+
+    out = bytearray()
+    err = bytearray()
+    capped = False
+    timed_out = False
+
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ, "out")
+    selector.register(proc.stderr, selectors.EVENT_READ, "err")
+    open_streams = 2
+    deadline = started + timeout_s
+
+    while open_streams > 0:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        for key, _ in selector.select(timeout=min(remaining, 0.05)):
+            try:
+                chunk = os.read(key.fileobj.fileno(), 65536)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                selector.unregister(key.fileobj)
+                open_streams -= 1
+                continue
+            if key.data == "err":
+                if len(err) < 8192:
+                    err.extend(chunk[: 8192 - len(err)])
+                continue
+            room = MAX_OUTPUT_BYTES - len(out)
+            if room <= 0:
+                capped = True
+                break
+            out.extend(chunk[:room])
+            if len(chunk) > room:
+                capped = True
+                break
+        if capped:
+            break
+
+    selector.close()
+
+    if timed_out or capped:
+        try:
+            os.killpg(os.getpgid(proc.pid), 9)
+        except OSError:
+            pass
+        proc.kill()
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
     elapsed = int((time.monotonic() - started) * 1000)
 
-    if len(out) > MAX_OUTPUT_BYTES:
-        out = out[:MAX_OUTPUT_BYTES]
-        truncated = True
-
-    if truncated:
+    if capped:
         return "OUTPUT_LIMIT", out.decode("utf-8", "replace"), elapsed
+    if timed_out:
+        return "TIME_LIMIT", "", elapsed
     if proc.returncode != 0:
-        # 137 = SIGKILL, which under a cgroup memory limit means the OOM killer.
+        # -9/137 is SIGKILL, which under a cgroup memory limit is the OOM
+        # killer. RLIMIT_AS instead surfaces as a clean MemoryError, which
+        # would otherwise be misreported as a plain runtime error.
         if proc.returncode in (-9, 137):
+            return "MEMORY_LIMIT", "", elapsed
+        if b"MemoryError" in err:
             return "MEMORY_LIMIT", "", elapsed
         return "RUNTIME_ERROR", "", elapsed
 

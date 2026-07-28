@@ -6,8 +6,11 @@
 
 FROM debian:bookworm-slim
 
+# Full python3, not python3-minimal: the -minimal package omits large parts of
+# the stdlib including `json`, so the runner dies on its own import line before
+# it can compile anything.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends g++ python3-minimal \
+  && apt-get install -y --no-install-recommends g++ python3 \
   && rm -rf /var/lib/apt/lists/*
 
 # Non-root, no shell, no home. uid 1000 matches the tmpfs mode used by the

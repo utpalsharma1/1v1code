@@ -1,39 +1,82 @@
 # PROGRESS
 
-## Phase 2A — Persistence and execution ⚠️ built, partly unverified
+## Phase 2A — Persistence and execution ✅ verified end to end
 
-Everything is written and typechecks; the web build passes; the seed set is verified against
-reference solutions. **The judge has never been executed — Docker is not installed on this machine.**
-The containment suite exists and runs, but every one of its ten tests currently reports
-`# docker unavailable`, and it prints `!! DOCKER UNREACHABLE — containment was NOT verified.`
-before doing so. Treat the sandbox as unproven until that suite runs green.
+## Environment
+
+The repo lives at `~/1v1.code` inside **WSL2 Ubuntu 24.04**. Ignore any Windows paths in older
+notes — the project was authored on Windows and moved, and `.gitattributes` now pins LF so the
+platform a file was last edited on never shows up as a diff.
+
+| | |
+| --- | --- |
+| OS | WSL2 Ubuntu 24.04, kernel 6.18 |
+| Docker | **Engine 29.6.2, native** — not Docker Desktop |
+| cgroups | v2, systemd driver; seccomp builtin profile; not rootless |
+| Node | 24.18.0 |
+| pnpm | 11.17.0 |
+| Postgres / Redis | 17-alpine / 7-alpine, via `docker-compose.yml` |
+
+Running Docker Engine natively rather than through Docker Desktop means containers are ordinary
+Linux containers on the WSL2 kernel, with no VM boundary in between and no Desktop-specific
+behaviour to account for.
 
 ```
 docker compose up -d          # Postgres 17 + Redis 7
+pnpm install
 pnpm db:push && pnpm db:seed  # schema + 20 problems
 pnpm judge:images             # build the two judge images
 pnpm judge                    # the worker
 pnpm dev                      # http://localhost:3000/dev/judge
-pnpm judge:test               # THE CONTAINMENT SUITE — must be green
-pnpm db:verify                # 101 seed test cases vs reference solutions
+pnpm judge:test               # the containment suite
+pnpm db:verify                # 101 seed cases vs reference solutions
 ```
 
-### What is verified
+### Verified
 
-- **All 5 packages typecheck**, web builds, Prisma schema validates.
-- **101 seeded test cases** across 20 problems each agree with an independent reference solution
-  *and* pass their own validator. This caught **five real bugs** in hand-written expected output —
-  including `modular-power` shipping test data that violated its own stated constraints, which is
-  precisely the defect that makes a hack phase police a contract the problem itself breaks. A wrong
-  expected value means a correct submission is judged `WRONG_ANSWER`, which is the worst bug a judge
-  can have, and none of them were visible by reading.
+- **Containment: 10/10 pass.** Network unreachable, DNS dead, fork bomb capped, memory capped,
+  infinite loop killed, stdout capped, rootfs read-only, tmpfs writable but size-capped, uid 1000
+  with zero capabilities, no Docker socket. Observed directly, not just asserted: the fork bomb
+  stops at **exactly 63 forks** (`--pids-limit 64` minus the python process), the memory bomb exits
+  **137** (SIGKILL from the cgroup OOM killer), and `CapEff` reads `0000000000000000`.
+- **The judge runs.** Both images build; C++17 and Python 3 both compile and execute; results
+  stream one test at a time through Redis → SSE → browser.
+- **All eight verdict classes produced from real submissions:** `ACCEPTED`, `WRONG_ANSWER`,
+  `COMPILE_ERROR` (both languages), `TIME_LIMIT`, `MEMORY_LIMIT`, `OUTPUT_LIMIT`, `RUNTIME_ERROR`.
+- Postgres round-trips: schema pushed, 20 problems seeded, `/dev/judge` renders them.
+- 5 packages typecheck, web builds, 101 seed cases agree with reference solutions.
 
-### What is NOT verified
+### Four bugs that only execution could find
 
-- Container containment. Ten tests, zero executed.
-- Any database round-trip: no migration has run, nothing has been seeded, auth has never issued a
-  session, `/dev/judge` has never rendered a real problem list.
-- The runner has never compiled anything.
+The sandbox had never run, and it was broken in four separate ways. Every one of these was
+invisible to typechecking, code review, and the flag list itself.
+
+1. **`--ulimit nproc=64:64` made the sandbox unable to start anything at all.** `RLIMIT_NPROC` is
+   per-UID and **system-wide — it is not namespaced by the container**. With `--user 1000:1000` on
+   a host whose login user is also uid 1000, the host's own processes counted against the
+   container's allowance and `exec` failed with `EAGAIN` before any code ran. Removed;
+   `--pids-limit` is the cgroup-scoped tool that actually does this job. A "belt and braces"
+   addition that silently broke the brace.
+2. **`packages/proto/src/index.ts` used an extensionless import**, which a bundler resolves and
+   bare Node ESM does not — so the judge worker died at startup. All shared packages now use
+   explicit `.ts` specifiers, with `allowImportingTsExtensions` set where they're typechecked.
+3. **The C++ image installed `python3-minimal`**, which omits large parts of the stdlib including
+   `json`. The runner died on its own import line, so every C++ submission returned
+   `INTERNAL_ERROR`.
+4. **A print flood killed the runner instead of being reported.** `subprocess.communicate()`
+   buffers all output in memory, so `while True: print(...)` grew the runner's heap until the
+   container's own cgroup limit killed it — contained, but the judge died with it and reported
+   `INTERNAL_ERROR` rather than `OUTPUT_LIMIT`. The runner now reads stdout incrementally through a
+   selector with a hard byte cap and kills the child at the cap. The same rewrite fixed
+   `MEMORY_LIMIT`, which had been misreported as `RUNTIME_ERROR` because `RLIMIT_AS` surfaces as a
+   clean `MemoryError` rather than a SIGKILL.
+
+### Still not verified
+
+- **Auth has never issued a session.** The code is written and typechecks, but no user has
+  registered, logged in, or had a cookie round-trip. There is no UI for it yet.
+- Submissions are not persisted — `/dev/judge` streams verdicts but writes no `Submission` row.
+  That wiring belongs with the match flow in 2B.
 
 ### Judge design notes
 

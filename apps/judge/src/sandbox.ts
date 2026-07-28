@@ -69,9 +69,15 @@ export function dockerArgs(opts: SandboxOptions): string[] {
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges",
     "--ulimit", "nofile=64:64",
-    "--ulimit", "nproc=64:64",
     "--ulimit", "fsize=8388608:8388608",
     "--ulimit", "core=0:0",
+
+    // NOT `--ulimit nproc`. RLIMIT_NPROC is per-UID and system-wide — it is not
+    // namespaced by the container. With `--user 1000:1000` on a host whose own
+    // login user is also uid 1000, the host's processes count against the
+    // container's allowance and `exec` fails outright with EAGAIN before any
+    // code runs. `--pids-limit` above is the cgroup-scoped equivalent and is
+    // the correct tool; nproc here was redundant and actively broke the box.
 
     // The single writable location, capped and owned by the runner user.
     "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=64m,mode=1777",

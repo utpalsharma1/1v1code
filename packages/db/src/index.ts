@@ -7,14 +7,17 @@ export {
   type SeedProblem,
   type SeedTest,
   type SeedTopic,
-} from "./problems";
+  // Explicit extensions throughout: these modules are consumed both by Next's
+  // bundler and by bare Node (seed + verify scripts), and only one of those two
+  // resolves an extensionless specifier.
+} from "./problems.ts";
 export {
   REGISTRY,
   VALIDATOR_KEYS,
   getValidator,
   type ValidationResult,
   type Validator,
-} from "./validators";
+} from "./validators.ts";
 
 // Next's dev server hot-reloads modules, which would otherwise open a new pool
 // on every edit until Postgres refuses connections.
