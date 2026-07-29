@@ -2,87 +2,98 @@
 
 ## SESSION STOP — read this first
 
-**`/play` is matchable. The match screen is reachable by hand.** Working tree clean.
+**The reload bug is fixed and tested. 2C is designed and split; no relay code written yet.**
+Working tree clean.
 
-### 1. The pools were always shared. A reconnect silently emptied one side.
+### The reload bug, and what it actually was
 
-`/dev/sparring` and `/play` are the same thing to the gateway — both are just authenticated
-sockets going through the same `joinOrPair` Lua script. Proof it already worked: match
-`6f711268` paired `pwm_hfmzi` (a real `/play` session) against a sparring client.
+Two faults, one visible symptom.
 
-**The actual bug: a queued player whose socket blipped was removed from the Redis pool and never
-put back.** On disconnect the gateway called `leaveQueue`, which removed them from Redis, emitted
-`queue.left` **to a socket that no longer existed**, and deleted the session. On reconnect a fresh
-session was built with `queuedAt: null` and nothing re-queued. So the browser kept rendering the
-queue card — it had never been told otherwise — while the server had forgotten the player entirely.
+1. **`match.resync` never carried the problem back.** The match screen only renders when it has one,
+   so after a reload the page fell through to the lobby layout — which draws nothing at all for a
+   live match and offers Play only in `idle`. The match then ended into a screen that could not
+   render its own ending.
+2. **Nothing returned the client to idle.** The ending screen's own buttons were the only route out,
+   so any gap that stopped it rendering stranded the client. That is now a rule rather than a repair:
+   a terminal match returns to idle whether or not the ending can be shown.
 
-That is exactly what you saw: `/play` sitting in a queue it was no longer in, and sparring clients
-correctly reporting `alone in the pool (1)` because the pool really did contain only them.
+Resync also mapped `JUDGING` to the lobby; it maps to the match screen now, because §6.7b's hold is
+a beat of the match and not a reason to eject the player.
 
-**Any blip did it**, which is why it hit you and not the automated tests: a Next dev recompile, a
-laptop sleeping, the 20s ping timeout. The tests connect once and never reload.
+**A third bug fell out of writing the test: a ghost in the matchmaking pool.** `attempt()` is async
+on a 2s interval, so a socket dying mid-call let the disconnect handler `ZREM` the player while the
+in-flight call `ZADD`ed them straight back — a sessionless entry that can never be matched but makes
+the pool look non-empty forever, which is what stopped `alone` ever being true. `attempt()` now
+re-checks after its await and evicts itself, and a pair resolving to a missing session evicts that
+partner instead of leaving them to be handed out again.
 
-**Fix:** queue *intent* now survives the socket. Disconnecting still removes you from the pool — a
-socket that is gone must not be matched — but a reconnect with no match in progress puts you back
-and says so in the log. Explicit `queue.leave` and pairing both clear the intent.
+`e2e/match.spec.ts` now reloads `/play` mid-match, lets the match end, and asserts Play is usable
+without a hard reload. **5/5 match tests, 12/12 browser tests.**
 
-**Positive control performed.** `pnpm probe:requeue` drives queue → drop socket → reconnect → second
-player queues. With the fix disabled it fails 3/3 with *"after reconnecting, the player received no
-queue.status at all — still forgotten"*. With it restored, it passes. There is also a browser test
-that reloads `/play` mid-queue — a harder blip than a recompile — and then checks a sparring client
-can still find them.
+### 2C is designed. It splits. Here is why.
 
-### 2. Ratings were written. The log just did not say so.
+The full design is now in **CLAUDE.md §10, *The keystroke relay*** — visibility rule, bandwidth
+figures, ordering and recovery contract, paste-detection data shape. Three answers up front:
 
-Checked directly rather than inferred — `RatingEvent` rows for your match `29e18aad`:
+**1. What the opponent sees during LIVE — I agree with you, and the rule needs to be server-side.**
+Opponents get the pulse line and status ticker only; full side-by-side is for spectators, and for
+both players after the match ends. §6.4 says the pulse line exists to show thinking pauses versus
+typing bursts *without ever leaking a character of code*, and §6.5's compile pulse, clutch state and
+near-miss are all derived signals — a count, a rate, a threshold.
 
-```
-sparring_zgn0ms   1200 -> 1362
-sparring_dpahhv   1200 -> 1038
-```
+The part worth adding: **hiding it client-side is not a control.** If the gateway writes a delta to
+an opposing player's socket, a modified client reads it; the advantage is total, silent, and
+available to anyone who opens devtools. So the gateway must never send it.
 
-Glicko fired correctly and symmetrically. The sparring page simply never rendered `match.end`'s
-`ratings` array. It does now, and when the array is empty it says **"no rating change (canceled,
-void, or unrated)"** rather than showing nothing — because you were right that silence and a
-genuine no-change are indistinguishable otherwise.
+And a hole your framing exposes: **a player in a live match must not be able to spectate that
+match**, or the spectator path becomes a one-click bypass. §7's 45-second ranked delay does not
+close it — 45-second-old source is still an enormous edge in an eight-minute match, and unranked
+delay is zero. The gateway refuses by identity.
 
-### 3. Exact steps to reach the match screen
+**2. Bandwidth and ordering.** At ~4–5 chars/sec while actively typing and roughly 40% of an
+eight-minute match spent typing, that is ~1000–1200 change events, ~1 per non-empty 50ms batch:
 
-Two windows. **Order matters only in that both must be queued at once.**
+| stream | batches / match | bytes / player |
+| --- | --- | --- |
+| player deltas (50ms) | ~1000–1200 | **~130 KB** |
+| 30s snapshots | 16 | ~16 KB |
+| spectator (200ms) | ~300 | ~80 KB |
+| spectator ranked (500ms) | ~120 | ~50 KB |
 
-1. **Window A — `http://localhost:3000/play`.** Sign in (or register). Wait for **connected** in the
-   top right. Click **PLAY**. It will say *Queue is empty* after ~20s; that is correct and it is
-   still queued.
-2. **Window B — `http://localhost:3000/dev/sparring`.** Wait for *connected · sparring_…*. Click
-   **Join queue**.
-3. They pair within ~2s. **Window A** shows the queue pop; click **Accept** inside the cinematic.
-   **Window B**: click **Accept**.
-4. Countdown `3 · 2 · 1 · GO`, then the match screen: HUD, problem panel, Monaco.
+**~300 KB per match** for both editor streams; ~1.5 MB under frantic editing. Bytes are not the
+constraint — message *rate* is, which is why §7 batches spectators rather than compressing them.
 
-**Then, for the beats you listed:**
+Ordering: Socket.IO is ordered and reliable per connection, so deltas cannot arrive out of order on
+a live socket. The real failure is **a gap across a reconnect**. Every batch carries a per-side
+monotonic `seq`; a receiver that sees anything other than `lastSeq + 1` **must not apply it**,
+because applying a delta to the wrong base yields plausible code that was never written — strictly
+worse than a visible gap. Recovery is `editor.resync` → full snapshot → replace the buffer. **Never
+interpolate.**
 
-| what you want to see | do this |
-| --- | --- |
-| test cells resolving one at a time | A: write anything and **Submit**. Watch A's own bar fill cell by cell. |
-| the opponent's bar filling | B: **Correct (reference)**. Watch B's side of A's HUD. |
-| **the §6.7b hold** | B: **Time limit** *first*. Then A: submit a correct solution. B's receipt is earlier, its verdict lands last — the hold renders on A. |
-| **receipt order deciding** | B: **Correct (reference)**, then A submits correct within ~1s. Earlier receipt wins even if the other verdict returns first. |
-| victory + rating delta | A submits correct and wins. The delta counts up on the victory screen; B's log prints both sides. |
-| defeat | B: **Correct (reference)** and let it land first. |
-| clutch edge | B: **Correct (reference)** on a problem with 5+ tests — the edge appears once B passes 80%. |
-| disconnect + 45s grace | B: **Drop socket**. Watch A's HUD. B: **Reconnect** before 45s to see resync. |
+**3. Paste detection — data shape now, response never (yet).** Each logged batch carries per-change
+inserted and replaced lengths, the batch's total inserted characters, and an `origin` of
+`type`/`paste`/`undo`/`other` where Monaco tells us. A 400-character single-change insertion at one
+`offsetMs` is then unmistakable to anything reading the log. No enforcement, no verdict, no UI.
 
-The reference-solution button pulls the same reviewed source `pnpm db:solutions` verifies, so a
-sparring win is a real win rather than a fixture.
+**The split**, recorded in §12:
 
-### Verified this session, by running it
+- **2C-1 — the relay.** Deltas, batching, per-side `seq`, 30s snapshots, gap recovery, delta records
+  in the JSONL log, the gateway-enforced visibility rule, the paste data shape, and the §6.4 pulse
+  line driven by real keystrokes at last. Plus the dev route showing both editors side by side —
+  which is what makes any of it verifiable by eye, the same argument as `/dev/hud` and
+  `/dev/sparring`.
+- **2C-2 — the spectator stream.** §7's tiered fanout (200ms, 500ms ranked), room broadcast rather
+  than per-socket sends, the late-joiner snapshot path, and the self-spectate ban across a real
+  audience.
 
-`probe:requeue` (with a failing positive control) · `probe:match` two-player: receipt order decides,
-Glicko ±162 · **e2e 11/11 in a real browser**, including `/play` surviving a reload and staying
-matchable · core 51/51 · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · typecheck 7/7.
+**The seam is real rather than convenient.** Everything in 2C-2 is a *load* optimisation whose
+behaviour is unobservable at one viewer, and §7 ties it to the spectator feature proper. Building it
+against a dev route with a single consumer would be tuning a ceiling nobody is near, and the
+batching interacts with the delay badge and late-joiner path Phase 3 owns. Splitting keeps 2C-1's
+deliverable honest — a real pulse line and a complete log — instead of half a fanout tier nothing
+exercises.
 
-**Still unverified: how any of it looks.** Every §6 cinematic from countdown to victory now has a
-reachable path, and no human has watched one.
+**Nothing in 2C is built.** The design is committed; the code is next session.
 
 ### Bringing the stack back up, in order
 
@@ -103,10 +114,21 @@ pnpm test:smoke                          # RUN FIRST — asset integrity, ~10s
 ```
 
 **The judge worker is easy to forget and its absence looks like a product bug.** With it down every
-submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — so
-a run of voids means check `/tmp/worker.log` first.
+submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — a
+run of voids means check `/tmp/worker.log` first.
 
-**There is no bot.** A single window will sit in an empty queue and say so. Use `/dev/sparring`.
+**To play: two windows.** `/play` signed in, `/dev/sparring` for the opponent. There is no bot, so a
+single window will sit in an empty queue and say so. Full step-by-step, including how to stage the
+§6.7b hold and a receipt-order inversion, is in the commit for `8faa20a` and below.
+
+| to see | do |
+| --- | --- |
+| cells resolving one at a time | A: write anything, **Submit** |
+| the §6.7b hold | B: **Time limit** first, then A submits correct |
+| receipt order deciding | B: **Correct (reference)**, then A within ~1s |
+| victory / defeat + delta | A or B: **Correct (reference)** |
+| clutch edge | B: **Correct (reference)** on a 5+ test problem |
+| drop + 45s grace | B: **Drop socket**, then **Reconnect** |
 
 Suites: `pnpm test:smoke` · `pnpm test:e2e` · `pnpm probe:match` · `pnpm probe:requeue` ·
 `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` · `pnpm db:solutions` ·

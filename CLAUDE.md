@@ -637,6 +637,41 @@ server → client:  queue.status, match.found, match.start, opponent.status,
 ```
 
 - Editor deltas: batched at ~50ms, sequence-numbered, with periodic full snapshots every 30s for late-joining spectators.
+
+### The keystroke relay — decided before it was built (2C)
+
+**Who may receive editor content, and when. This is a cheating rule, not a UI preference.**
+
+| audience | during `LIVE` | after the match ends |
+| --- | --- | --- |
+| the opponent | **pulse line and status ticker only** | full source, both sides |
+| spectators | both editors, live (delayed per §7) | full replay |
+| the player themselves | their own editor | their own editor |
+
+**The opponent never receives editor content while the match is live, and this is enforced at the gateway, not in the UI.** §6.4 is explicit that the pulse line exists to show "thinking pauses versus typing bursts without ever leaking a character of code", and §6.5's compile pulse, clutch state and near-miss are all *derived signals* — a count, a rate, a threshold — never content. If the gateway ever writes a delta to an opposing player's socket, a modified client simply reads it: the advantage is total, silent, and available to anyone who opens devtools. Hiding it client-side is not a control.
+
+Spectators get the full stream because they are not competing. That asymmetry *is* the product pitch, and it costs nothing to honour.
+
+**A player in a live match may not spectate that match.** Otherwise the spectator path becomes a trivial bypass of the rule above. §7's mandatory 45-second ranked delay does not fix this — 45-second-old source is still an enormous advantage in an eight-minute match, and on unranked matches the delay is zero. The gateway refuses by identity, and the refusal is not a UI affordance that can be skipped.
+
+**Bandwidth is not a constraint here, and the numbers should be stated so nobody optimises against a guess.** A competitive programmer sustains roughly 4–5 characters per second while actively typing, and §6.4's whole premise is that typing is bursty — call it 40% of an eight-minute match, so ~800–1200 change events. At 50ms batching that is ~1 change per non-empty batch:
+
+| stream | batches / match | bytes / player / match |
+| --- | --- | --- |
+| player deltas (50ms) | ~1000–1200 | **~130 KB** |
+| 30s snapshots | 16 | ~16 KB |
+| spectator (200ms) | ~300 | ~80 KB |
+| spectator, ranked (500ms) | ~120 | ~50 KB |
+
+Roughly **300 KB per match** for both editor streams, and about 1.5 MB even under frantic editing. Message *rate* is the thing that binds, not bytes, which is why §7 batches spectators rather than compressing them.
+
+**Ordering, and recovery that never guesses.** Socket.IO is ordered and reliable *per connection*, so deltas cannot arrive out of order on a live socket. The real failure is a **gap across a reconnect**: anything sent while the socket was down is gone. So every batch carries a per-side monotonic `seq` starting at 1, and the receiver tracks the last one it applied.
+
+- If an arriving batch is not `lastSeq + 1`, the receiver **must not apply it**. Applying a delta to the wrong base produces silent corruption, which is strictly worse than a visible gap — the viewer sees plausible code that was never written.
+- Recovery is **a snapshot request, never interpolation**: the client emits `editor.resync`, the server replies with the full text as of a known `seq`, and the client replaces its buffer wholesale.
+- Snapshots every 30s bound how much a late joiner or a returning client has to be sent, and they are what make replay tolerable — §10 already requires replay to be a pure function of the log.
+
+**Paste detection: capture the data now, build the response later.** §11 wants this eventually and retrofitting a log format is expensive, so each logged delta batch carries the shape that makes a paste visible after the fact — per-change inserted length and replaced length, the batch's total inserted characters, and an `origin` of `type` / `paste` / `undo` / `other` where the editor tells us. A 400-character single-change insertion at one `offsetMs` is then unmistakable to anything reading the log. **No enforcement, no verdict, no UI**: the point is that the evidence exists when we decide what to do about it.
 - Every match writes an append-only JSONL event log to disk/S3 — this file *is* the replay. Replay playback must be a pure function of that log. Do not build a separate recording system.
 
 ### Event log durability — write-behind, and why
@@ -807,7 +842,14 @@ Four things to design deliberately rather than improvise, because each one is a 
 
 On **Glicko-2**: it is defined over rating *periods*, not per-game updates. Applying it per match is acceptable, but **RD must grow with time elapsed since a player's last match** or inactive players keep artificially confident ratings and the ladder stops self-correcting.
 
-**Phase 2C — Keystroke relay.** Monaco delta streaming, ~50ms batching, sequence numbers, and periodic full snapshots so late-joining spectators can catch up.
+**Phase 2C — Keystroke relay.** Monaco delta streaming, ~50ms batching, sequence numbers, and periodic full snapshots so late-joining spectators can catch up. The visibility rule, bandwidth figures, gap-recovery contract and paste-detection data shape are settled in §10 under *The keystroke relay*.
+
+**It splits, and the seam is load versus behaviour.**
+
+- **2C-1 — the relay.** Deltas, batching, per-side `seq`, 30s snapshots, gap recovery by snapshot request, delta records in the JSONL log, the gateway-enforced visibility rule, the paste-detection data shape, and the §6.4 pulse line finally driven by real keystrokes instead of the simulator. Plus a dev route showing both editors side by side, which is what makes any of it verifiable by eye. Deliverable: two windows in a live match, each reading the other's real pulse, with a delta log on disk that replay could consume.
+- **2C-2 — the spectator stream.** §7's tiered fanout (200ms, 500ms on ranked), room broadcast rather than per-socket sends, the late-joiner snapshot path, and the self-spectate ban enforced across a real audience.
+
+The seam is real rather than convenient: everything in 2C-2 is a *load* optimisation whose behaviour is unobservable at one viewer, and §7 ties it to the spectator feature proper. Shipping it against a dev route with a single consumer would be tuning a ceiling nobody is near, and the batching interacts with the delay badge and the late-joiner path that Phase 3 owns. Splitting keeps 2C-1's deliverable honest — a real pulse line and a complete log — instead of half a fanout tier nothing exercises.
 
 **Phase 2D — Challenge links and clip export.** *Moved up from Phase 4, because the launch plan changed.* Challenge link generation and redemption, guest play, one-click rematch, and clip export — all specced in §7.
 
