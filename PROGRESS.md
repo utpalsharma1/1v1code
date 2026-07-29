@@ -1,5 +1,104 @@
 # PROGRESS
 
+## SESSION STOP — read this first
+
+**HEAD: `cdb0373`.** Working tree clean. Everything below is committed.
+
+**2B-4 is designed and schema'd but NOT STARTED. It is blocked, and the blocker is not in 2B-4.**
+
+### The blocker: cookie paste flow does not work in the browser
+
+Symptom, observed by the user: the browser holds the pasted `1v1_session` cookie, but the server
+rejects it. `/play` renders, the socket connect fails, and every browser verification is blocked
+behind that — which in turn blocks 2B-4, because 2B-4's deliverable starts with "register in a
+fresh browser".
+
+**What is NOT the cause. Server-side auth is verified working** (checked with a real socket client
+against the running gateway, both directions):
+
+```
+VALID cookie   -> CONNECTED         (server auth works)
+STALE cookie   -> REJECTED: unauthenticated: no valid session cookie
+```
+
+So `identify()`, the session lookup, the expiry check and the CORS credentials config are all fine.
+The fault is in cookie **delivery or freshness**, not verification.
+
+**Ranked hypotheses for the next session:**
+
+1. **`pnpm db:users` invalidates every previously pasted cookie — most likely cause.**
+   `prisma/seed-users.ts` does `session.deleteMany({ where: { userId } })` before creating a new
+   one, so *every run rotates all three tokens*. This session ran `db:users` again at the very end,
+   which would have killed any cookie pasted earlier. **Fix: make the seed idempotent** — reuse an
+   existing unexpired session instead of deleting, or print the existing token. This is a footgun
+   the seed script created and it should not survive.
+2. **Cross-origin cookie delivery from `:3000` to `:4000`.** Same-site but cross-origin. The client
+   sets `withCredentials: true` and the gateway sets `credentials: true` with an explicit origin,
+   which *should* work — but `transports: ["websocket", "polling"]` tries WebSocket first, and
+   browser cookie attachment on cross-origin WebSocket upgrades is worth verifying directly rather
+   than assuming.
+3. Cookie scope: `document.cookie` with `path=/` is host-only for `localhost` and ports are not part
+   of cookie scope, so this *should* be fine — check it in devtools before spending time here.
+
+**Diagnostic that will settle it in one step:** open devtools → Network → the `socket.io` request to
+`:4000` → check whether a `Cookie:` header is present. Present and rejected means a stale token
+(hypothesis 1). Absent means a delivery problem (hypothesis 2).
+
+**Note:** a Socket.IO polling handshake returns HTTP 200 and a `sid` *without any cookie* — Engine.IO
+transport negotiation runs before the auth middleware. `curl`ing the handshake is not an auth test,
+and an earlier check in this session was misread as one.
+
+### Verified — do not re-litigate
+
+- 26 judge containment tests, including the `INTERNAL_ERROR` invariant class, which caught a live
+  match-voider (lone surrogate in source → `UnicodeEncodeError` → internal error → VOID match).
+- 48 core tests: Glicko-2 against Glickman's published example, match state machine incl. the §6.9
+  receipt-order fairness property, event log incl. ordering surviving a backward clock step, bot
+  model, shareable codes.
+- 10 matchmaking tests, incl. 50 concurrent joins → 25 disjoint matches, nobody lost.
+- 101 seed test cases agree with reference solutions; 20/20 bot solutions ACCEPTED by the real judge.
+- Gateway end to end headlessly: two clients cookie-authenticate, queue, pair after the band widens,
+  accept idempotently, count down, reach LIVE, with a gapless replay log on disk.
+- Reconnection: drop → opponent notified with 45s grace → return → full resync → no forfeit.
+- Auth at library level: 12 checks incl. gateway resolving a real cookie and deleting expired rows.
+
+### NOT verified — assume nothing
+
+- **Anything in a browser.** No browser exists in the agent environment. `/play`'s cinematics,
+  the `/register` and `/login` forms, the cookie round-trip, and every visual claim about Phase 0
+  and Phase 1 are unconfirmed by eye.
+- Submission persistence (no `Submission` row is written yet), the match screen, the live bot,
+  Glicko applied to a real outcome, the §6.7b hold screen. All 2B-4.
+
+### Bringing the stack back up, in order
+
+```bash
+cd ~/1v1.code
+docker compose up -d                     # Postgres 17 + Redis 7, wait for healthy
+set -a && . ./.env && set +a             # DATABASE_URL, REDIS_URL, ports
+
+pnpm install                             # only if deps changed
+pnpm db:push && pnpm db:seed             # schema + 20 problems (idempotent)
+pnpm judge:images                        # only if runner.py or a Dockerfile changed
+
+nohup node --experimental-strip-types apps/judge/src/index.ts   > /tmp/worker.log  2>&1 &
+nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.log 2>&1 &
+nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 &
+
+pnpm db:users                            # ROTATES all session tokens — see blocker
+```
+
+Routes: `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`. Gateway on `:4000`.
+
+Verification suite: `pnpm judge:test` (needs Docker + images), `pnpm db:verify`,
+`pnpm db:solutions` (needs the worker running),
+`node --experimental-strip-types --test packages/core/src/*.test.ts`,
+`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts` (needs Redis).
+
+**Shell note:** `pkill -f` has matched its own shell twice in this project. Use a bracketed pattern —
+`pkill -f "gateway/src/inde[x].ts"` — or kill by PID from `ps -eo pid,cmd`.
+
+
 ## Corrections round — an invariant that caught a live exploit
 
 **The INTERNAL_ERROR invariant is now a test class, and it found a real match-voider on its first
