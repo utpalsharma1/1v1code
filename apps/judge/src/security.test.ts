@@ -361,3 +361,177 @@ print("ESCAPED" if os.path.exists("/var/run/docker.sock") else "CONTAINED no soc
     assert.match(result.stdout, /CONTAINED/, "docker socket mounted into sandbox");
   });
 });
+
+/* ── The INTERNAL_ERROR invariant ─────────────────────────────────────────
+
+   NO INPUT, HOWEVER MALFORMED, MAY CAUSE THE JUDGE TO REPORT INTERNAL_ERROR.
+
+   This is a security invariant, not a robustness one. §6.9 makes a lost verdict
+   a no-contest — VOID, no rating change — so a submission that can provoke
+   INTERNAL_ERROR is a submission that voids any match its author is about to
+   lose. The print-flood bug did exactly that before it was fixed.
+
+   Every judge failure must resolve to a verdict attributable to the submission:
+   COMPILE_ERROR, COMPILE_TIMEOUT, COMPILE_MEMORY, RUNTIME_ERROR, TIME_LIMIT,
+   MEMORY_LIMIT, OUTPUT_LIMIT or WRONG_ANSWER. Never INTERNAL_ERROR, and never
+   silence — silence becomes INTERNAL_ERROR one layer up.
+   ───────────────────────────────────────────────────────────────────────── */
+
+interface JobOutcome {
+  verdicts: string[];
+  sawInternalError: boolean;
+  producedSomething: boolean;
+  raw: string;
+}
+
+/** Runs a full job through the real runner protocol, as the worker would. */
+async function runJob(
+  language: "PYTHON3" | "CPP17",
+  source: string,
+  tests: { ordinal: number; input: string; expected: string }[] = [
+    { ordinal: 0, input: "1 2\n", expected: "3" },
+  ],
+): Promise<JobOutcome> {
+  const image = language === "CPP17" ? CPP : PY;
+  const result = await runSandboxed(
+    { image, memoryLimitMb: MEM, wallClockMs: 60_000 },
+    JSON.stringify({ language, source, tests, timeLimitMs: 5000, memoryLimitMb: MEM }),
+  );
+
+  const verdicts: string[] = [];
+  let sawInternalError = false;
+  for (const line of result.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed) as Record<string, unknown>;
+      if (event["kind"] === "error") sawInternalError = true;
+      const verdict = event["verdict"];
+      if (typeof verdict === "string") verdicts.push(verdict);
+    } catch {
+      // Unparseable output from the runner would become INTERNAL_ERROR in the
+      // worker, so it counts as a failure of this invariant too.
+      sawInternalError = true;
+    }
+  }
+  return {
+    verdicts,
+    sawInternalError,
+    producedSomething: result.stdout.trim().length > 0,
+    raw: result.stdout.slice(0, 300),
+  };
+}
+
+const REAL_VERDICTS = new Set([
+  "ACCEPTED",
+  "WRONG_ANSWER",
+  "TIME_LIMIT",
+  "MEMORY_LIMIT",
+  "RUNTIME_ERROR",
+  "COMPILE_ERROR",
+  "COMPILE_TIMEOUT",
+  "COMPILE_MEMORY",
+  "OUTPUT_LIMIT",
+]);
+
+function assertAttributable(name: string, outcome: JobOutcome): void {
+  assert.ok(
+    !outcome.sawInternalError,
+    `${name}: judge reported an internal error — this VOIDS matches (${outcome.raw})`,
+  );
+  assert.ok(
+    outcome.producedSomething,
+    `${name}: judge produced nothing, which becomes INTERNAL_ERROR upstream`,
+  );
+  assert.ok(
+    outcome.verdicts.some((v) => REAL_VERDICTS.has(v)),
+    `${name}: no verdict attributable to the submission — got ${JSON.stringify(outcome.verdicts)}`,
+  );
+}
+
+describe("INTERNAL_ERROR is unreachable from user code", () => {
+  test("binary garbage as source", async () => {
+    const garbage = Array.from({ length: 400 }, (_, i) => String.fromCharCode((i * 7) % 65535)).join("");
+    assertAttributable("binary garbage", await runJob("PYTHON3", garbage));
+  });
+
+  test("source containing null bytes", async () => {
+    assertAttributable("null bytes", await runJob("PYTHON3", "print(1)\u0000\u0000\nprint(2)\n"));
+  });
+
+  test("source containing lone surrogates (invalid UTF-16 pairs)", async () => {
+    assertAttributable("lone surrogate", await runJob("PYTHON3", "print('\ud800')\n"));
+  });
+
+  test("enormous single-line source", async () => {
+    // One line, no newlines, near the protocol's 256 KB source cap.
+    const huge = `x = ${"1+".repeat(60_000)}1\nprint(0)\n`;
+    assertAttributable("enormous single line", await runJob("PYTHON3", huge));
+  });
+
+  test("enormous single-line C++ source", async () => {
+    const huge = `int main(){long x=${"1+".repeat(40_000)}1;return 0;}\n`;
+    assertAttributable("enormous single line c++", await runJob("CPP17", huge));
+  });
+
+  test("gigantic but valid output", async () => {
+    // Valid output, just far past the cap. Must be OUTPUT_LIMIT, not a crash.
+    const outcome = await runJob("PYTHON3", 'import sys\nsys.stdout.write("A" * 40_000_000)\n');
+    assertAttributable("gigantic valid output", outcome);
+    assert.ok(
+      outcome.verdicts.includes("OUTPUT_LIMIT") || outcome.verdicts.includes("WRONG_ANSWER"),
+      `expected OUTPUT_LIMIT, got ${JSON.stringify(outcome.verdicts)}`,
+    );
+  });
+
+  test("gigantic compiler diagnostics", async () => {
+    // Thousands of distinct errors: the compiler's own stderr becomes the
+    // payload. Truncation happens in compile_step; without it this is a
+    // memory blow-up inside the runner.
+    const many = Array.from({ length: 4000 }, (_, i) => `undefined_symbol_${i} zzz${i};`).join("\n");
+    const outcome = await runJob("CPP17", `${many}\nint main(){return 0;}\n`);
+    assertAttributable("gigantic diagnostics", outcome);
+    assert.ok(
+      outcome.verdicts.some((v) => v.startsWith("COMPILE_")),
+      `expected a COMPILE_* verdict, got ${JSON.stringify(outcome.verdicts)}`,
+    );
+  });
+
+  test("the print flood that once produced INTERNAL_ERROR", async () => {
+    // Regression: this exact input killed the runner by buffering the flood in
+    // memory, and the worker reported INTERNAL_ERROR. That was an exploitable
+    // match-voider, not just a robustness bug.
+    const outcome = await runJob(
+      "PYTHON3",
+      'import sys\nline = "A" * 4096 + "\\n"\nwhile True:\n    sys.stdout.write(line)\n',
+    );
+    assertAttributable("print flood", outcome);
+    assert.ok(
+      outcome.verdicts.includes("OUTPUT_LIMIT"),
+      `expected OUTPUT_LIMIT, got ${JSON.stringify(outcome.verdicts)}`,
+    );
+  });
+
+  test("a program that closes its own stdout", async () => {
+    // If the runner assumes stdout stays open, this is an unhandled exception.
+    assertAttributable(
+      "closed stdout",
+      await runJob("PYTHON3", "import os, sys\nos.close(1)\nsys.exit(0)\n"),
+    );
+  });
+
+  test("a program that kills its own process group", async () => {
+    assertAttributable(
+      "self-signal",
+      await runJob("PYTHON3", "import os, signal\nos.killpg(os.getpgid(0), signal.SIGKILL)\n"),
+    );
+  });
+
+  test("empty source", async () => {
+    assertAttributable("empty source", await runJob("PYTHON3", ""));
+  });
+
+  test("source that is only a null byte", async () => {
+    assertAttributable("null-only source", await runJob("PYTHON3", "\u0000"));
+  });
+});

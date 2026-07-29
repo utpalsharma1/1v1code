@@ -1,5 +1,47 @@
 # PROGRESS
 
+## Corrections round — an invariant that caught a live exploit
+
+**The INTERNAL_ERROR invariant is now a test class, and it found a real match-voider on its first
+run.** A lone surrogate in submitted source raised `UnicodeEncodeError` inside the runner, which
+surfaced as an internal error — and by §6.9 an internal error VOIDs the match with no rating change.
+A losing player could have annulled any match by submitting one unpaired UTF-16 code point. Source
+encoding is now total: unencodable characters become U+FFFD and the source fails compilation on its
+own merits, which is a verdict it has earned.
+
+**Containment suite: 26 tests**, up from 14. The new class aims at the judge rather than the sandbox
+— binary garbage, null bytes, lone surrogates, enormous single-line files in both languages,
+gigantic valid output, gigantic compiler diagnostics, a program that closes its own stdout or kills
+its own process group, empty source, and every input that has ever produced INTERNAL_ERROR, kept as
+a permanent regression. §11 now states that a path from user code to INTERNAL_ERROR is a security
+bug, fixed at that priority.
+
+**The enumeration figure was wrong by 1000× and is corrected.** I converted expected *guesses*
+straight into seconds. At a million concurrent live matches and 1000 guesses/second the real answer
+is **13 days**, not 35 years. At today's scale (~300 live) it is 119 years, so the conclusion held
+by accident rather than by argument. The fix is not more entropy but a rate limit: 20 failed
+`/watch/<code>` lookups per minute per IP takes the million-match case back over a century. Both the
+spec and the source comment now carry the real table, and the source comment records the error.
+
+**Compile CPU was not measured at all** — only execution wall time — so it could not have been
+billed against any budget. The runner now measures real CPU via `getrusage(RUSAGE_CHILDREN)` for the
+compile step and every test, reporting `cpuMs` per phase and a total. §11 specifies rolling
+ten-minute budgets of **120 CPU-seconds per user** and **240 per IP**, with per-IP applying only to
+accounts under 24 hours old so shared NAT does not throttle itself. A legitimate heavy C++ iterator
+spends ~100 CPU-seconds in an eight-minute match against a 120 budget, and hits the §6.8b in-flight
+lock long before the budget.
+
+**Spectator fanout: reduce load rather than raise the ceiling.** Spectator deltas batch at 200ms,
+and at 500ms on ranked where a 45-second delay already exists. That is 4× and 10× fewer messages for
+a difference no viewer can perceive, moving the ceiling from ~500–1000 viewers to **~4,000 and
+~10,000**. Batching relocates the bottleneck rather than removing it: past those numbers per-socket
+memory and file descriptors bind at roughly **5,000–10,000 sockets per process**.
+
+**Known-incorrect solutions** added to the problem pipeline spec as optional, with the standard that
+they must fail on an edge case rather than on test 1, must be verified to actually fail, and that
+the bot simply never submits when it draws a losing plan on a problem that lacks one.
+
+
 ## Phase 2B-3 — STOPPED PARTWAY, splitting again
 
 Four design decisions settled and written into the brief, plus the bot's entire foundation and auth

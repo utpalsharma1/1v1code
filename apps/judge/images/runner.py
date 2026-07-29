@@ -46,6 +46,19 @@ MAX_COMPILE_SECONDS = 10
 COMPILE_MEMORY_RESERVE = 48 * 1024 * 1024
 
 
+def child_cpu_seconds():
+    """
+    Cumulative CPU consumed by children we have waited on.
+
+    Wall time is not a cost measure: a compile bomb spends 10 seconds of CPU
+    from five lines of input, which a request-counting limiter cannot see. CPU
+    seconds are the thing actually being consumed, so they are the thing that
+    has to be billed (section 11).
+    """
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return ru.ru_utime + ru.ru_stime
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -92,6 +105,25 @@ def limits(memory_bytes):
     return apply
 
 
+def write_source(path, source):
+    """
+    Persist the submitted source, tolerating anything at all.
+
+    Source arrives as JSON, so it can contain lone surrogates, null bytes and
+    other sequences that are not encodable UTF-8. Writing them naively raises
+    UnicodeEncodeError inside the runner, which reaches the top-level handler
+    and is reported as an internal error — and by section 6.9 an internal error
+    VOIDS the match. That makes it an exploit: a losing player submits a lone
+    surrogate and the match is annulled.
+
+    So encoding is total. Unencodable characters become U+FFFD, and the result
+    then fails compilation on its own merits as COMPILE_ERROR, which is a
+    verdict properly attributable to the submission.
+    """
+    with open(path, "w", encoding="utf-8", errors="replace", newline="") as handle:
+        handle.write(source)
+
+
 def compile_step(argv, memory_bytes):
     """
     Runs a compiler under its own wall clock and its own memory ceiling.
@@ -124,6 +156,7 @@ def compile_step(argv, memory_bytes):
         # OOM killer scores by memory used and the compiler is, by a wide
         # margin, the fattest process in the cgroup.
 
+    cpu_before = child_cpu_seconds()
     try:
         proc = subprocess.Popen(
             argv,
@@ -134,7 +167,7 @@ def compile_step(argv, memory_bytes):
             env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp"},
         )
     except OSError as exc:
-        return "COMPILE_ERROR", f"could not start compiler: {exc}"
+        return "COMPILE_ERROR", f"could not start compiler: {exc}", 0
 
     try:
         _, err = proc.communicate(timeout=MAX_COMPILE_SECONDS)
@@ -148,10 +181,13 @@ def compile_step(argv, memory_bytes):
         return (
             "COMPILE_TIMEOUT",
             f"compilation exceeded {MAX_COMPILE_SECONDS}s",
+            int((child_cpu_seconds() - cpu_before) * 1000),
         )
 
+    compile_cpu_ms = int((child_cpu_seconds() - cpu_before) * 1000)
+
     if proc.returncode == 0:
-        return "OK", ""
+        return "OK", "", compile_cpu_ms
 
     text = err.decode("utf-8", "replace")
     # SIGKILL from the cgroup, SIGXCPU from RLIMIT_CPU, or a compiler that says
@@ -159,9 +195,13 @@ def compile_step(argv, memory_bytes):
     # syntax error, and reporting them as COMPILE_ERROR would tell the player
     # their correct code is malformed.
     if proc.returncode in (-9, 137):
-        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling"
+        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling", compile_cpu_ms
     if proc.returncode in (-24, 152):
-        return "COMPILE_TIMEOUT", f"compiler exceeded {MAX_COMPILE_SECONDS}s of CPU"
+        return (
+            "COMPILE_TIMEOUT",
+            f"compiler exceeded {MAX_COMPILE_SECONDS}s of CPU",
+            compile_cpu_ms,
+        )
 
     lowered = text.lower()
     # g++ is a driver: when the cgroup OOM-kills cc1plus, the driver itself
@@ -174,8 +214,9 @@ def compile_step(argv, memory_bytes):
         or "killed signal terminated" in lowered
         or "internal compiler error: killed" in lowered
     ):
-        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling"
-    return "COMPILE_ERROR", text[:4000]
+        return "COMPILE_MEMORY", "compiler exhausted its memory ceiling", compile_cpu_ms
+    # Compiler diagnostics can themselves be enormous; truncate hard.
+    return "COMPILE_ERROR", text[:4000], compile_cpu_ms
 
 
 def run_once(argv, stdin_data, timeout_s, memory_bytes):
@@ -189,6 +230,7 @@ def run_once(argv, stdin_data, timeout_s, memory_bytes):
     dies with it and reports INTERNAL_ERROR instead of OUTPUT_LIMIT.
     """
     started = time.monotonic()
+    cpu_before = child_cpu_seconds()
     try:
         proc = subprocess.Popen(
             argv,
@@ -200,7 +242,7 @@ def run_once(argv, stdin_data, timeout_s, memory_bytes):
             env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
         )
     except OSError:
-        return "RUNTIME_ERROR", "", 0
+        return "RUNTIME_ERROR", "", 0, 0
 
     # Feed stdin from a thread: a large input can fill the pipe buffer and block
     # here forever if the child never reads it.
@@ -268,22 +310,23 @@ def run_once(argv, stdin_data, timeout_s, memory_bytes):
         pass
 
     elapsed = int((time.monotonic() - started) * 1000)
+    cpu_ms = int((child_cpu_seconds() - cpu_before) * 1000)
 
     if capped:
-        return "OUTPUT_LIMIT", out.decode("utf-8", "replace"), elapsed
+        return "OUTPUT_LIMIT", out.decode("utf-8", "replace"), elapsed, cpu_ms
     if timed_out:
-        return "TIME_LIMIT", "", elapsed
+        return "TIME_LIMIT", "", elapsed, cpu_ms
     if proc.returncode != 0:
         # -9/137 is SIGKILL, which under a cgroup memory limit is the OOM
         # killer. RLIMIT_AS instead surfaces as a clean MemoryError, which
         # would otherwise be misreported as a plain runtime error.
         if proc.returncode in (-9, 137):
-            return "MEMORY_LIMIT", "", elapsed
+            return "MEMORY_LIMIT", "", elapsed, cpu_ms
         if b"MemoryError" in err:
-            return "MEMORY_LIMIT", "", elapsed
-        return "RUNTIME_ERROR", "", elapsed
+            return "MEMORY_LIMIT", "", elapsed, cpu_ms
+        return "RUNTIME_ERROR", "", elapsed, cpu_ms
 
-    return "OK", out.decode("utf-8", "replace"), elapsed
+    return "OK", out.decode("utf-8", "replace"), elapsed, cpu_ms
 
 
 def normalise(text):
@@ -300,28 +343,51 @@ def main():
     memory_bytes = job["memoryLimitMb"] * 1024 * 1024
 
     workdir = tempfile.mkdtemp(dir="/tmp")
+    total_cpu_ms = 0
 
     if language == "CPP17":
         src = os.path.join(workdir, "main.cpp")
         binary = os.path.join(workdir, "main")
-        with open(src, "w") as handle:
-            handle.write(source)
+        try:
+            write_source(src, source)
+        except Exception as exc:
+            emit({
+                "kind": "compile-failed",
+                "verdict": "COMPILE_ERROR",
+                "message": f"source could not be stored: {type(exc).__name__}",
+                "cpuMs": 0,
+            })
+            return
         emit({"kind": "compiling"})
-        status, message = compile_step(
+        status, message, compile_cpu = compile_step(
             ["g++", "-std=c++17", "-O2", "-o", binary, src], memory_bytes
         )
+        total_cpu_ms += compile_cpu
         if status != "OK":
-            emit({"kind": "compile-failed", "verdict": status, "message": message})
+            emit({
+                "kind": "compile-failed",
+                "verdict": status,
+                "message": message,
+                "cpuMs": total_cpu_ms,
+            })
             return
         argv = [binary]
     elif language == "PYTHON3":
         src = os.path.join(workdir, "main.py")
-        with open(src, "w") as handle:
-            handle.write(source)
+        try:
+            write_source(src, source)
+        except Exception as exc:
+            emit({
+                "kind": "compile-failed",
+                "verdict": "COMPILE_ERROR",
+                "message": f"source could not be stored: {type(exc).__name__}",
+                "cpuMs": 0,
+            })
+            return
         # Syntax-check up front so a typo reports COMPILE_ERROR rather than
         # failing every test case identically.
         emit({"kind": "compiling"})
-        status, message = compile_step(
+        status, message, compile_cpu = compile_step(
             [
                 sys.executable,
                 "-c",
@@ -330,8 +396,14 @@ def main():
             ],
             memory_bytes,
         )
+        total_cpu_ms += compile_cpu
         if status != "OK":
-            emit({"kind": "compile-failed", "verdict": status, "message": message})
+            emit({
+                "kind": "compile-failed",
+                "verdict": status,
+                "message": message,
+                "cpuMs": total_cpu_ms,
+            })
             return
         argv = [sys.executable, src]
     else:
@@ -341,7 +413,8 @@ def main():
     emit({"kind": "running", "total": len(tests)})
 
     for test in tests:
-        status, out, elapsed = run_once(argv, test["input"], time_limit, memory_bytes)
+        status, out, elapsed, cpu_ms = run_once(argv, test["input"], time_limit, memory_bytes)
+        total_cpu_ms += cpu_ms
         if status == "OK":
             verdict = "ACCEPTED" if normalise(out) == normalise(test["expected"]) else "WRONG_ANSWER"
         else:
@@ -352,9 +425,11 @@ def main():
                 "ordinal": test["ordinal"],
                 "verdict": verdict,
                 "runtimeMs": elapsed,
+                "cpuMs": cpu_ms,
             }
         )
         if verdict != "ACCEPTED":
+            emit({"kind": "cpu", "totalCpuMs": total_cpu_ms})
             # Stop at the first failure: the verdict is decided and continuing
             # only burns judge capacity.
             break

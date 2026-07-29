@@ -453,7 +453,30 @@ This puts a hard constraint on the judge: **`INTERNAL_ERROR` must never be reach
 
 **Be honest in the copy: unlisted is not private.** Anyone holding the code can watch, and can pass it on. The UI must say that in those words rather than implying secrecy we do not enforce. True invite-only — an allowlist, or a code that dies on first use — is a later feature, and until it exists we should not let a player believe they have it.
 
-**Fanout is a room broadcast, never per-socket sends.** Serialise once, write N times. The ceiling on our current architecture is roughly **500–1000 viewers per match on a single gateway process**, and it is set by *message rate*, not connection count: 2C's editor deltas at ~50ms give about 40 messages/second/match, so a thousand viewers is 40k writes/second, which saturates one Node event loop. Where it breaks is single-process fanout, and the fix is staged — the Redis adapter first so gateways scale horizontally (see §12's deployment phase), then a dedicated fanout tier if a match ever needs tens of thousands. Do not attempt per-socket sends at any size; it fails an order of magnitude earlier.
+**Rate-limit `/watch/<code>` per IP, weighting failed lookups far more heavily than successful ones.** The code space is not a defence on its own, and the reason is that **the attack gets easier exactly as the product succeeds**. Expected time for a blind attacker at 1000 guesses/second to find one live unlisted match:
+
+| live matches at once | time to first hit |
+| --- | --- |
+| 300 (today) | 119 years |
+| 5,000 | 7.1 years |
+| 100,000 | 130 days |
+| 1,000,000 | **13 days** |
+
+A 20-failed-lookups-per-minute budget per address turns that last row into over a century from a single IP. That is the control; the entropy only buys the headroom for it to work. Do not let this rest on a guess about our own future scale.
+
+*(An earlier draft of this section claimed 35 years at a million live matches. That was expected guesses misread as seconds — a 1000× error, in the flattering direction.)*
+
+**Fanout is a room broadcast, never per-socket sends.** Serialise once, write N times. Per-socket sends fail an order of magnitude earlier at every size below.
+
+**Spectators get a coarser stream than players, and that is the main lever.** Players need 50ms deltas because they are competing; a viewer cannot perceive the difference between 50ms and 200ms of somebody else's typing. So **spectator deltas batch at 200ms**, and on ranked — where there is already a mandatory 45-second delay, so latency is meaningless — they batch at **500ms**. Reducing the load beats raising the ceiling: it is a 4× and 10× cut for a difference no viewer can see.
+
+| stream | batch | messages/s/match | viewers before the event loop saturates |
+| --- | --- | --- | --- |
+| players | 50ms | ~40 | — |
+| spectators, unranked | 200ms | ~10 | **~4,000** |
+| spectators, ranked (45s delayed) | 500ms | ~4 | **~10,000** |
+
+**Batching moves the bottleneck rather than removing it.** At those numbers message rate is no longer what binds — per-socket memory and file descriptors are, at roughly 30–50 KB per connection, so **5,000–10,000 sockets per process** becomes the real ceiling regardless of how little each one receives. Past that the fix is staged: the Redis adapter so gateways scale horizontally (§12, deployment), then a dedicated fanout tier if a single match ever needs more.
 
 **Late joiners get a snapshot, not replayed deltas.** Replaying an hour of keystrokes to catch someone up is both slow and pointless. This depends on the periodic full snapshots in 2C and should not be built before them.
 
@@ -721,6 +744,44 @@ Every claim above gets a test that **actually attempts the escape** — and two 
 
 Pair every containment test with its counterpart — the compile bomb next to a legitimate heavy `#include`, the nofile cap next to a program that must still open files. A limit that rejects correct programs is a worse bug than the one it prevents.
 
+### `INTERNAL_ERROR` is unreachable from user code — a standing invariant
+
+**No input, however malformed, may cause the judge to report `INTERNAL_ERROR`. Every judge failure must resolve to a verdict attributable to the submission.**
+
+This sits alongside the positive control as a permanent test class, not as a note. §6.9 makes a lost verdict a no-contest — `VOID`, no rating change — which means a submission that can provoke `INTERNAL_ERROR` is a submission that **annuls any match its author is about to lose**. That is a cheat code, and it is invisible: the player looks like a victim of our infrastructure.
+
+**Any newly discovered path from user code to `INTERNAL_ERROR` is a security bug, not a robustness bug, and is fixed at that priority.**
+
+The test class aims at the *judge*, not the sandbox — the sandbox tests above assume the runner works, and these assume it is under attack:
+
+- binary garbage as source; source containing null bytes; **source containing lone surrogates**
+- enormous single-line files, in both languages, near the 256 KB protocol cap
+- output that is valid but gigantic; compiler diagnostics that are themselves gigantic
+- a program that closes its own stdout, or kills its own process group
+- empty source, and source that is nothing but a null byte
+- **every input that has ever produced `INTERNAL_ERROR`**, kept as a regression forever
+
+The lone-surrogate case found a live exploit the first time it ran: source arrives as JSON and may contain unencodable sequences, and writing them naively raised `UnicodeEncodeError` inside the runner, which surfaced as an internal error. Encoding is now total — unencodable characters become U+FFFD and the source then fails compilation on its own merits, which is a verdict the submission has earned.
+
+### Cost accounting — request counts do not measure the attack
+
+**Compilation is an amplification attack.** Five lines of preprocessor macros buy ten seconds of CPU. A request-counting rate limiter cannot see that: it counts one request while the attacker spends ten CPU-seconds, so the limiter and the resource being consumed are in different units.
+
+**Bill CPU-seconds, not requests.** The runner measures actual CPU via `getrusage(RUSAGE_CHILDREN)` for both the compile step and every test, and reports `cpuMs` per phase and a total. Wall time is not a substitute: a process sleeping for five seconds costs nothing, and one spinning for five seconds costs a core.
+
+Rolling ten-minute budgets:
+
+| scope | budget | sustained equivalent |
+| --- | --- | --- |
+| per user | **120 CPU-seconds / 10 min** | ~30 C++ submissions |
+| per IP | **240 CPU-seconds / 10 min** | 0.4 of a core, ~20% of a 4-slot pool |
+
+**A legitimate heavy user must never hit this**, and does not: a full C++ submission costs roughly 4 CPU-seconds (≈3.5s compiling, the rest running), and the §6.8b in-flight lock caps a player at about one submission per 5.5s. A fast iterator makes 10–25 submissions in an eight-minute match — call it 100 CPU-seconds against a 120 budget. Someone mashing submit hits the lock long before the budget.
+
+Per-IP is deliberately looser than double the per-user budget because shared NAT is real, and it **applies only to accounts younger than 24 hours**. Established accounts are governed by the per-user budget alone, so a university or an office does not throttle itself; new and anonymous accounts, which are the actual abuse vector because registration is free, carry both.
+
+When a budget is exhausted the response is a 429 naming the CPU budget rather than a request count, so the message is true.
+
 ---
 
 ## 12. Build phases
@@ -778,7 +839,13 @@ What *is* usable:
 
 **Nothing enters the bank without passing the pipeline**, which already exists and is the thing that makes bulk authoring safe: statement, constraints, test cases, a **validator** enforcing those constraints (§6.8), a **known-correct reference solution**, and mechanical verification that the reference passes every test and that the tests agree with it. That check caught five bad expected outputs in the first 20 — including a problem whose own test data violated its stated constraint, which would have made the hack phase police a promise the problem broke. Reading does not catch those; running does.
 
-The pipeline should also grow an **optional known-incorrect solution** per problem, for the bot's losing behaviour (§8).
+**Each problem may also carry one known-incorrect solution**, and the bot's losing behaviour (§8) depends on it.
+
+It must be *plausibly* wrong — the kind of wrong a human actually is. A solution that fails on test 1 is a typo, and a bot that submits typos is as obvious a tell as a bot that goes silent. What we want is a solution that passes the samples and fails on an edge case: an unhandled empty input, an off-by-one at the boundary, an `int` that overflows only at the stated maximum, a greedy choice that is right until it is not. Those are the failures a real player has, and they are also the ones §6.8's hack phase is about.
+
+**It is optional, deliberately**, so that authoring is never blocked on inventing a good wrong answer — which is genuinely harder than writing a right one. Verification treats it the same way as the reference: if a wrong solution is supplied it must actually be *rejected* by the judge, because a "wrong" solution that quietly passes is worse than none.
+
+**For problems without one, the bot does not submit at all when it draws a losing plan** — it falls back to §8's behaviour (1), keeping up plausible typing for the full match and simply never finishing. That is the most common way a human loses anyway, so the fallback is not a degradation, just a narrower repertoire.
 
 **Realistic effort per problem**, for planning how many to write by hand versus draft and verify:
 
