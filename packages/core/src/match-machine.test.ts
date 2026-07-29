@@ -220,6 +220,37 @@ describe("match lifecycle", () => {
     });
   });
 
+  test("an INTERNAL_ERROR verdict voids the match and ends it immediately", () => {
+    /* §6.9: the one legitimate route to VOID. A player cannot tell our fault
+       from theirs, so a verdict we failed to produce costs nobody rating. It
+       ends the match at once — there is nothing to wait for, because the
+       result can no longer be trusted. */
+    let ctx = drive(
+      [{ type: "SUBMISSION_RECEIVED", submissionId: "s1", side: "p1", receiptMs: 10 }],
+      toLive(),
+    );
+    ctx = drive([{ type: "VERDICT", submissionId: "s1", accepted: false, internalError: true }], ctx);
+
+    assert.equal(ctx.state, "ENDED");
+    assert.deepEqual(ctx.outcome, { kind: "VOID", reason: "INTERNAL_ERROR" });
+  });
+
+  test("an internal error voids even when the other side already solved", () => {
+    // The trustworthy result loses to the untrustworthy one on purpose: if we
+    // cannot vouch for the whole match, we do not hand anyone a win from it.
+    let ctx = drive(
+      [
+        { type: "SUBMISSION_RECEIVED", submissionId: "good", side: "p1", receiptMs: 10 },
+        { type: "SUBMISSION_RECEIVED", submissionId: "lost", side: "p2", receiptMs: 20 },
+        { type: "VERDICT", submissionId: "good", accepted: true },
+      ],
+      toLive(),
+    );
+    assert.equal(ctx.state, "JUDGING", "must still hold for the outstanding verdict");
+    ctx = drive([{ type: "VERDICT", submissionId: "lost", accepted: false, internalError: true }], ctx);
+    assert.deepEqual(ctx.outcome, { kind: "VOID", reason: "INTERNAL_ERROR" });
+  });
+
   test("a verdict for an unknown submission is refused", () => {
     const ctx = drive(
       [{ type: "SUBMISSION_RECEIVED", submissionId: "real", side: "p1", receiptMs: 1 }],

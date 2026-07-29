@@ -160,6 +160,18 @@ model Submission {
   total     Int      @default(0)
   runtimeMs Int?
   memoryKb  Int?
+  /// §6.9 RECEIPT ORDER. Stamped at the gateway the instant the submission
+  /// arrives, on the monotonic clock, BEFORE the job is queued. This is the
+  /// sole authority for who won and for the elapsed-time tiebreak.
+  ///
+  /// It is deliberately not createdAt: that is a wall-clock value, and the
+  /// wall clock has been measured stepping backward 2514ms on this very host.
+  /// It is also deliberately not the verdict time — the judge is a queue with
+  /// finite slots, so verdict order is the queue's decision, not the players'.
+  receiptMs BigInt?
+  /// Diagnostics only. Never an input to the result (§6.9).
+  queueWaitMs Int?
+  judgeMs     Int?
   /// Compiler output on COMPILE_ERROR. Never the program's own stdout.
   message   String?
 
@@ -203,6 +215,13 @@ enum MatchState {
 
 /// PUBLIC is listed in the live panel and watchable by code; UNLISTED is
 /// watchable by code only. UNLISTED is NOT private - see S7.
+enum MatchOutcomeKind {
+  WIN
+  DRAW
+  CANCELED
+  VOID
+}
+
 enum MatchVisibility {
   PUBLIC
   UNLISTED
@@ -246,6 +265,13 @@ model Match {
 
   startedAt  DateTime?
   finishedAt DateTime?
+  /// How the match came to rest. CANCELED and VOID both mean "no rating
+  /// change" and are still distinct: VOID is OUR failure (S6.9) and is meant
+  /// to be rare and alarming, CANCELED is routine (nobody accepted, both
+  /// disconnected). Collapsing them would make a real no-contest
+  /// indistinguishable from an abandoned queue pop.
+  outcomeKind   MatchOutcomeKind?
+  outcomeReason String?
   /// Final elapsed time per side, in ms. The §6.8 hack penalty is charged here.
   p1ElapsedMs Int?
   p2ElapsedMs Int?

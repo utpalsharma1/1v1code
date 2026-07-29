@@ -4,6 +4,7 @@ import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { CURRENT_PHASE } from "@/lib/phase";
+import { MatchScreen, type MatchPlayer } from "./MatchScreen";
 import {
   Button,
   Card,
@@ -12,8 +13,10 @@ import {
   QueueCard,
   QueuePop,
   cn,
+  type CellState,
   type Division,
   type Side,
+  type Status,
   type Tier,
 } from "@1v1/ui";
 
@@ -43,6 +46,9 @@ interface QueueStatus {
   ratingBand: [number, number];
   widening: boolean;
   inQueue: number;
+  /** Nobody else is in the pool. There is no bot fallback in 2B-4, so the
+   *  queue card stops performing a search rather than sweeping over nobody. */
+  alone: boolean;
 }
 
 export default function PlayPage() {
@@ -70,7 +76,37 @@ function Play() {
   const [acceptDeadline, setAcceptDeadline] = useState<number | null>(null);
   const [acceptRemainingMs, setAcceptRemainingMs] = useState<number | undefined>(undefined);
   const [beat, setBeat] = useState<3 | 2 | 1 | 0 | null>(null);
-  const [problem, setProblem] = useState<{ title: string; rating: number } | null>(null);
+  const [problem, setProblem] = useState<{
+    title: string;
+    rating: number;
+    statement: string;
+    constraints: string;
+  } | null>(null);
+  const [totalTests, setTotalTests] = useState(0);
+  const [cells, setCells] = useState<{ p1: CellState[]; p2: CellState[] }>({ p1: [], p2: [] });
+  const [statuses, setStatuses] = useState<{ p1: Status; p2: Status }>({
+    p1: { kind: "typing" },
+    p2: { kind: "typing" },
+  });
+  const [pulses, setPulses] = useState<{ p1: number[]; p2: number[] }>({ p1: [], p2: [] });
+  const [compileKeys, setCompileKeys] = useState({ p1: 0, p2: 0 });
+  const [shatterKeys, setShatterKeys] = useState({ p1: 0, p2: 0 });
+  const [holding, setHolding] = useState<Side[]>([]);
+  const [verdict, setVerdict] = useState<{
+    side: Side;
+    verdict: string;
+    passed: number;
+    total: number;
+    failedAt: number | null;
+    message: string | null;
+  } | null>(null);
+  const [ending, setEnding] = useState<{
+    kind: string;
+    winner?: Side;
+    reason?: string;
+    ratings: { side: Side; before: number; after: number }[];
+  } | null>(null);
+  const [inFlight, setInFlight] = useState(false);
   const [remainingMs, setRemainingMs] = useState(0);
   const [presence, setPresence] = useState<{ side: Side; graceMs: number } | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -167,7 +203,15 @@ function Play() {
     socket.on("match.start", (payload) => {
       setBeat(null);
       setPhase("live");
-      setProblem({ title: payload.problem.title, rating: payload.problem.rating });
+      setProblem({
+        title: payload.problem.title,
+        rating: payload.problem.rating,
+        statement: payload.problem.statement,
+        constraints: payload.problem.constraints,
+      });
+      setEnding(null);
+      setVerdict(null);
+      setHolding([]);
       note(`LIVE — ${payload.problem.title}`);
     });
     socket.on("match.clock", (payload: { remainingMs: number }) =>
@@ -190,8 +234,102 @@ function Play() {
       setPhase(payload.state === "LIVE" ? "live" : payload.state === "COUNTDOWN" ? "countdown" : "found");
       note(`resynced into ${payload.state}`);
     });
+    socket.on("submission.ack", (payload: { total: number; side: Side }) => {
+      setTotalTests(payload.total);
+      // A fresh submission clears the bar: these are THIS attempt's cells.
+      setCells((prev) => ({ ...prev, [payload.side]: Array(payload.total).fill("idle") }));
+      setVerdict(null);
+      setInFlight(true);
+      note(`submitted — ${payload.total} tests`);
+    });
+
+    /* §6.6: cells resolve one at a time, in the order the judge sends them.
+       Never batched — the staggered reveal is the entire drama. */
+    socket.on(
+      "test.result",
+      (payload: { side: Side; ordinal: number; verdict: string; total: number }) => {
+        setTotalTests((t) => Math.max(t, payload.total));
+        setCells((prev) => {
+          const next = [...(prev[payload.side] ?? [])];
+          while (next.length < payload.total) next.push("idle");
+          next[payload.ordinal] = payload.verdict === "ACCEPTED" ? "pass" : "fail";
+          return { ...prev, [payload.side]: next };
+        });
+      },
+    );
+
+    socket.on(
+      "submission.verdict",
+      (payload: {
+        side: Side;
+        verdict: string;
+        passed: number;
+        total: number;
+        failedAt: number | null;
+        message: string | null;
+      }) => {
+        setVerdict(payload);
+        setInFlight(false);
+        // §6.4: the ticker shows activity, never content. After a verdict it
+        // reports the score and then goes back to plain activity.
+        setStatuses((prev) => ({
+          ...prev,
+          [payload.side]:
+            payload.total > 0
+              ? { kind: "result", passed: payload.passed, total: payload.total }
+              : { kind: "failed" },
+        }));
+        // §6.5 near-miss: a failed submission cracks that player's bar. The
+        // relief is the opponent's; the pain is well earned.
+        if (payload.verdict !== "ACCEPTED") {
+          setShatterKeys((prev) => ({ ...prev, [payload.side]: prev[payload.side] + 1 }));
+        }
+        note(`verdict ${payload.side}: ${payload.verdict} ${payload.passed}/${payload.total}`);
+      },
+    );
+
+    socket.on("match.judging", (payload: { outstanding: Side[] }) => setHolding(payload.outstanding));
+
+    socket.on("opponent.pulse", (payload: { side: Side; keys: number }) => {
+      // Fixed-length window so the sparkline scrolls rather than growing.
+      setPulses((prev) => ({
+        ...prev,
+        [payload.side]: [...prev[payload.side], payload.keys].slice(-120),
+      }));
+    });
+
+    socket.on(
+      "opponent.status",
+      (payload: { side: Side; status: string; passed: number; total: number }) => {
+        const status: Status =
+          payload.status === "running" && payload.total > 0
+            ? { kind: "result", passed: payload.passed, total: payload.total }
+            : ({ kind: payload.status } as Status);
+        setStatuses((prev) => ({ ...prev, [payload.side]: status }));
+        // §6.5 compile pulse: a shockwave across that player's half.
+        if (payload.status === "compiling") {
+          setCompileKeys((prev) => ({ ...prev, [payload.side]: prev[payload.side] + 1 }));
+        }
+        if (payload.total > 0) {
+          setTotalTests((t) => Math.max(t, payload.total));
+          setCells((prev) => {
+            const next = Array<CellState>(payload.total).fill("idle");
+            for (let i = 0; i < payload.passed; i += 1) next[i] = "pass";
+            return { ...prev, [payload.side]: next };
+          });
+        }
+      },
+    );
+
     socket.on("match.end", (payload) => {
       setPhase("ended");
+      setHolding([]);
+      setEnding({
+        kind: payload.outcome.kind,
+        winner: payload.outcome.winner,
+        reason: payload.outcome.reason,
+        ratings: payload.ratings ?? [],
+      });
       note(`match ended: ${payload.outcome.kind}`);
     });
     socket.on("error", (payload: { code: string; message: string }) =>
@@ -262,6 +400,54 @@ function Play() {
     );
   }
 
+  /* Once the match is live the match screen owns the viewport. The queue view
+     is a lobby, not a frame around the match — §6.4 requires the HUD to be
+     fixed to the top and never scroll away, which it cannot be inside a
+     centered max-w-4xl column. */
+  if ((phase === "live" || phase === "ended") && match && problem) {
+    const asPlayer = (card: PlayerCard): MatchPlayer => ({
+      handle: card.handle,
+      rating: card.rating,
+      tier: card.tier,
+      division: card.division,
+      isBot: card.isBot,
+    });
+    return (
+      <MatchScreen
+        you={match.you}
+        p1={asPlayer(match.p1)}
+        p2={asPlayer(match.p2)}
+        problem={problem}
+        remainingMs={remainingMs}
+        cells={cells}
+        totalTests={totalTests}
+        statuses={statuses}
+        pulses={pulses}
+        compileKeys={compileKeys}
+        shatterKeys={shatterKeys}
+        holding={holding}
+        verdict={verdict}
+        ending={ending}
+        inFlight={inFlight}
+        onSubmit={(language, source) =>
+          emit("code.submit", { matchId: match.matchId, language, source })
+        }
+        onKeystrokes={(keys) => emit("pulse.report", { matchId: match.matchId, keys })}
+        onRematch={() => {
+          setPhase("idle");
+          setEnding(null);
+          setMatch(null);
+          emit("queue.join", { mode: "RANKED" });
+        }}
+        onHub={() => {
+          setPhase("idle");
+          setEnding(null);
+          setMatch(null);
+        }}
+      />
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-4xl flex-col gap-6 px-6 py-10">
       <header className="flex items-baseline justify-between gap-4">
@@ -302,25 +488,15 @@ function Play() {
             tier="gold"
             division="II"
             onCancel={() => emit("queue.leave")}
+            live={{
+              elapsedMs: queue.elapsedMs,
+              band: queue.ratingBand,
+              widening: queue.widening,
+              inQueue: queue.inQueue,
+              alone: queue.alone ?? false,
+            }}
           />
-          <p className="text-fg-faint mt-3 text-12">
-            Band {queue.ratingBand[0]}–{queue.ratingBand[1]} · {queue.inQueue} in queue ·{" "}
-            {queue.widening ? "widening" : "at ceiling"}
-          </p>
         </div>
-      )}
-
-      {phase === "live" && problem && (
-        <Card title="Live" aside={<span className="tabular text-fg-faint text-12">{problem.rating}</span>}>
-          <p className="font-display text-fg text-20 font-bold uppercase">{problem.title}</p>
-          <p className="tabular text-fg-dim mt-2 text-26">
-            {String(Math.floor(remainingMs / 60000)).padStart(2, "0")}:
-            {String(Math.floor((remainingMs % 60000) / 1000)).padStart(2, "0")}
-          </p>
-          <p className="text-fg-faint mt-2 text-12">
-            The match screen and editor are 2B-3. This proves the flow reaches LIVE.
-          </p>
-        </Card>
       )}
 
       {presence && (

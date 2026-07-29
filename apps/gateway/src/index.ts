@@ -2,11 +2,21 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import Redis from "ioredis";
 import { Server, type Socket } from "socket.io";
-import { monotonicMs } from "@1v1/core";
+import { generateCode, monotonicMs } from "@1v1/core";
 import { prisma } from "@1v1/db";
-import { MatchAcceptSchema, QueueJoinSchema, type PlayerCard, type Side } from "@1v1/proto";
+import {
+  CodeSubmitSchema,
+  MatchAcceptSchema,
+  PulseReportSchema,
+  QueueJoinSchema,
+  type Language,
+  type PlayerCard,
+  type Side,
+} from "@1v1/proto";
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
 import { Matchmaker, bandFor } from "./matchmaking.ts";
+import { applyOutcome, snapshot, type RatingSnapshot } from "./rating.ts";
+import { SubmissionRunner, isInFlight, receipt } from "./submissions.ts";
 import { identify, identifyById, type Identity } from "./session.ts";
 
 /* ============================================================================
@@ -21,8 +31,6 @@ import { identify, identifyById, type Identity } from "./session.ts";
 const PORT = Number(process.env["GATEWAY_PORT"] ?? "4000");
 const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
 const WEB_ORIGIN = process.env["WEB_ORIGIN"] ?? "http://localhost:3000";
-/** A pool of one is the normal case in development, not an edge case (§6.1). */
-const BOT_AFTER_MS = Number(process.env["MM_BOT_AFTER_MS"] ?? "20000");
 
 const redis = new Redis(REDIS_URL);
 const matchmaker = new Matchmaker(redis);
@@ -34,7 +42,6 @@ interface Session {
   sockets: Set<string>;
   queuedAt: number | null;
   queueTimer: NodeJS.Timeout | null;
-  botTimer: NodeJS.Timeout | null;
   matchId: string | null;
 }
 
@@ -62,6 +69,132 @@ function toMatch(match: LiveMatch, event: string, payload: unknown): void {
   toUser(match.players.p2.userId, event, payload);
 }
 
+function emitToSide(match: LiveMatch, side: Side, event: string, payload: unknown): void {
+  toUser(match.players[side].userId, event, payload);
+}
+
+/* ── Submissions (§6.6, §6.9) ─────────────────────────────────────────── */
+
+const runner = new SubmissionRunner();
+
+/**
+ * Drives one submission from receipt to verdict.
+ *
+ * Per-test results are relayed the instant they arrive and are never batched —
+ * §6.6's sequential reveal is the drama, and batching would delete it. The
+ * opponent gets a *count*, never a test's content or the source.
+ */
+async function runSubmission(
+  match: LiveMatch,
+  side: Side,
+  userId: string,
+  language: Language,
+  source: string,
+  receiptMs: bigint,
+): Promise<void> {
+  const other: Side = side === "p1" ? "p2" : "p1";
+  /* One id per submission, derived from the receipt stamp so the state machine
+     and the wire agree without a second round trip. */
+  const submissionId = `${match.id}:${side}:${receiptMs}`;
+  let accepted = false;
+  let internalError = false;
+
+  /* Register with the state machine FIRST, before any I/O.
+
+     This was in the `onQueued` callback, which meant a database failure threw
+     before the machine had ever heard of the submission — and then the verdict
+     that followed was refused as belonging to an unknown submission, so the
+     §6.7b hold never resolved and the match hung until the clock ran out.
+     Registering here means every path that can fail is already inside a hold
+     that something will resolve. */
+  await match.submissionReceived(side, submissionId, Number(receiptMs));
+
+  try {
+    await runner.run(
+      {
+        matchId: match.id,
+        userId,
+        problemId: match.problem.id,
+        problemSlug: match.problem.slug,
+        language,
+        source,
+        receiptMs,
+      },
+      {
+        onQueued: (total) => {
+          emitToSide(match, side, "submission.ack", {
+            matchId: match.id,
+            submissionId,
+            side,
+            total,
+          });
+          emitToSide(match, other, "opponent.status", {
+            matchId: match.id,
+            side,
+            status: "submitted",
+            passed: 0,
+            total,
+          });
+        },
+        onStatus: (status) => {
+          // §6.5 compile pulse: the opponent feels it, without seeing anything.
+          emitToSide(match, other, "opponent.status", {
+            matchId: match.id,
+            side,
+            status,
+            passed: 0,
+            total: 0,
+          });
+        },
+        onTest: (ordinal, verdict, passed, total) => {
+          emitToSide(match, side, "test.result", {
+            matchId: match.id,
+            submissionId,
+            side,
+            ordinal,
+            verdict,
+            passed,
+            total,
+          });
+          // The opponent's bar fills from counts alone (§6.4).
+          emitToSide(match, other, "opponent.status", {
+            matchId: match.id,
+            side,
+            status: "running",
+            passed,
+            total,
+          });
+        },
+        onVerdict: (result) => {
+          accepted = result.verdict === "ACCEPTED";
+          // §6.9: our failure, not theirs. Voids the match, costs nobody rating.
+          internalError = result.verdict === "INTERNAL_ERROR";
+          toMatch(match, "submission.verdict", {
+            matchId: match.id,
+            submissionId,
+            side,
+            verdict: result.verdict,
+            passed: result.passed,
+            total: result.total,
+            failedAt: result.failedAt,
+            message: result.message,
+          });
+        },
+      },
+    );
+  } catch (error) {
+    console.error(`[match ${match.id}] submission failed:`, error);
+    // A thrown submission is indistinguishable, from the player's seat, from a
+    // judge that died. Both are ours, so both void rather than count as a loss.
+    internalError = true;
+  }
+
+  /* Resolve the hold whatever happened, including on a thrown error. A
+     submission that never resolves would hang the match forever, which §6.7b
+     forbids — the hold must be bounded. */
+  await match.verdictArrived(side, submissionId, accepted, internalError);
+}
+
 /* ── Problem selection (§8) ───────────────────────────────────────────── */
 
 /**
@@ -79,7 +212,7 @@ async function pickProblem(r1: number, r2: number, spread: number): Promise<Matc
 
   const inBand = await prisma.problem.findMany({
     where: { rating: { gte: lo, lte: hi } },
-    select: { slug: true, title: true, rating: true, statement: true, constraints: true },
+    select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
   });
 
   const pool = inBand.length > 0
@@ -87,7 +220,7 @@ async function pickProblem(r1: number, r2: number, spread: number): Promise<Matc
     : await prisma.problem.findMany({
         take: 5,
         orderBy: { rating: "asc" },
-        select: { slug: true, title: true, rating: true, statement: true, constraints: true },
+        select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
       });
 
   if (pool.length === 0) return null;
@@ -105,6 +238,79 @@ async function cardFor(identity: Identity): Promise<PlayerCard> {
   };
 }
 
+/** Writes the Match row at LIVE, so submissions have something to reference. */
+async function persistMatch(match: LiveMatch, problemId: string): Promise<void> {
+  try {
+    await prisma.match.create({
+      data: {
+        id: match.id,
+        spectatorCode: generateCode(),
+        p1Id: match.players.p1.userId,
+        p2Id: match.players.p2.userId,
+        problemId,
+        state: "LIVE",
+        startedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error(`[match ${match.id}] could not create match row:`, error);
+  }
+}
+
+/* ── Settlement ───────────────────────────────────────────────────────── */
+
+/**
+ * Writes the Match row, applies Glicko-2, and sends the deltas with `match.end`.
+ *
+ * The row is written at the END rather than at creation, because until a match
+ * finishes there is nothing durable to say about it — and a row created at
+ * queue-pop time would leave a `PENDING` match behind for every abandoned
+ * accept window, which is most of them in development.
+ */
+async function settleMatch(
+  match: LiveMatch,
+  p1: RatingSnapshot | null,
+  p2: RatingSnapshot | null,
+  problemId: string,
+): Promise<void> {
+  const outcome = match.context.outcome ?? { kind: "CANCELED" as const, reason: "NEVER_STARTED" as const };
+
+  try {
+    // The row exists from the moment the match went LIVE. A match that never
+    // started has none, which is correct: there is nothing to record.
+    await prisma.match.updateMany({
+      where: { id: match.id },
+      data: {
+        state: outcome.kind === "CANCELED" ? "ABANDONED" : "FINISHED",
+        outcomeKind: outcome.kind,
+        outcomeReason: outcome.reason,
+        winnerId: outcome.kind === "WIN" ? match.players[outcome.winner].userId : null,
+        finishedAt: new Date(),
+        p1ElapsedMs: Math.round(match.elapsedFor("p1")),
+        p2ElapsedMs: Math.round(match.elapsedFor("p2")),
+      },
+    });
+  } catch (error) {
+    console.error(`[match ${match.id}] could not persist:`, error);
+  }
+
+  let ratings: { side: Side; before: number; after: number }[] = [];
+  if (p1 && p2) {
+    try {
+      ratings = await applyOutcome({ matchId: match.id, p1, p2, outcome });
+    } catch (error) {
+      console.error(`[match ${match.id}] rating update failed:`, error);
+    }
+  }
+
+  toMatch(match, "match.end", {
+    matchId: match.id,
+    outcome,
+    ratings,
+    elapsedMs: Math.round(Math.max(match.elapsedFor("p1"), match.elapsedFor("p2"))),
+  });
+}
+
 /* ── Match creation ───────────────────────────────────────────────────── */
 
 async function createMatch(a: Identity, b: Identity): Promise<void> {
@@ -116,13 +322,37 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
     return;
   }
 
+  /* Rating snapshots are taken NOW, before a single keystroke.
+
+     §6.7 counts the delta up on the victory screen, and that delta must belong
+     to this match. Reading the rating back at the end would pick up any other
+     match that resolved in between — rare today, routine the moment a player
+     has two tabs or a rematch fires quickly. */
+  const [p1Snapshot, p2Snapshot] = await Promise.all([snapshot(a.userId), snapshot(b.userId)]);
+
   const id = randomUUID();
-  const match = new LiveMatch({
+  const problemRow = problem;
+  const match: LiveMatch = new LiveMatch({
     id,
     players: { p1: await cardFor(a), p2: await cardFor(b) },
     problem,
-    emit: (event, payload) => toMatch(match, event, payload),
+    emitTo: (side, event, payload) => emitToSide(match, side, event, payload),
+    emit: (event, payload) => {
+      toMatch(match, event, payload);
+      // The bot starts when the match actually goes live, not when it is
+      // created — the countdown has to finish first or its clock is wrong.
+    },
+    /* The Match row is written HERE, and awaited before LIVE.
+
+       Not at queue pop: most accept windows are abandoned in development and
+       that would leave a PENDING row behind for each one. Not at settlement,
+       which is where this started and which was wrong — Submission.matchId is
+       a foreign key, so a submission during a live match violated it. Going
+       LIVE is the first moment the match is real and the last moment before
+       anything can reference it. */
+    onBeforeLive: (): Promise<void> => persistMatch(match, problemRow.id),
     onFinished: (finished) => {
+      void settleMatch(finished, p1Snapshot, p2Snapshot, problemRow.id);
       matches.delete(finished.id);
       userMatch.delete(finished.players.p1.userId);
       userMatch.delete(finished.players.p2.userId);
@@ -155,28 +385,33 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
 
 function stopQueueTimers(session: Session): void {
   if (session.queueTimer) clearInterval(session.queueTimer);
-  if (session.botTimer) clearTimeout(session.botTimer);
   session.queueTimer = null;
-  session.botTimer = null;
   session.queuedAt = null;
 }
 
-async function botIdentity(): Promise<Identity | null> {
-  const bot = await prisma.user.findFirst({
-    where: { handle: { startsWith: "bot_" } },
-    select: { id: true, handle: true, rating: true, ratingDev: true, volatility: true },
-  });
-  if (!bot) return null;
-  return {
-    userId: bot.id,
-    handle: bot.handle,
-    rating: bot.rating,
-    ratingDeviation: bot.ratingDev,
-    volatility: bot.volatility,
-    isBot: true,
-  };
-}
 
+/**
+ * Queue until a human arrives.
+ *
+ * THE EMPTY QUEUE, DECIDED RATHER THAN LEFT IMPLICIT.
+ *
+ * With the bot fallback gone there is no automatic ending, so this is the
+ * choice: **the queue never expires, but it stops pretending.**
+ *
+ * Three options were on the table. A hard timeout is wrong because it ejects a
+ * player from a queue they may still want to be in, and nothing about an empty
+ * pool makes waiting invalid — the cost of a queued socket is nil. Queueing
+ * silently forever is worse: the radar sweep in §6.1 encodes "you are searching
+ * right now", and while that stays literally true, letting it spin against an
+ * empty pool implies a match is coming when nothing can produce one. That is
+ * the version the player rightly hates.
+ *
+ * So the queue stays open indefinitely and the *claim* changes. `alone` says
+ * whether this player is the only one in the pool; the client drops the radar
+ * and states the fact once it has held for a while (see QueueCard). Nothing is
+ * cancelled, nothing is invented, and the interface stops performing a search
+ * it cannot win.
+ */
 async function joinQueue(session: Session): Promise<void> {
   if (session.matchId) return;
   session.queuedAt = monotonicMs();
@@ -212,30 +447,26 @@ async function joinQueue(session: Session): Promise<void> {
       return;
     }
 
+    const inQueue = await matchmaker.size();
     toUser(session.identity.userId, "queue.status", {
       elapsedMs: elapsed,
       ratingBand: [session.identity.rating - half, session.identity.rating + half],
       widening,
-      inQueue: await matchmaker.size(),
+      inQueue,
+      // Authoritative, because the client must never have to infer it.
+      alone: inQueue <= 1,
     });
   };
 
   await attempt();
   session.queueTimer = setInterval(() => void attempt(), 2000);
 
-  // §6.1: a pool of one is our actual situation. Fall back to the bot rather
-  // than leaving a solo developer staring at a spinner forever.
-  session.botTimer = setTimeout(() => {
-    void (async () => {
-      if (session.matchId || session.queuedAt === null) return;
-      const bot = await botIdentity();
-      if (!bot || bot.userId === session.identity.userId) return;
-      await matchmaker.leave(session.identity.userId);
-      stopQueueTimers(session);
-      console.log(`[gateway] ${session.identity.handle} -> bot fallback after ${BOT_AFTER_MS}ms`);
-      await createMatch(session.identity, bot);
-    })();
-  }, BOT_AFTER_MS);
+  /* NO BOT FALLBACK. 2B-4 is human vs human.
+
+     The bot's foundations — the solve model and rating gate in
+     packages/core/src/bot.ts, the 20 verified solutions in
+     packages/db/src/solutions.ts — are deliberately left in place and unused.
+     They are correct and re-deriving them later would be waste. */
 }
 
 async function leaveQueue(session: Session): Promise<void> {
@@ -309,7 +540,6 @@ io.on("connection", (socket: Socket) => {
       sockets: new Set(),
       queuedAt: null,
       queueTimer: null,
-      botTimer: null,
       matchId: userMatch.get(userId) ?? null,
     };
     sessions.set(userId, session);
@@ -354,10 +584,55 @@ io.on("connection", (socket: Socket) => {
     }
     // Idempotent in the state machine: a double-click cannot start it twice.
     void match.accept(side);
+  });
 
-    // The bot accepts immediately so a solo developer is never blocked.
-    const other: Side = side === "p1" ? "p2" : "p1";
-    if (match.players[other].isBot) void match.accept(other);
+  socket.on("code.submit", (raw) => {
+    /* THE RECEIPT STAMP, TAKEN FIRST (§6.9).
+
+       Before validation, before the database, before the job is queued. It is
+       the sole authority for win order and for the elapsed-time tiebreak, and
+       anything that happens between arrival and stamping is time the player is
+       charged for through no fault of their own. */
+    const receiptMs = receipt();
+
+    const parsed = CodeSubmitSchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      socket.emit("error", { code: "BAD_PAYLOAD", message: "code.submit" });
+      return;
+    }
+    const match = matches.get(parsed.data.matchId);
+    const side = match?.sideOf(userId);
+    if (!match || !side) {
+      socket.emit("error", { code: "NO_MATCH", message: "unknown match" });
+      return;
+    }
+    if (match.state !== "LIVE" && match.state !== "JUDGING") {
+      socket.emit("error", { code: "NOT_LIVE", message: `cannot submit in ${match.state}` });
+      return;
+    }
+    // §6.8b: unlimited attempts, one outstanding at a time. The lock IS the
+    // cost of a wrong answer — no invented time penalty, and it caps judge
+    // load at two concurrent jobs per match however hard anyone mashes.
+    if (isInFlight(match.id, userId)) {
+      socket.emit("error", { code: "IN_FLIGHT", message: "a submission is already being judged" });
+      return;
+    }
+
+    void runSubmission(match, side, userId, parsed.data.language, parsed.data.source, receiptMs);
+  });
+
+  socket.on("pulse.report", (raw) => {
+    const parsed = PulseReportSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const match = matches.get(parsed.data.matchId);
+    const side = match?.sideOf(userId);
+    if (!match || !side) return;
+    // Rate only, never content (§6.4). Relayed to the opponent, not echoed.
+    emitToSide(match, side === "p1" ? "p2" : "p1", "opponent.pulse", {
+      matchId: match.id,
+      side,
+      keys: parsed.data.keys,
+    });
   });
 
   socket.on("disconnect", () => {
@@ -389,5 +664,5 @@ process.on("uncaughtException", (e) => console.error("[gateway] uncaught (contin
 process.on("unhandledRejection", (e) => console.error("[gateway] unhandled (continuing):", e));
 
 http.listen(PORT, () => {
-  console.log(`[gateway] listening on :${PORT}, origin ${WEB_ORIGIN}, bot after ${BOT_AFTER_MS}ms`);
+  console.log(`[gateway] listening on :${PORT}, origin ${WEB_ORIGIN}`);
 });

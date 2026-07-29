@@ -33,7 +33,16 @@ export type MatchEvent =
   | { type: "ACCEPT_TIMEOUT" }
   | { type: "COUNTDOWN_COMPLETE" }
   | { type: "SUBMISSION_RECEIVED"; submissionId: string; side: "p1" | "p2"; receiptMs: number }
-  | { type: "VERDICT"; submissionId: string; accepted: boolean }
+  | {
+      type: "VERDICT";
+      submissionId: string;
+      accepted: boolean;
+      /** §6.9: a verdict we failed to produce — a dead worker, a lost Redis
+       *  message, a container that died for reasons that are not the player's
+       *  code. It is OUR failure, so it voids the match rather than counting
+       *  as a wrong answer. */
+      internalError?: boolean;
+    }
   | { type: "CLOCK_EXPIRED" }
   | { type: "PLAYER_DISCONNECTED"; side: "p1" | "p2" }
   | { type: "PLAYER_RECONNECTED"; side: "p1" | "p2" }
@@ -227,6 +236,20 @@ export function transition(context: MatchContext, event: MatchEvent): Transition
         return reject(next, `verdict for unknown submission ${event.submissionId}`);
       }
       next.outstanding.delete(event.submissionId);
+
+      /* A lost verdict is a no-contest, not a loss (§6.9).
+
+         The player cannot tell our fault from theirs, and losing rating
+         because our infrastructure failed is indefensible. This is the ONLY
+         path to VOID, which is what keeps VOID meaningful — everything
+         routine is CANCELED. It ends the match immediately: there is nothing
+         to wait for, because the result can no longer be trusted. */
+      if (event.internalError) {
+        next.state = "ENDED";
+        next.outcome = { kind: "VOID", reason: "INTERNAL_ERROR" };
+        return { ok: true, context: next, changed: true };
+      }
+
       if (event.accepted) {
         next.solved.push({
           submissionId: event.submissionId,

@@ -2,126 +2,161 @@
 
 ## SESSION STOP — read this first
 
-**Both browser bugs had one root cause, and it was mine.** Fixed, with a positive control proving
-both the cause and the check. Working tree clean.
+**Phase 2B-4 is built and verified. Human vs human, no bot.** Working tree clean.
 
-### Root cause: `next build` and `next dev` shared `.next`
+### The VOID you asked about was not a LIVE match resolving
 
-Last session I ran `pnpm build` as part of a regression sweep **while the dev server was running**.
-`next build` replaced the chunks and the asset manifest that the running dev process was still
-serving from its in-memory manifest. From then on:
+The match never started. The replay log for that match reads
+`ACCEPTING -> ABANDONED (ACCEPT_TIMEOUT)` at +12010ms, outcome `VOID/NEVER_STARTED`, problem
+`longest-common-prefix` rated **1100** — which matches your log line exactly, and both accounts were
+1200 at RD 350, matching "same rating, no widening needed".
 
-- every route returned **200**, because the HTML document renders server-side and needs no assets;
-- every `/_next/static/*` URL that document referenced **404'd**.
+**Cause: `QueuePop` is `fixed inset-0 z-50` with no `pointer-events-none`, and it renders exactly
+when the Accept button is on screen behind it.** The button was covered. Neither of you could accept,
+so the window timed out. You saw the plates collide and the VS badge because that is the cinematic;
+the countdown and GO you remember were the pop's own sequence, not `match.countdown` — the log has
+neither. The accept control now lives **inside** the cinematic, where §6.2 already puts the accept
+pips, with the window counting down beside it.
 
-So the page arrived as correct unstyled HTML with a dead React runtime. That is *both* reported bugs:
+**And you were right that it was also a state machine problem.** `VOID` was overloaded. §6.9 gives it
+one meaning — our infrastructure failed — and folding "nobody accepted" and "both disconnected" into
+it made a genuine no-contest indistinguishable from an abandoned queue pop, which destroys the one
+signal it carries. Routine cancellation is now `CANCELED`; `VOID` takes only `INTERNAL_ERROR`. A test
+asserts no ordinary path can reach `VOID`, and a browser test asserts the same through the UI.
 
-- **Bug 1, no CSS anywhere.** `layout.css` 404'd. Global, every route, exactly as described.
-- **Bug 2, registration silently fails.** `main-app.js`, `app-pages-internals.js` and `polyfills.js`
-  404'd, so React never hydrated, so `onSubmit` was never attached, so the browser did what an
-  unhandled form does by default: **a GET to the current URL with every field in the query string.**
-  The old log proves it — `GET /register?handle=utpal+&email=…&password=…`. The page reloaded, which
-  looks precisely like "nothing happened".
+**A related gap that fix exposed:** an `INTERNAL_ERROR` verdict was being treated as an ordinary
+wrong answer, so a lost verdict cost a player the match. It now ends the match `VOID` immediately,
+with no rating change — including when the other side already had an accepted submission. If we
+cannot vouch for the match, we do not hand anyone a win from it.
 
-**Proven, not inferred.** I re-ran `pnpm build` against the live dev server and the smoke test went
-from 5/5 to 0/5 with the exact reported symptoms; cleaning `.next` and restarting restored it.
+### Playwright: nothing had landed, and I said so
 
-**Your case-sensitivity hypothesis was sound but is ruled out.** All 127 relative import specifiers
-resolve on ext4, and only two `.css` files exist — `apps/web/app/globals.css` and
-`packages/ui/tokens.css` — both referenced with exact case. Tailwind v4 was compiling correctly the
-whole time: the served stylesheet is 49 KB, carries `--ink`, `--p1`, `--p2`, `--ff-display`,
-`.bg-ink`, `.text-fg` and `clip-path`, and contains no `bg-red-500`, which confirms the `@theme`
-reset applied rather than a default theme being served.
+No authorization had reached me — I asked at the end of the previous turn and your reply was the next
+message. So I did the two you named first.
 
-**The collision is now structurally impossible.** `next.config.ts` takes `distDir` from
-`NEXT_DIST_DIR`, and the build and start scripts set it to `.next-build`. Verified: a full
-production build now runs with the dev server up and smoke stays 5/5.
+- **`e2e/fonts.spec.ts`** — every font file served with real bytes, all three §4 families actually
+  renderable, the `h1` genuinely resolving to the display face. This caught **my own** bad assertion
+  first: it demanded the families be `loaded` on the landing page, but fonts load lazily and nothing
+  there uses `--ff-code`, so JetBrains Mono was legitimately unloaded. It now forces the fetch with
+  `document.fonts.load()`, which distinguishes "not needed yet" from "not there".
+- **`e2e/signin.spec.ts`** — registration typed into real fields and submitted with a real click,
+  asserting the redirect, that no credential ever appears in a URL, that the session survives a
+  reload and mints a socket ticket, and that a wrong password produces a visible error.
 
-### Two things you should know, unprompted
+### The bot is held. Its foundations are untouched.
 
-- **Your password went into a URL.** The unhydrated form GET put it in the address bar, browser
-  history and the dev server log. The log has since rotated and the value is gone from disk, but
-  **it is still in your browser history — change it if you reuse it anywhere.**
-- **No account was ever created.** The database holds only the three seeded users, which is
-  consistent with the diagnosis: the GET never reached the POST handler.
+No live wiring, no `BOT` chip, no `FakeTypist` integration — all reverted, including the chip I had
+already added to `Nameplate`, `QueuePop` and `MatchHUD`. What stays, built and unused:
+`packages/core/src/bot.ts` (Elo-expectation solve model, lognormal solve time, RD > 100 rating gate)
+and `packages/db/src/solutions.ts` (20 solutions, still verified by `pnpm db:solutions`).
 
-### The fixes
+### 1. The empty queue — what I chose
 
-- **`distDir` split**, above. The cause, removed rather than cleaned up.
-- **`apps/web/smoke.test.ts` — 5 checks.** Fetches every route, extracts every stylesheet and script
-  the browser *would* fetch, and demands each returns 200 with real content; asserts the CSS carries
-  our tokens and not Tailwind's defaults; asserts the auth forms declare `method="post"` and an
-  `action`. Positive control performed: it fails 5/5 on a deliberately re-broken build.
-- **The form can no longer degrade into a credential leak.** `method="post"` and
-  `action="/api/auth/{mode}"` are now on the form, and the route handlers accept form encoding as
-  well as JSON, answering a form post with a 303 to `/play` or back to the form with `?error=`.
-  **Without JS the form now works instead of failing silently, and the password stays in the body.**
-  Two new sign-in cases cover it (14/14).
-- **Landing page copy** updated from "Phase 0 · Foundation — nothing is playable yet" to Phase 2B,
-  with a `/play` entry added.
+**The queue never expires, but it stops pretending.**
 
-### Bug 3, first half: I could not reproduce it
+A hard timeout is wrong: it ejects a player from a queue they may still want to be in, and nothing
+about an empty pool makes waiting invalid — a queued socket costs nothing. Queueing silently forever
+is worse, and it is the version you named: §5 only permits a loop that encodes live state, and the
+radar sweeping over a provably empty pool implies a match is coming when nothing can produce one.
 
-`/register` renders `<h1>Create account</h1>`, a handle field, and a link reading "Sign in" → `/login`.
-`/login` renders `<h1>Sign in</h1>` and "Create one" → `/register`. Both correct, verified against
-the served HTML. What you describe — "Sign in" copy with a "Create one" link to `/register` — is
-exactly `/login`. With no stylesheet there is no type hierarchy, so the heading and the link text
-render identically and the two pages are genuinely hard to tell apart. **Please re-check now that
-CSS loads**; if it still happens I need the URL bar contents, because the markup says it cannot.
+So the queue stays open and the **claim** changes. `queue.status` now carries an authoritative
+`alone`. Once it has held for 20s the card drops the radar and says:
 
-### Verified this session
+> **Queue is empty** — Nobody else is queuing. You are still in the queue and will be matched the
+> moment someone joins — there is just no one to find right now.  ·  *Leave queue*
 
-Smoke 5/5 (plus a 0/5 positive control) · sign-in 14/14 · matchmaking 10/10 · core 48/48 ·
-typecheck 7/7 · production build clean · every route 200 with all assets 200.
+Nothing is cancelled, nothing is invented, and the sweep stops the instant it would become a lie.
+A browser test asserts all four of those strings.
 
-**Still unverified: everything that requires a human eye.** See the list below — it is the answer to
-"what else shares this property", and it is the thing to read before 2B-4.
+### 2. `/dev/sparring` — a second player on command
 
-### Verified earlier — do not re-litigate
+Not a bot, and the file says so at the top. No solve model, no rating integrity, no labelling, no
+human-like typing. One identity **per tab** — a single shared account made two tabs fight over one
+session, because the gateway keys everything on user id — minted through
+`/api/dev/sparring-ticket`, which 404s when `NODE_ENV=production`.
 
-- 26 judge containment tests incl. the `INTERNAL_ERROR` invariant class, which caught a live
-  match-voider (lone surrogate → `UnicodeEncodeError` → internal error → VOID match).
-- Glicko-2 against Glickman's published example; §6.9 receipt-order fairness; event log ordering
-  surviving a backward clock step; 50 concurrent joins → 25 disjoint matches.
-- Gateway end to end headlessly: authenticate, queue, pair after the band widens, accept
-  idempotently, count down, reach LIVE, gapless replay log on disk. Reconnection with 45s grace.
-- 101 seed cases agree with their reference solutions; 20/20 bot solutions ACCEPTED.
-- Submission persistence, the match screen, the live bot, Glicko on a real outcome and the §6.7b
-  hold screen remain **2B-4**, unstarted.
+Controls: join / leave queue · accept · **Correct (reference)** · wrong answer · time limit · paste
+anything · drop socket · reconnect. The reference button pulls the same reviewed solution
+`pnpm db:solutions` verifies, so a sparring win is a real win rather than a fixture.
+
+**How to stage the §6.7b hold**, which is the one you flagged as hard:
+
+1. Open `/play` in your window and `/dev/sparring` in another. Queue in both.
+2. Once live, click **Time limit** in the sparring tab *first* — it takes the full limit on every
+   test, so its verdict lands last.
+3. Submit a correct solution from your own window *second*.
+
+The sparring side has the earlier receipt and the later verdict, so the hold renders and §6.9's rule
+that receipt order decides is exercised rather than assumed. **For receipt order between two passes:**
+click *Correct (reference)* in both windows a second apart — both are ACCEPTED, and the earlier
+receipt must win regardless of which verdict returns first.
+
+`Drop socket` is how to see the disconnected nameplate and the 45s grace countdown without closing a
+tab.
+
+### What 2B-4 ships
+
+- **Submissions persisted with the §6.9 receipt stamp** taken at the gateway *before* the job is
+  queued — before validation, before the database. `Submission.receiptMs` is a `BigInt` from the
+  monotonic clock; `queueWaitMs` and `judgeMs` are recorded as diagnostics and are never inputs.
+- **The match screen** — `MatchHUD`, Monaco, the problem panel, and Phase 1's cinematics driven by
+  real events: cells resolving one at a time, compile pulse, clutch edge above 80%, near-miss
+  shatter, verdict panel, the §6.7b hold, victory/defeat with the real rating delta. Draw, canceled
+  and void get their own screen rather than borrowing the victory cinematic.
+- **§6.8b in-flight lock** — unlimited attempts, one outstanding submission, and the button says
+  "Judging…" rather than going quietly dead.
+- **Glicko-2 on real outcomes**, with both pre-match ratings snapshotted at match creation so the
+  §6.7 delta belongs to *this* match.
+- **Three bugs found by running it**, all fixed: a foreign-key violation because the `Match` row was
+  written at settlement while `Submission.matchId` references it; the same row then written
+  fire-and-forget, which a fast submit beat (it is now awaited before the match goes LIVE); and
+  `match.found` broadcast without the per-side `you`, so the accept control could not render at all.
+
+### Verified this session, by running it
+
+Two-player headless probe (`pnpm probe:match`): two humans pair with no bot, per-test results stream
+individually and in order, the hold holds and is ended by the result, **receipt order decides the win**
+(A submitted 700ms earlier and won on an equal race), and Glicko moved both sides ±162.
+
+`e2e` 10/10 in a real browser · core 51/51 · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · phase
+guard 2/2 · typecheck 7/7 · production build clean.
+
+**Not verified: how any of it looks or feels.** The browser tests prove the flow works; they say
+nothing about whether the match screen reads as §2 wants. That is still your eye.
 
 ### Bringing the stack back up, in order
 
 ```bash
 cd ~/1v1.code
-docker compose up -d                     # Postgres 17 + Redis 7, wait for healthy
+docker compose up -d
 set -a && . ./.env && set +a
 
 pnpm install                             # only if deps changed
-pnpm db:push && pnpm db:seed             # schema + 20 problems (idempotent)
+pnpm db:push && pnpm db:seed
 pnpm judge:images                        # only if runner.py or a Dockerfile changed
 
-nohup node --experimental-strip-types apps/judge/src/index.ts   > /tmp/worker.log  2>&1 &
-nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.log 2>&1 &
-nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 &
+setsid nohup node --experimental-strip-types apps/judge/src/index.ts   > /tmp/worker.log  2>&1 < /dev/null &
+setsid nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.log 2>&1 < /dev/null &
+setsid nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 < /dev/null &
 
-pnpm db:users                            # idempotent; does NOT rotate tokens
-pnpm test:smoke                          # RUN THIS FIRST — asset integrity, ~10s
+pnpm test:smoke                          # RUN FIRST — asset integrity, ~10s
 ```
 
-**`pnpm test:smoke` before any browser verification.** It is ten seconds and it is the difference
-between debugging the product and debugging the build.
+**The judge worker is easy to forget and its absence looks like a product bug.** With it down, every
+submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which now correctly voids the match —
+so a run of voids means check `/tmp/worker.log` before suspecting anything else.
 
-**To play: http://localhost:3000/register.** Two windows, one normal and one private. Seeded logins
-are `arjun@example.com` / `rohan@example.com`, password `dev-password-1v1`. Nothing to paste.
+**To play: two windows.** `/play` signed in, and `/dev/sparring` for the opponent. There is no bot,
+so a single window will sit in an empty queue and say so.
 
-Routes: `/`, `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`, `/dev/kitchen-sink`. Gateway
-on `:4000` (no `/healthz` — probe `/socket.io/?EIO=4&transport=polling`).
+Suites: `pnpm test:smoke` · `pnpm test:e2e` (browser) · `pnpm probe:match` (two-player, headless) ·
+`pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` · `pnpm db:solutions` ·
+`node --experimental-strip-types --test packages/core/src/*.test.ts` ·
+`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`
 
-Suites: `pnpm test:smoke` · `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` ·
-`pnpm db:solutions` (worker up) · `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
-`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`.
-
-**Shell note:** `pkill -f` has matched its own shell twice here. Kill by PID from `ps -eo pid,cmd`.
+**Shell note:** `pkill -f` has matched its own shell repeatedly here. Kill by PID from
+`ps -eo pid,cmd`, and start long-lived processes with `setsid … < /dev/null & disown` so a later kill
+cannot walk back up the process group.
 
 
 ## What class of check would have caught this — and what is still eye-only

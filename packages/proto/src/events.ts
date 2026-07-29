@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LanguageSchema } from "./judge.ts";
 
 /* ============================================================================
    Socket protocol (§10)
@@ -41,10 +42,28 @@ export const QueueJoinSchema = z.object({ mode: z.enum(["RANKED", "CASUAL"]).def
 export const QueueLeaveSchema = z.object({});
 export const MatchAcceptSchema = z.object({ matchId: z.string().min(1) });
 
+/** 256 KB, matching the judge's own protocol cap. */
+export const MAX_SOURCE_BYTES = 256 * 1024;
+
+export const CodeSubmitSchema = z.object({
+  matchId: z.string().min(1),
+  language: LanguageSchema,
+  source: z.string().max(MAX_SOURCE_BYTES),
+});
+
+/** Opponent keystroke *rate* only — never a character of code (§6.4). */
+export const PulseReportSchema = z.object({
+  matchId: z.string().min(1),
+  /** Keystrokes in the last sampling window. */
+  keys: z.number().int().nonnegative().max(10_000),
+});
+
 export interface ClientToServer {
   "queue.join": (payload: z.infer<typeof QueueJoinSchema>) => void;
   "queue.leave": (payload: z.infer<typeof QueueLeaveSchema>) => void;
   "match.accept": (payload: z.infer<typeof MatchAcceptSchema>) => void;
+  "code.submit": (payload: z.infer<typeof CodeSubmitSchema>) => void;
+  "pulse.report": (payload: z.infer<typeof PulseReportSchema>) => void;
 }
 
 /* ── server → client ──────────────────────────────────────────────────── */
@@ -56,6 +75,10 @@ export const QueueStatusSchema = z.object({
   /** False once the band has hit its ceiling — the UI must stop claiming to widen. */
   widening: z.boolean(),
   inQueue: z.number().int().nonnegative(),
+  /** True when nobody else is in the pool. With no bot fallback (2B-4) this is
+   *  what lets the client stop performing a search it cannot win, rather than
+   *  spinning a radar sweep against an empty queue. */
+  alone: z.boolean().default(false),
 });
 
 export const MatchFoundSchema = z.object({
@@ -108,8 +131,20 @@ export const OpponentPresenceSchema = z.object({
   graceRemainingMs: z.number().int().nonnegative(),
 });
 
+/** Sent with match.end so the victory screen can count the delta up (§6.7). */
+export const RatingDeltaSchema = z.object({
+  side: SideSchema,
+  before: z.number().int(),
+  after: z.number().int(),
+});
+
 export const MatchEndSchema = z.object({
   matchId: z.string(),
+  /** Empty when nothing was rated — a bot match above the RD gate, a guest, or
+   *  any CANCELED/VOID ending. The victory screen shows no delta then. */
+  ratings: z.array(RatingDeltaSchema).default([]),
+  /** Final elapsed per side, for the §6.8 tiebreak and the summary. */
+  elapsedMs: z.number().int().nonnegative().default(0),
   outcome: z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("WIN"),
@@ -140,6 +175,68 @@ export const MatchResyncSchema = z.object({
   problem: MatchStartSchema.shape.problem.nullable(),
 });
 
+/* ── submission stream (§6.6) ──────────────────────────────────────────
+   Per-test results arrive individually and are never batched: §6.6's
+   sequential reveal is the drama, and batching would delete it. */
+
+export const VerdictNameSchema = z.enum([
+  "PENDING", "RUNNING", "ACCEPTED", "WRONG_ANSWER", "TIME_LIMIT", "MEMORY_LIMIT",
+  "RUNTIME_ERROR", "COMPILE_ERROR", "COMPILE_TIMEOUT", "COMPILE_MEMORY",
+  "OUTPUT_LIMIT", "INTERNAL_ERROR",
+]);
+
+export const SubmissionAckSchema = z.object({
+  matchId: z.string(),
+  submissionId: z.string(),
+  side: SideSchema,
+  total: z.number().int().nonnegative(),
+});
+
+export const TestResultSchema = z.object({
+  matchId: z.string(),
+  submissionId: z.string(),
+  side: SideSchema,
+  ordinal: z.number().int(),
+  verdict: VerdictNameSchema,
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
+export const SubmissionVerdictSchema = z.object({
+  matchId: z.string(),
+  submissionId: z.string(),
+  side: SideSchema,
+  verdict: VerdictNameSchema,
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  failedAt: z.number().int().nullable(),
+  message: z.string().nullable(),
+});
+
+/** §6.7b: your verdict is in, theirs is not. The hold is a beat, not a spinner. */
+export const JudgingHoldSchema = z.object({
+  matchId: z.string(),
+  /** Sides still awaiting a verdict. Empty means the hold is over. */
+  outstanding: z.array(SideSchema),
+});
+
+/** §6.4 pulse line — rate only, never content. */
+export const OpponentPulseSchema = z.object({
+  matchId: z.string(),
+  side: SideSchema,
+  keys: z.number().int().nonnegative(),
+});
+
+/** §6.5 compile pulse — a shockwave across that player's half of the HUD. */
+export const OpponentStatusSchema = z.object({
+  matchId: z.string(),
+  side: SideSchema,
+  status: z.enum(["typing", "compiling", "running", "submitted", "idle"]),
+  /** Filled cells, for the opponent's test bar and the clutch threshold. */
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export interface ServerToClient {
@@ -153,6 +250,12 @@ export interface ServerToClient {
   "match.presence": (payload: z.infer<typeof OpponentPresenceSchema>) => void;
   "match.resync": (payload: z.infer<typeof MatchResyncSchema>) => void;
   "match.end": (payload: z.infer<typeof MatchEndSchema>) => void;
+  "submission.ack": (payload: z.infer<typeof SubmissionAckSchema>) => void;
+  "test.result": (payload: z.infer<typeof TestResultSchema>) => void;
+  "submission.verdict": (payload: z.infer<typeof SubmissionVerdictSchema>) => void;
+  "match.judging": (payload: z.infer<typeof JudgingHoldSchema>) => void;
+  "opponent.pulse": (payload: z.infer<typeof OpponentPulseSchema>) => void;
+  "opponent.status": (payload: z.infer<typeof OpponentStatusSchema>) => void;
   error: (payload: z.infer<typeof ErrorSchema>) => void;
 }
 
@@ -170,4 +273,7 @@ export const LOG_EVENT_TYPES = [
   "submission.verdict",
   "match.ended",
 ] as const;
+export type RatingDelta = z.infer<typeof RatingDeltaSchema>;
+export type MatchOutcomeWire = z.infer<typeof MatchEndSchema>["outcome"];
+export type VerdictName = z.infer<typeof VerdictNameSchema>;
 export type LogEventType = (typeof LOG_EVENT_TYPES)[number];

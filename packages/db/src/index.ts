@@ -18,6 +18,8 @@ export {
   type ValidationResult,
   type Validator,
 } from "./validators.ts";
+// The bot submits these through the real judge (§8), so the gateway needs them.
+export { SOLUTIONS, SOLVED_SLUGS, solutionFor } from "./solutions.ts";
 
 // Next's dev server hot-reloads modules, which would otherwise open a new pool
 // on every edit until Postgres refuses connections.

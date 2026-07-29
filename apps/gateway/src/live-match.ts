@@ -49,6 +49,8 @@ export interface LiveMatchPlayers {
 }
 
 export interface MatchProblem {
+  /** Database id — submissions load test cases by it. */
+  id: string;
   slug: string;
   title: string;
   rating: number;
@@ -57,6 +59,7 @@ export interface MatchProblem {
 }
 
 type Emit = (event: string, payload: unknown) => void;
+type EmitTo = (side: Side, event: string, payload: unknown) => void;
 
 export class LiveMatch {
   readonly id: string;
@@ -67,6 +70,8 @@ export class LiveMatch {
   private ctx: MatchContext = initialContext();
   private readonly log: ReplayLog;
   private readonly emit: Emit;
+  private readonly emitTo: EmitTo;
+  private readonly onBeforeLive: (() => Promise<void>) | null;
   private readonly onFinished: (match: LiveMatch) => void;
 
   private clock: Stopwatch | null = null;
@@ -79,6 +84,11 @@ export class LiveMatch {
     players: LiveMatchPlayers;
     problem: MatchProblem;
     emit: Emit;
+    emitTo: EmitTo;
+    /** Awaited before the match goes LIVE. Anything a submission depends on
+     *  must be durable by then, because a player can submit the instant they
+     *  see GO. */
+    onBeforeLive?: () => Promise<void>;
     onFinished: (match: LiveMatch) => void;
     durationMs?: number;
   }) {
@@ -86,6 +96,8 @@ export class LiveMatch {
     this.players = opts.players;
     this.problem = opts.problem;
     this.emit = opts.emit;
+    this.emitTo = opts.emitTo;
+    this.onBeforeLive = opts.onBeforeLive ?? null;
     this.onFinished = opts.onFinished;
     this.durationMs = opts.durationMs ?? DEFAULT_MATCH_MS;
     this.log = new ReplayLog(this.id);
@@ -155,7 +167,13 @@ export class LiveMatch {
       case "ACCEPTING": {
         this.acceptDeadline = new Deadline(ACCEPT_MS);
         this.later(() => void this.apply({ type: "ACCEPT_TIMEOUT" }), ACCEPT_MS);
-        this.emit("match.found", this.foundPayload());
+        /* Sent PER SIDE, because `you` is the one field that differs between
+           the two recipients — and the accept control cannot render without
+           it. Broadcasting one payload left `you` undefined on both clients,
+           so no accept button appeared at all and every match timed out. */
+        for (const side of ["p1", "p2"] as const) {
+          this.emitTo(side, "match.found", { ...this.foundPayload(), you: side });
+        }
         break;
       }
       case "COUNTDOWN":
@@ -163,6 +181,15 @@ export class LiveMatch {
         break;
       case "LIVE":
         if (!this.clock) {
+          /* AWAITED, not fire-and-forget.
+
+             The Match row has to exist before anyone can submit, because
+             Submission.matchId is a foreign key. Writing it alongside the
+             transition looked fine and was a race: a player who submits within
+             milliseconds of GO beat the INSERT, the submission threw, and the
+             match voided. The clock deliberately starts after this. */
+          if (this.onBeforeLive) await this.onBeforeLive();
+
           this.clock = new Stopwatch();
           await this.log.record("match.started", {
             problem: this.problem.slug,
@@ -299,6 +326,61 @@ export class LiveMatch {
     return this.grace.get(side)?.deadline.remaining() ?? 0;
   }
 
+  /* ── Submissions (§6.9) ─────────────────────────────────────────────── */
+
+  /** Elapsed match time at the moment a side's accepted submission landed. */
+  private solvedElapsed = new Map<Side, number>();
+
+  elapsedFor(side: Side): number {
+    return this.solvedElapsed.get(side) ?? this.clock?.elapsed() ?? 0;
+  }
+
+  /**
+   * Records a submission against its RECEIPT stamp, not its verdict time. The
+   * match enters JUDGING and holds there until every outstanding submission
+   * resolves — ending on first-verdict would hand the match to whichever job
+   * the queue happened to finish first, which is the queue's decision and not
+   * the players' (§6.9).
+   */
+  async submissionReceived(
+    side: Side,
+    submissionId: string,
+    receiptMs: number,
+  ): Promise<boolean> {
+    const accepted = await this.apply({
+      type: "SUBMISSION_RECEIVED",
+      submissionId,
+      side,
+      receiptMs,
+    });
+    await this.log.record("submission.received", { side, submissionId, receiptMs });
+    this.emitJudging();
+    return accepted || this.ctx.outstanding.has(submissionId);
+  }
+
+  async verdictArrived(
+    side: Side,
+    submissionId: string,
+    isAccepted: boolean,
+    internalError = false,
+  ): Promise<void> {
+    if (isAccepted) this.solvedElapsed.set(side, this.clock?.elapsed() ?? 0);
+    await this.apply({ type: "VERDICT", submissionId, accepted: isAccepted, internalError });
+    await this.log.record("submission.verdict", {
+      side,
+      submissionId,
+      accepted: isAccepted,
+      internalError,
+    });
+    if (!isTerminal(this.ctx.state)) this.emitJudging();
+  }
+
+  /** Which sides still owe a verdict — drives the §6.7b hold screen. */
+  private emitJudging(): void {
+    const outstanding = [...this.ctx.outstanding.values()].map((s) => s.side);
+    this.emit("match.judging", { matchId: this.id, outstanding: [...new Set(outstanding)] });
+  }
+
   private async finish(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
@@ -310,10 +392,16 @@ export class LiveMatch {
     await this.log.record("match.ended", { outcome, elapsedMs: this.clock?.elapsed() ?? 0 });
     await this.log.close();
 
-    this.emit("match.end", { matchId: this.id, outcome });
     console.log(
       `[match ${this.id}] finished: ${outcome.kind} — log ${this.log.path} (${this.log.count} events)`,
     );
+    /* `match.end` is emitted by the settlement path, NOT here.
+
+       §6.7 counts a rating delta up on the victory screen, and the delta is
+       only known after Glicko has run. Emitting here as well would send the
+       screen a first `match.end` with no ratings and then a second one with
+       them, and the cinematic would either fire twice or fire without the
+       number that is the point of it. Settlement owns the ending. */
     this.onFinished(this);
   }
 
