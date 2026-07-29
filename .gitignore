@@ -19,3 +19,5 @@ Thumbs.db
 # Replay logs are match artefacts, not source.
 var/
 .next-build/
+test-results/
+playwright-report/

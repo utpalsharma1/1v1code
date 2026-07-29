@@ -3,6 +3,7 @@
 import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
+import { CURRENT_PHASE } from "@/lib/phase";
 import {
   Button,
   Card,
@@ -60,11 +61,14 @@ function Play() {
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [match, setMatch] = useState<{
     matchId: string;
+    you: Side;
     p1: PlayerCard;
     p2: PlayerCard;
     problemRating: number;
   } | null>(null);
   const [accepted, setAccepted] = useState({ p1: false, p2: false });
+  const [acceptDeadline, setAcceptDeadline] = useState<number | null>(null);
+  const [acceptRemainingMs, setAcceptRemainingMs] = useState<number | undefined>(undefined);
   const [beat, setBeat] = useState<3 | 2 | 1 | 0 | null>(null);
   const [problem, setProblem] = useState<{ title: string; rating: number } | null>(null);
   const [remainingMs, setRemainingMs] = useState(0);
@@ -147,6 +151,9 @@ function Play() {
     socket.on("match.found", (payload) => {
       setMatch(payload);
       setAccepted({ p1: false, p2: false });
+      // performance.now(), not Date.now() — §11 time discipline applies in the
+      // browser too, and this deadline drives a visible countdown.
+      setAcceptDeadline(performance.now() + payload.acceptMs);
       setPhase("found");
       note(`match found vs ${payload.p2.handle} — problem rated ${payload.problemRating}`);
     });
@@ -173,6 +180,7 @@ function Play() {
     socket.on("match.resync", (payload) => {
       setMatch({
         matchId: payload.matchId,
+        you: payload.you,
         p1: payload.p1,
         p2: payload.p2,
         problemRating: payload.problem?.rating ?? 0,
@@ -199,6 +207,19 @@ function Play() {
     };
   }, [note]);
 
+  // Ticks the accept window down for display. Stops the moment the window
+  // closes, so nothing loops without live state behind it (§5).
+  useEffect(() => {
+    if (phase !== "found" || acceptDeadline === null) {
+      setAcceptRemainingMs(undefined);
+      return;
+    }
+    const tick = () => setAcceptRemainingMs(Math.max(0, acceptDeadline - performance.now()));
+    tick();
+    const id = setInterval(tick, 200);
+    return () => clearInterval(id);
+  }, [phase, acceptDeadline]);
+
   const emit = (event: string, payload: unknown = {}) => socketRef.current?.emit(event, payload);
 
   if (authError?.startsWith("GATEWAY_UNREACHABLE")) {
@@ -224,9 +245,7 @@ function Play() {
       <main className="mx-auto max-w-2xl px-6 py-16">
         <Card title="Not signed in" tone="elevated">
           <p className="text-fg-dim text-13 leading-relaxed">
-            Sign in to play. Identity comes from a real session cookie issued by{" "}
-            <span className="tabular text-fg">/register</span> — there is no console step and no
-            cookie to paste.
+            Create an account to queue for a match. It takes a handle, an email and a password.
           </p>
           <div className="mt-4 flex gap-2">
             <a href="/register">
@@ -248,7 +267,7 @@ function Play() {
       <header className="flex items-baseline justify-between gap-4">
         <div>
           <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-            Phase 2B-2 · gateway
+            {CURRENT_PHASE.label}
           </p>
           <h1 className="font-display text-fg mt-1 text-34 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
             Play
@@ -287,17 +306,6 @@ function Play() {
           <p className="text-fg-faint mt-3 text-12">
             Band {queue.ratingBand[0]}–{queue.ratingBand[1]} · {queue.inQueue} in queue ·{" "}
             {queue.widening ? "widening" : "at ceiling"}
-          </p>
-        </div>
-      )}
-
-      {phase === "found" && match && (
-        <div className="flex flex-col gap-4">
-          <Button variant="solid" tone="player" onClick={() => emit("match.accept", { matchId: match.matchId })}>
-            Accept
-          </Button>
-          <p className="text-fg-dim text-13">
-            {accepted.p1 ? "P1 ready" : "P1 waiting"} · {accepted.p2 ? "P2 ready" : "P2 waiting"}
           </p>
         </div>
       )}
@@ -362,6 +370,9 @@ function Play() {
             }}
             head2head={match.p2.isBot ? "vs the bot" : "first meeting"}
             flashKey={1}
+            you={match.you}
+            acceptRemainingMs={acceptRemainingMs}
+            onAccept={() => emit("match.accept", { matchId: match.matchId })}
           />
         )}
       </AnimatePresence>

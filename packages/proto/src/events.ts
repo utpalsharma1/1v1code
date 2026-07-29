@@ -117,10 +117,13 @@ export const MatchEndSchema = z.object({
       reason: z.enum(["SOLVED", "FORFEIT", "OPPONENT_ABANDONED"]),
     }),
     z.object({ kind: z.literal("DRAW"), reason: z.literal("NOBODY_SOLVED") }),
+    // Routine, nobody's fault, no rating change.
     z.object({
-      kind: z.literal("VOID"),
+      kind: z.literal("CANCELED"),
       reason: z.enum(["BOTH_ABANDONED", "NEVER_STARTED"]),
     }),
+    // §6.9 no-contest: OUR failure. Kept distinct so it stays alarming.
+    z.object({ kind: z.literal("VOID"), reason: z.literal("INTERNAL_ERROR") }),
   ]),
 });
 

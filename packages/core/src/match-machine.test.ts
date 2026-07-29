@@ -145,7 +145,7 @@ describe("match lifecycle", () => {
     assert.deepEqual(ctx.outcome, { kind: "WIN", winner: "p2", reason: "FORFEIT" });
   });
 
-  test("both players gone voids the match rather than crowning a ghost", () => {
+  test("both players gone cancels the match rather than crowning a ghost", () => {
     let ctx = toLive();
     ctx = drive(
       [
@@ -156,7 +156,7 @@ describe("match lifecycle", () => {
       ctx,
     );
     assert.equal(ctx.state, "ABANDONED");
-    assert.deepEqual(ctx.outcome, { kind: "VOID", reason: "BOTH_ABANDONED" });
+    assert.deepEqual(ctx.outcome, { kind: "CANCELED", reason: "BOTH_ABANDONED" });
   });
 
   test("declining the accept window hands the match to whoever accepted", () => {
@@ -174,10 +174,50 @@ describe("match lifecycle", () => {
     });
   });
 
-  test("neither player accepting voids rather than awarding", () => {
+  test("neither player accepting cancels rather than awarding", () => {
     let ctx = drive([{ type: "MATCH_FOUND" }, { type: "ACCEPT_WINDOW_OPEN" }]);
     ctx = drive([{ type: "ACCEPT_TIMEOUT" }], ctx);
-    assert.deepEqual(ctx.outcome, { kind: "VOID", reason: "NEVER_STARTED" });
+    assert.deepEqual(ctx.outcome, { kind: "CANCELED", reason: "NEVER_STARTED" });
+  });
+
+  test("VOID is reserved for infrastructure failure and nothing else reaches it", () => {
+    /* §6.9 gives VOID one meaning: our infrastructure failed, so nobody's
+       rating moves and it is recorded as a no-contest. It fires rarely and it
+       is supposed to be alarming.
+
+       "Nobody accepted" is routine — it fired on the very first real
+       two-browser match — and folding it into VOID made a genuine no-contest
+       indistinguishable from an abandoned queue pop. No ordinary path may
+       produce VOID; only a judge INTERNAL_ERROR may. */
+    const ordinary: MatchEvent[][] = [
+      [{ type: "MATCH_FOUND" }, { type: "ACCEPT_WINDOW_OPEN" }, { type: "ACCEPT_TIMEOUT" }],
+      [
+        { type: "MATCH_FOUND" },
+        { type: "ACCEPT_WINDOW_OPEN" },
+        { type: "PLAYER_ACCEPTED", side: "p1" },
+        { type: "ACCEPT_TIMEOUT" },
+      ],
+    ];
+    for (const path of ordinary) {
+      assert.notEqual(drive(path).outcome?.kind, "VOID", `${JSON.stringify(path)} produced VOID`);
+    }
+
+    // Both disconnecting mid-match, and the clock simply running out.
+    assert.notEqual(
+      drive(
+        [
+          { type: "PLAYER_DISCONNECTED", side: "p1" },
+          { type: "PLAYER_DISCONNECTED", side: "p2" },
+          { type: "GRACE_EXPIRED", side: "p1" },
+        ],
+        toLive(),
+      ).outcome?.kind,
+      "VOID",
+    );
+    assert.deepEqual(drive([{ type: "CLOCK_EXPIRED" }], toLive()).outcome, {
+      kind: "DRAW",
+      reason: "NOBODY_SOLVED",
+    });
   });
 
   test("a verdict for an unknown submission is refused", () => {

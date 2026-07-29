@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { cn } from "../../lib/cn";
 import { useMotion } from "../../lib/motion-tuning";
 import type { Division, Tier } from "../../lib/types";
+import { Button } from "../Button";
 import { Nameplate } from "../Nameplate";
 
 /**
@@ -25,11 +26,19 @@ export function QueuePop({
   p2,
   head2head,
   flashKey,
+  you,
+  onAccept,
+  acceptRemainingMs,
 }: {
   p1: QueuePopPlayer;
   p2: QueuePopPlayer;
   head2head: string;
   flashKey: number;
+  /** Which side the viewer is, so the accept control knows whose pip it owns. */
+  you?: "p1" | "p2";
+  /** Omitted on the /dev/hud playback, where there is nothing to accept. */
+  onAccept?: () => void;
+  acceptRemainingMs?: number;
 }) {
   const m = useMotion();
   // ease.impact, not spring.heavy: the plates should *land*, not settle. An
@@ -129,6 +138,64 @@ export function QueuePop({
           <Meta delay={1} accepted={p2.accepted} side="p2" text={head2head} />
         </motion.div>
       </div>
+
+      {onAccept && you && (
+        <AcceptControl
+          you={you}
+          accepted={you === "p1" ? p1.accepted : p2.accepted}
+          onAccept={onAccept}
+          remainingMs={acceptRemainingMs}
+        />
+      )}
+    </motion.div>
+  );
+}
+
+/* The accept control lives INSIDE the cinematic, and that is load-bearing.
+
+   This overlay is `fixed inset-0 z-50`, so any accept button rendered by the
+   page behind it is covered and unclickable. That is not hypothetical: it is
+   why the first real two-browser match died — both players watched the plates
+   collide, neither could accept, and the window timed out at 12s. §6.2 puts the
+   accept pips here anyway, so the control belongs here with them. */
+function AcceptControl({
+  you,
+  accepted,
+  onAccept,
+  remainingMs,
+}: {
+  you: "p1" | "p2";
+  accepted: boolean;
+  onAccept: () => void;
+  remainingMs?: number;
+}) {
+  const m = useMotion();
+  const seconds = remainingMs === undefined ? null : Math.max(0, Math.ceil(remainingMs / 1000));
+
+  return (
+    <motion.div
+      data-side={you}
+      className="absolute inset-x-0 bottom-[12%] flex flex-col items-center gap-3"
+      initial={m.reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+      animate={m.reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={
+        m.reduced ? m.t({}) : { duration: m.sec(m.dur.base), ease: m.ease.out, delay: m.stagger(6) }
+      }
+    >
+      {accepted ? (
+        <p className="font-display text-fg-dim text-13 font-bold tracking-[var(--track-hud)] uppercase">
+          Waiting for opponent
+        </p>
+      ) : (
+        <Button variant="solid" tone="player" size="lg" side={you} onClick={onAccept} autoFocus>
+          Accept
+        </Button>
+      )}
+      {seconds !== null && (
+        <p className="tabular text-fg-faint text-12">
+          {accepted ? "they have" : "you have"} {seconds}s
+        </p>
+      )}
     </motion.div>
   );
 }

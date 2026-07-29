@@ -306,7 +306,7 @@ export class LiveMatch {
     this.grace.clear();
     this.clock?.stop();
 
-    const outcome = this.ctx.outcome ?? { kind: "VOID" as const, reason: "NEVER_STARTED" as const };
+    const outcome = this.ctx.outcome ?? { kind: "CANCELED" as const, reason: "NEVER_STARTED" as const };
     await this.log.record("match.ended", { outcome, elapsedMs: this.clock?.elapsed() ?? 0 });
     await this.log.close();
 
@@ -320,7 +320,7 @@ export class LiveMatch {
   /** Used when the process is shutting down. */
   async abandonNow(): Promise<void> {
     if (isTerminal(this.ctx.state)) return;
-    await this.log.record("match.ended", { outcome: { kind: "VOID", reason: "BOTH_ABANDONED" } });
+    await this.log.record("match.ended", { outcome: { kind: "CANCELED", reason: "BOTH_ABANDONED" } });
     await this.log.close();
   }
 

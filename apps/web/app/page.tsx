@@ -1,19 +1,18 @@
 import Link from "next/link";
+import { CURRENT_PHASE } from "@/lib/phase";
 
 export default function Home() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-10 px-6 py-16">
       <div>
         <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-          Phase 2B · the gateway
+          {CURRENT_PHASE.label}
         </p>
         <h1 className="font-display text-fg mt-3 text-48 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
           1v1<span className="text-player">.</span>code
         </h1>
         <p className="text-fg-dim mt-4 max-w-lg text-16 leading-relaxed">
-          A fighting-game HUD rendered in the language of a code editor. Matchmaking, the accept
-          flow, the countdown and the live clock all run against a real gateway. The match screen
-          and the editor are next.
+          A fighting-game HUD rendered in the language of a code editor. {CURRENT_PHASE.summary}
         </p>
       </div>
 

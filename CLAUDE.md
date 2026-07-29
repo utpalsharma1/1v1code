@@ -431,6 +431,8 @@ If a player submits again while already in `JUDGING`, the earlier submission kee
 
 **A lost verdict is a no-contest, not a loss.** If any submission resolves `INTERNAL_ERROR` — the judge worker died, a Redis message was lost, a container failed for reasons that are not the player's code — the match ends `VOID`: **no rating change for either side**, recorded and displayed as a void in match history, and it does not consume a placement match. Losing rating because our infrastructure failed is indefensible, and a player cannot tell our fault from theirs.
 
+**`VOID` means our fault and nothing else. Routine cancellation is `CANCELED`.** Both carry no rating change, and they are still separate outcome kinds on purpose. A match that neither player accepted, or that both players disconnected from, is ordinary — the first one fires constantly in development and fired on the very first real two-browser match. Recording those as `VOID` would make a genuine no-contest indistinguishable from an abandoned queue pop, which destroys the one signal `VOID` exists to carry. So `VOID` takes exactly one reason, `INTERNAL_ERROR`; `CANCELED` takes `NEVER_STARTED` and `BOTH_ABANDONED`. A test asserts that no ordinary path can reach `VOID`.
+
 This puts a hard constraint on the judge: **`INTERNAL_ERROR` must never be reachable from user code.** If a submission can provoke it, a losing player can void any match they are about to lose. Every hostile input the containment suite covers — memory exhaustion, output flood, fork bomb, compile bomb — must produce a *real* verdict. That the print flood once produced `INTERNAL_ERROR` (§11) was therefore not only a robustness bug; it was an exploitable one.
 
 ---

@@ -21,9 +21,11 @@
     "gateway": "pnpm --filter @1v1/gateway start",
     "db:solutions": "pnpm --filter @1v1/db solutions",
     "test:signin": "pnpm --filter @1v1/gateway test:signin",
-    "test:smoke": "pnpm --filter @1v1/web test:smoke"
+    "test:smoke": "pnpm --filter @1v1/web test:smoke",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "turbo": "^2.10.7",
     "typescript": "^5.9.3"
   }

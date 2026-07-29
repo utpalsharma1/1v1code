@@ -65,7 +65,20 @@ export interface MatchContext {
 export type MatchOutcome =
   | { kind: "WIN"; winner: "p1" | "p2"; reason: "SOLVED" | "FORFEIT" | "OPPONENT_ABANDONED" }
   | { kind: "DRAW"; reason: "NOBODY_SOLVED" }
-  | { kind: "VOID"; reason: "BOTH_ABANDONED" | "NEVER_STARTED" };
+  /* CANCELED and VOID are both "no rating change", and they are still separate
+     kinds on purpose.
+
+     §6.9 gives VOID exactly one meaning: OUR infrastructure failed, so the
+     match is a no-contest. That is a claim about us, it is rare, and it is
+     supposed to be alarming when it shows up in match history.
+
+     "Neither player accepted" and "both players disconnected" are neither rare
+     nor our fault — they are routine, and the first one fires constantly during
+     development. Folding them into VOID would make a genuine no-contest
+     indistinguishable from an ordinary abandoned queue pop, which is precisely
+     the signal VOID exists to carry. So routine cancellation is CANCELED. */
+  | { kind: "CANCELED"; reason: "BOTH_ABANDONED" | "NEVER_STARTED" }
+  | { kind: "VOID"; reason: "INTERNAL_ERROR" };
 
 export interface Transition {
   ok: boolean;
@@ -187,7 +200,7 @@ export function transition(context: MatchContext, event: MatchEvent): Transition
       next.state = "ABANDONED";
       if (p1In && !p2In) next.outcome = { kind: "WIN", winner: "p1", reason: "OPPONENT_ABANDONED" };
       else if (p2In && !p1In) next.outcome = { kind: "WIN", winner: "p2", reason: "OPPONENT_ABANDONED" };
-      else next.outcome = { kind: "VOID", reason: "NEVER_STARTED" };
+      else next.outcome = { kind: "CANCELED", reason: "NEVER_STARTED" };
       break;
     }
 
@@ -248,7 +261,7 @@ export function transition(context: MatchContext, event: MatchEvent): Transition
       const other = event.side === "p1" ? "p2" : "p1";
       if (!next.connected[other]) {
         next.state = "ABANDONED";
-        next.outcome = { kind: "VOID", reason: "BOTH_ABANDONED" };
+        next.outcome = { kind: "CANCELED", reason: "BOTH_ABANDONED" };
       } else {
         next.state = "ENDED";
         next.outcome = { kind: "WIN", winner: other, reason: "FORFEIT" };
