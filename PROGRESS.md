@@ -1,5 +1,78 @@
 # PROGRESS
 
+## Phase 2B-3 — STOPPED PARTWAY, splitting again
+
+Four design decisions settled and written into the brief, plus the bot's entire foundation and auth
+end to end. **The match screen and the live bot are not done** — that is 2B-4. Stopping rather than
+half-wiring the cinematics.
+
+### The four decisions
+
+**1. Bot rating integrity — rated only while RD is high.** Four options considered; three lose.
+Unranked leaves the ladder blank rather than fictional, which is not better. Reduced impact has no
+honest lever — Glicko-2 has no K-factor, so you fake it by inflating the bot's RD, which also stops
+the bot's rating converging. A daily cap invents a chore and only delays a determined farmer.
+
+So: **bot matches are rated during placements or while `RD > 100`, unrated after.** It uses Glicko's
+own uncertainty measure instead of an invented threshold, it serves the actual need (placement, for
+exactly the players who cannot find humans), and **the farm closes itself** — every bot win lowers
+your RD, walking you toward bot matches not counting. The ceiling is the bot's own rating (~1460),
+a plausible placement rather than a ladder position. No cliff, because RD moves continuously. The
+bot's own rating is fixed and never updated: it is a measuring stick, not a competitor.
+
+**2. The bot submits real source through the real judge.** Not scripted — a scripted outcome means
+bot matches exercise a different code path from human matches, which is the path that then breaks in
+production. All 20 problems now ship a known-correct Python 3 solution, and **every one is verified
+ACCEPTED by the real judge** (`pnpm db:solutions`). Solve time is drawn in two stages so the win
+rate is correct by construction: *whether* it solves comes from the Elo expectation, *when* comes
+from a lognormal whose median scales with the rating gap.
+
+**3. The judging hold is a §6 beat, not a spinner** — new §6.7b. Editor stays locked, your verdict
+*docks* to your side of the HUD as a settled chip, the opponent's bar takes an indeterminate sweep
+that must never read as progress, the clock is replaced by `AWAITING VERDICT`, and resolution is
+immediate when the last verdict lands. The same screen carries both charges — passed and hoping they
+were slower, or failed and hoping they failed too — and the difference is one chip's colour. The
+hold is bounded: a verdict that never arrives resolves as `INTERNAL_ERROR` rather than hanging.
+
+**4. Resubmission: unlimited, +30s each failure, one outstanding at a time** — new §6.8b. Elapsed
+time is already the tiebreak so it is the natural currency, and it matches §6.8's hack penalty. Free
+resubmission would make §6.5's near-miss shatter theatre. **One outstanding submission per player is
+what actually bounds judge load** — two concurrent jobs per match no matter how hard anyone mashes,
+which is stronger than a rate limit; the global limiter stays as a backstop and does not conflict.
+
+### Built and verified
+
+- `packages/core/bot.ts` — solve probability, solve-time model, rating-integrity rule. **11 tests**,
+  including one that runs 4000 planned matches and asserts the observed win rate matches the Elo
+  expectation within 3%, and one that walks RD down and asserts the farm closes.
+- `packages/db/solutions.ts` — 20 Python solutions. **All 20 ACCEPTED by the real judge.**
+- **Auth end to end at the library level**: 12 checks passing — scrypt round-trip, salting, rejection
+  of wrong passwords, new-user defaults, high-entropy session token, and the gateway resolving a real
+  cookie to a user, rejecting garbage, rejecting expired, and deleting the expired row on sight.
+- `/register` and `/login` pages with server actions, wired to session creation and redirecting
+  to `/play`.
+- **Split `password.ts` out of `auth.ts`.** The password primitives imported `next/headers`
+  transitively, so they were unusable and untestable outside a Next request — including from the
+  gateway. Pure crypto has no business depending on a request context.
+
+**Totals: 42 core tests, 10 matchmaking, 14 judge containment, 101 seed cases, 20 bot solutions.**
+7/7 typecheck, build green.
+
+### Not verified
+
+The **browser cookie round-trip** — register in a form, get a cookie, land on `/play` authenticated.
+Server actions need the RSC protocol, so curl cannot drive them and there is no browser here. Every
+link either side of that is verified; the form submission itself is not.
+
+### 2B-4, the remainder
+
+Submission persistence with the §6.9 receipt stamp; the match screen wired to Phase 1's animations
+on real events; the bot actually playing (FakeTypist pulse line, timed submission through the judge);
+Glicko-2 applied to real outcomes with the pre-match rating captured for the delta count-up; the
+§6.7b judging-hold screen.
+
+---
+
 ## Phase 2B — STOPPED PARTWAY, needs splitting
 
 **I am stopping and asking for a split rather than pushing through.** You pre-authorised this and I

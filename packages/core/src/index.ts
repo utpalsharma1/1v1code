@@ -33,3 +33,11 @@ export {
   type LoggedEvent,
   type ParsedLog,
 } from "./event-log.ts";
+export {
+  PLACEMENT_RD_THRESHOLD,
+  botMatchIsRated,
+  medianFraction,
+  planBotMatch,
+  solveProbability,
+  type BotPlan,
+} from "./bot.ts";

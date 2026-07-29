@@ -16,10 +16,12 @@
     "push": "prisma db push",
     "seed": "node --experimental-strip-types prisma/seed.ts",
     "studio": "prisma studio",
-    "seed:users": "node --experimental-strip-types prisma/seed-users.ts"
+    "seed:users": "node --experimental-strip-types prisma/seed-users.ts",
+    "solutions": "node --experimental-strip-types src/verify-solutions.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.3.0"
+    "@prisma/client": "^6.3.0",
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

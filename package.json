@@ -18,7 +18,8 @@
     "clean": "node -e \"['apps/web/.next','apps/web/.turbo','packages/ui/.turbo','.turbo','apps/web/tsconfig.tsbuildinfo'].forEach(p=>require('fs').rmSync(p,{recursive:true,force:true}));console.log('cleaned')\"",
     "judge:reaper": "pnpm --filter @1v1/judge reaper",
     "db:users": "pnpm --filter @1v1/db seed:users",
-    "gateway": "pnpm --filter @1v1/gateway start"
+    "gateway": "pnpm --filter @1v1/gateway start",
+    "db:solutions": "pnpm --filter @1v1/db solutions"
   },
   "devDependencies": {
     "turbo": "^2.10.7",

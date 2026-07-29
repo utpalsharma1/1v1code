@@ -1,7 +1,6 @@
-import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
 import { cookies } from "next/headers";
 import { prisma } from "@1v1/db";
+import { hashPassword, newSessionToken, verifyPassword } from "./password";
 
 /* ============================================================================
    Email/password auth (Phase 2A). No OAuth yet.
@@ -13,32 +12,9 @@ import { prisma } from "@1v1/db";
    stateless JWT cannot.
    ========================================================================= */
 
-const scryptAsync = promisify(scrypt) as (
-  password: string,
-  salt: Buffer,
-  keylen: number,
-) => Promise<Buffer>;
-
-const KEY_LEN = 64;
+/** Must match the name the gateway reads in apps/gateway/src/session.ts. */
 const SESSION_COOKIE = "1v1_session";
 const SESSION_DAYS = 30;
-
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16);
-  const derived = await scryptAsync(password, salt, KEY_LEN);
-  return `scrypt$${salt.toString("base64")}$${derived.toString("base64")}`;
-}
-
-export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [scheme, saltB64, hashB64] = stored.split("$");
-  if (scheme !== "scrypt" || !saltB64 || !hashB64) return false;
-  const salt = Buffer.from(saltB64, "base64");
-  const expected = Buffer.from(hashB64, "base64");
-  const derived = await scryptAsync(password, salt, expected.length);
-  // Constant-time: a length-varying or short-circuiting compare leaks the hash
-  // one byte at a time to anyone who can measure response latency.
-  return derived.length === expected.length && timingSafeEqual(derived, expected);
-}
 
 export interface Credentials {
   handle: string;
@@ -100,7 +76,7 @@ export async function createSession(userId: string): Promise<void> {
   // collision-resistant but it is not a secret: it embeds a timestamp and a
   // counter, so it is guessable in a way a session bearer token must never be.
   const session = await prisma.session.create({
-    data: { id: randomBytes(32).toString("base64url"), userId, expiresAt },
+    data: { id: newSessionToken(), userId, expiresAt },
     select: { id: true },
   });
   const jar = await cookies();
@@ -142,3 +118,5 @@ export async function currentUser(): Promise<CurrentUser | null> {
   }
   return session.user;
 }
+
+export { hashPassword, verifyPassword } from "./password";

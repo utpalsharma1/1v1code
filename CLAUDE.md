@@ -373,7 +373,32 @@ Without this, a "hack" is just a malformed input. Feed a solution `n = -1` when 
 
 **Rules.** One hack attempt per player per phase. Validator rejection is free and does not consume the attempt. Hacking is disabled in Blitz — 60 seconds of reading is longer than the match itself.
 
-### 6.9 Ordering and match resolution
+### 6.7b The judging hold — waiting on the opponent's verdict
+
+§6.9 holds the match until every outstanding verdict resolves. That hold is a **beat**, not a spinner. It is the tensest moment in the product: you know your own result and you do not know whether it was enough.
+
+The screen, from the moment your own verdict settles while theirs is outstanding:
+
+1. **The editor does not come back.** §6.6 dimmed and blurred it on submit; it stays that way. The match is out of your hands and the UI should not pretend otherwise.
+2. **Your verdict docks.** The §6.6 verdict panel does not slide away — it shrinks and travels to your side of the HUD with `spring.heavy`, becoming a settled result chip above your test bar. Settled, legible, done.
+3. **Their slot stays unresolved.** The opponent's test bar takes a slow indeterminate sweep in their player color, ~1.4s cycle. It must read as *still resolving*, never as progress — a bar that appears to fill would be a lie about information we do not have. This loop encodes live state (§5): their verdict is genuinely outstanding, and it stops the instant it lands.
+4. **The center column replaces the clock** with `AWAITING VERDICT` in display type, round pips beneath. The clock is meaningless here — the match is already decided, it just is not known yet.
+5. **Resolution is immediate.** When the last verdict lands, the §6.9 receipt-order comparison runs and victory or defeat fires with no intervening beat. Do not add a reveal; the wait *was* the reveal.
+
+**The same screen carries opposite charges, and the difference is one chip.** If you passed, your chip is player-colored and the question is whether they beat you on receipt order. If you failed, your chip is `--fail` and the question inverts — you are now hoping they failed too. The layout, the sweep and the copy are identical; the emotional content lives entirely in your own result. Do not write two screens.
+
+**Sound.** `judging_hold` is a sustained low tone, not a tick — held breath rather than a countdown. It begins when the hold begins and stops the instant the opponent's verdict lands, which makes the silence itself the cue.
+
+**The hold must be bounded.** A verdict that never arrives — a dead judge worker, a lost Redis message — cannot hang the match forever. An outstanding submission that exceeds the judge's own ceiling (container wall clock plus slack) resolves as `INTERNAL_ERROR`, the match proceeds under §6.9, and the screen says the verdict was lost rather than sitting there. A hold with no timeout is a bug wearing a design.
+
+### 6.8b Resubmission
+
+**Unlimited attempts. Each failed submission adds 30 seconds to your final elapsed time. One outstanding submission per player at a time.**
+
+- **Elapsed time is already the tiebreak** (§6.9), so it is the natural currency for a penalty — no new mechanic, no new number for a player to learn, and it is consistent with §6.8's failed-hack penalty.
+- **Free resubmission would destroy §6.5.** If a failed submit costs nothing, the near-miss shatter is theatre: the opponent's bar cracks and they simply try again. The whole beat depends on failure hurting.
+- **A hard attempt cap is worse.** It makes the last attempt agonising in a way that encourages *not* submitting, which is the opposite of what the format wants. A time penalty keeps players submitting while making guessing expensive.
+- **One outstanding submission per player** is what actually bounds judge load — far better than a rate limit. It caps a match at two concurrent jobs no matter how hard anyone mashes, and it falls out naturally because §6.6 locks the editor while judging. The global per-identity rate limit (§11) stays as a backstop against abuse outside a match, and does not conflict: one-outstanding already caps a player at roughly one submission per judge round trip.
 
 **Receipt order decides the match. Verdict order never does.** This is a fairness rule, not a timing detail, and it is easy to get wrong by accident.
 
@@ -431,7 +456,46 @@ The offset is a **per-mode constant**, not a global:
 
 Surface the number on the problem card, in match history, on the replay timeline, and in the post-match summary. Never as a letter grade, never as a bucket, never color-coded — see §4.
 
-### Handles
+### The bot
+
+The bot is the queue fallback after 20s (§6.1), so until there is a real population it is **most matches**. Every rule below exists because of that.
+
+**It is labelled as a bot before the match, never after.** The `PlayerCard` carries `isBot` and the queue-pop nameplate shows it. Players work it out either way — from the pulse line, from the timing, from the handle — and finding out afterwards feels like being tricked in a way that losing never does.
+
+#### Rating integrity
+
+The trap is symmetric. If beating the bot moves rating, it is farmable and the ladder is fiction. If it never does, almost nobody's rating ever moves and the ladder is empty. Four options, and why three lose:
+
+- **Unranked bot matches.** Honest, zero farm risk, trivial to reason about — and it means a new player can play twenty matches and still have no rating. The ladder is not fiction, it is blank, which is not better.
+- **Ranked with reduced impact.** Glicko-2 has no K-factor to turn down; you would fake it by inflating the bot's RD, which also stops the bot's own rating ever converging and muddies the model to buy a fudge factor. Farming still works, just slower.
+- **Ranked but capped per day.** Bounds the farm, but invents a daily chore, needs per-day counters, and a determined farmer still arrives — later.
+- **Ranked only while rating deviation is high. ← this one.**
+
+**Bot matches are rated only while the system does not yet know where you belong** — that is, during placements or while `RD > 100`. Above that confidence they are unrated and say so before the match starts.
+
+This uses Glicko's own uncertainty measure instead of an invented threshold, which is why it behaves well:
+
+- It serves the actual need. What an empty ladder requires is *placement*, and it is precisely the new and low-rated players who cannot find humans.
+- **It self-limits.** Every bot win reduces your RD, which moves you toward bot matches not counting. The farm closes itself.
+- **The farm's ceiling is the bot's own rating**, roughly 1460 — a plausible placement, not a ladder position. Nobody reaches the top of the ladder this way.
+- **No cliff.** RD moves continuously, so there is no 1399-versus-1401 edge to sit on, and the player can see placements remaining.
+
+**The bot's own rating is fixed and never updated.** It is a measuring stick, not a competitor; letting players drag it around would let a coordinated group move the reference point everyone else is measured against.
+
+#### Solutions — through the real judge
+
+**The bot submits real source through the real judge.** Not a scripted outcome. Problems are chosen dynamically at mean − 120, so a recorded solve cannot cover them, and more importantly a scripted outcome means a bot match exercises a different code path from a human match — which is exactly the path that then breaks in production. A bot that goes through the judge keeps the judge honest and keeps itself honest.
+
+Every seeded problem therefore ships a **known-correct Python 3 solution**, held in reviewed source next to the validators rather than in a database column, for the same reason. These double as executable reference implementations: a solution that does not pass its own problem's tests is a seed-data bug, and it is caught by running it rather than by reading it.
+
+#### Solve time
+
+A bot rated 1300 that always solves in four minutes is not rated 1300. Time is drawn in two stages so that the *win rate* is correct by construction and the *timing* is flavour on top:
+
+1. **Whether it solves at all** comes from the Elo expectation against the problem: `E = 1 / (1 + 10^((problemRating − botRating) / 400))`. At a problem on its own rating the bot solves half the time; 400 below, about 91%.
+2. **When it solves**, given that it does, is drawn from a lognormal whose median is a fraction of the match: `f = clamp(0.25 + 0.5 · (d + 400) / 800, 0.15, 0.9)` where `d = problemRating − botRating`. An easy problem lands around a quarter of the way in, one at its own rating around halfway, a hard one late. Jitter is lognormal σ ≈ 0.25 so two matches on the same problem never look identical.
+
+Because §8 selects at mean − 120, `d` is usually negative: the bot usually solves, at a pace that is beatable but not free. That is the intended feel — a real opponent, not a wall and not a gift.
 
 Handles carry league color everywhere outside a match — the full rule, including tier aura and why most tiers don't get one, is in §4 under *League color on handles*. Inside a match, side color wins; nothing in §6 ever renders a handle in tier color.
 
@@ -596,7 +660,7 @@ On **Glicko-2**: it is defined over rating *periods*, not per-game updates. Appl
 3. **Ask before adding a dependency.** The approved list is in §3.
 4. **Vertical slices, not layers.** One feature working end to end beats four half-built systems.
 5. **Every socket event is typed in `packages/proto` before it is used.**
-6. **Seed a bot opponent from day one** that replays a recorded solve at realistic typing speed. Solo development is impossible without it.
+6. **Seed a bot opponent from day one.** Solo development is impossible without it. The bot's rating rules, its solutions and its solve-time model are specified in §8 under *The bot* — read that before touching it, because "the bot is the fallback after 20s" means it is most matches for the foreseeable future and every one of those decisions is load-bearing.
 7. **Screenshot your work and critique it against §2 before telling me a screen is done.** If it looks like a generic dark dashboard with neon accents, it has failed the brief — say so and fix it.
 8. Test at 1280px and at mobile widths. Mobile is spectate-and-browse only; the editor is desktop-only and should say so gracefully rather than degrade.
 9. Keyboard focus must be visible everywhere. `prefers-reduced-motion` must be honored in every animation you write, in the same commit that writes it.
