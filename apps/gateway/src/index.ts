@@ -439,11 +439,25 @@ async function joinQueue(session: Session): Promise<void> {
       monotonicMs(),
     );
 
+    /* The ZADD inside the script races the disconnect handler's ZREM.
+
+       `attempt()` is async and runs on a 2s interval. If the socket dies while
+       one is in flight, the disconnect handler removes the player from Redis
+       and then this call puts them straight back — a ghost with no session,
+       who can never be matched but who makes the pool look non-empty forever.
+       That is how `alone` stopped being true. So re-check after the await. */
+    if (sessions.get(session.identity.userId) !== session || session.queuedAt === null) {
+      await matchmaker.leave(session.identity.userId);
+      return;
+    }
+
     if (pair) {
       const partner = sessions.get(pair.partnerId);
       if (!partner) {
-        // The partner vanished between joining and pairing. Requeue rather
-        // than stranding this player.
+        // The partner vanished between joining and pairing. Evict them so the
+        // ghost cannot be handed out again, then requeue rather than stranding
+        // this player.
+        await matchmaker.leave(pair.partnerId);
         await matchmaker.joinOrPair(
           session.identity.userId,
           session.identity.rating,

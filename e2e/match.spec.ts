@@ -119,6 +119,60 @@ test("two players: queue, pair, accept, solve in Monaco, and finish rated", asyn
   await partner.close();
 });
 
+test("reloading mid-match still ends cleanly and re-enables Play", async ({ browser }) => {
+  /* Correct server state, client parked in a state nothing tells it to leave —
+     the same shape as the QueuePop overlay covering Accept.
+
+     A reload mid-match resynced correctly, but the resync did not carry the
+     problem back, so the match screen could not render; when the match then
+     ended there was no ending screen and no Play button, and only a hard
+     reload recovered. A terminal match must return the client to idle whether
+     it ended live or after a resync. */
+  test.setTimeout(240_000);
+
+  const player = await browser.newContext();
+  const partner = await browser.newContext();
+  const play = await player.newPage();
+  const spar = await partner.newPage();
+
+  await registerAndQueue(play);
+  await spar.goto("/dev/sparring");
+  await expect(spar.getByText(/connected · sparring_/i)).toBeVisible({ timeout: 20_000 });
+
+  await play.getByRole("button", { name: /^play$/i }).click();
+  await spar.getByRole("button", { name: /join queue/i }).click();
+
+  await play.getByRole("button", { name: /^accept$/i }).click({ timeout: 60_000 });
+  await spar.getByRole("button", { name: /^accept$/i }).click();
+  await expect(play.locator(".monaco-editor").first()).toBeVisible({ timeout: 60_000 });
+
+  // THE RELOAD, mid-match.
+  await play.reload();
+  await expect(play.getByText(/^connected$/i).or(play.locator(".monaco-editor").first())).toBeVisible({
+    timeout: 30_000,
+  });
+  // Resync must put the match screen back, problem statement included.
+  await expect(play.locator(".monaco-editor").first()).toBeVisible({ timeout: 30_000 });
+  await expect(play.getByText(/^constraints$/i)).toBeVisible();
+
+  // Let the sparring partner win, ending the match while we are resynced.
+  await spar.getByRole("button", { name: /correct \(reference\)/i }).click();
+
+  // The ending must render, and Play must come back without a hard reload.
+  await expect(play.getByText(/victory|defeat|draw|no contest|match canceled/i).first()).toBeVisible({
+    timeout: 150_000,
+  });
+  // "Back to Hub", not "Queue again" — we are asserting the client can return
+  // to idle, and Queue again deliberately goes straight back into the queue.
+  await play.getByRole("button", { name: /back/i }).first().click();
+  const playButton = play.getByRole("button", { name: /^play$/i });
+  await expect(playButton).toBeVisible({ timeout: 20_000 });
+  await expect(playButton).toBeEnabled();
+
+  await player.close();
+  await partner.close();
+});
+
 test("an empty queue says so instead of sweeping a radar forever", async ({ page }) => {
   /* 2B-4 removed the 20s bot fallback, so an empty pool has no automatic
      ending. The choice: the queue never expires, but it stops pretending.

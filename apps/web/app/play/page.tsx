@@ -231,7 +231,27 @@ function Play() {
       });
       setAccepted(payload.accepted);
       setRemainingMs(payload.remainingMs);
-      setPhase(payload.state === "LIVE" ? "live" : payload.state === "COUNTDOWN" ? "countdown" : "found");
+
+      /* The problem HAS to come back too.
+
+         It did not, and that stranded a reloading player: the match screen
+         only renders when `problem` is set, so after a reload the page fell
+         through to the lobby layout — which draws nothing at all for a live
+         match and offers Play only in `idle`. The match then ended into a
+         screen that could not render its own ending. */
+      if (payload.problem) {
+        setProblem({
+          title: payload.problem.title,
+          rating: payload.problem.rating,
+          statement: payload.problem.statement,
+          constraints: payload.problem.constraints,
+        });
+      }
+
+      // JUDGING is still the match, not the lobby: §6.7b's hold is a beat of
+      // the match screen and the player must not be thrown out of it.
+      const live = payload.state === "LIVE" || payload.state === "JUDGING";
+      setPhase(live ? "live" : payload.state === "COUNTDOWN" ? "countdown" : "found");
       note(`resynced into ${payload.state}`);
     });
     socket.on("submission.ack", (payload: { total: number; side: Side }) => {
@@ -323,6 +343,7 @@ function Play() {
 
     socket.on("match.end", (payload) => {
       setPhase("ended");
+      setAcceptDeadline(null);
       setHolding([]);
       setEnding({
         kind: payload.outcome.kind,
@@ -344,6 +365,28 @@ function Play() {
       socketRef.current = null;
     };
   }, [note]);
+
+  /* A terminal match ALWAYS returns the client to idle.
+
+     The ending screen offers Rematch and Back, and that was the only route
+     out — so any gap that stopped it rendering left the client stuck in match
+     state with Play disabled and nothing to click. That happened: a reload
+     mid-match dropped `problem`, the match screen could not render, and the
+     ending had nowhere to go.
+
+     The resync gap is fixed above, but the class of bug is "client parked in a
+     state nothing tells it to leave", the same shape as the QueuePop overlay
+     covering Accept. So this is a rule rather than a repair: if the match has
+     ended and we cannot show the ending, go back to idle rather than sit
+     there. Play is usable either way. */
+  const canShowEnding = Boolean(match && problem);
+  useEffect(() => {
+    if (phase !== "ended" || canShowEnding) return;
+    setPhase("idle");
+    setMatch(null);
+    setEnding(null);
+    note("match ended — back to the lobby");
+  }, [phase, canShowEnding, note]);
 
   // Ticks the accept window down for display. Stops the moment the window
   // closes, so nothing loops without live state behind it (§5).
