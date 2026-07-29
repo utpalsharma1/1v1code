@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./time": "./src/time.ts",
-    "./glicko": "./src/glicko.ts"
+    "./glicko": "./src/glicko.ts",
+    "./pulse": "./src/pulse.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

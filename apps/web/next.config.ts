@@ -17,7 +17,7 @@ const config: NextConfig = {
   distDir: process.env["NEXT_DIST_DIR"] ?? ".next",
   // @1v1/ui ships TypeScript source rather than a build artifact, so there is
   // one compiler and one set of tokens across the monorepo.
-  transpilePackages: ["@1v1/ui", "@1v1/db", "@1v1/proto"],
+  transpilePackages: ["@1v1/ui", "@1v1/db", "@1v1/proto", "@1v1/core"],
 };
 
 export default config;

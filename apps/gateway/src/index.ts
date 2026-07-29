@@ -6,6 +6,9 @@ import { generateCode, monotonicMs } from "@1v1/core";
 import { prisma } from "@1v1/db";
 import {
   CodeSubmitSchema,
+  EditorDeltaSchema,
+  EditorResyncSchema,
+  EditorSnapshotSchema,
   MatchAcceptSchema,
   PulseReportSchema,
   QueueJoinSchema,
@@ -16,6 +19,7 @@ import {
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
 import { Matchmaker, bandFor } from "./matchmaking.ts";
 import { applyOutcome, snapshot, type RatingSnapshot } from "./rating.ts";
+import { canSpectate, type Viewer } from "./relay.ts";
 import { SubmissionRunner, isInFlight, receipt } from "./submissions.ts";
 import { identify, identifyById, type Identity } from "./session.ts";
 
@@ -78,6 +82,35 @@ function toMatch(match: LiveMatch, event: string, payload: unknown): void {
 
 function emitToSide(match: LiveMatch, side: Side, event: string, payload: unknown): void {
   toUser(match.players[side].userId, event, payload);
+}
+
+/* ── Relay fanout (§10) ───────────────────────────────────────────────────
+   The ONLY two places source text leaves a match, and both consult the
+   visibility rule per recipient.
+
+   The opponent is not merely omitted from the UI — their socket is never
+   written to. §7's tiered spectator batching (200ms, 500ms ranked) is 2C-2;
+   today there is one dev spectator and the player cadence is what it gets. */
+
+function fanOutDelta(match: LiveMatch, side: Side, delta: unknown): void {
+  const payload = { ...(delta as object), side };
+  for (const socketId of match.spectators) io.to(socketId).emit("editor.delta", payload);
+
+  // The opposing PLAYER gets this only once the match is over.
+  const other: Side = side === "p1" ? "p2" : "p1";
+  if (match.mayView({ kind: "player", side: other }, side)) {
+    emitToSide(match, other, "editor.delta", payload);
+  }
+}
+
+function fanOutSnapshot(match: LiveMatch, side: Side): void {
+  const doc = match.relay.doc(side);
+  const payload = { matchId: match.id, side, seq: doc.seq, text: doc.text };
+  for (const socketId of match.spectators) io.to(socketId).emit("editor.snapshot", payload);
+  const other: Side = side === "p1" ? "p2" : "p1";
+  if (match.mayView({ kind: "player", side: other }, side)) {
+    emitToSide(match, other, "editor.snapshot", payload);
+  }
 }
 
 /* ── Submissions (§6.6, §6.9) ─────────────────────────────────────────── */
@@ -664,6 +697,98 @@ io.on("connection", (socket: Socket) => {
     void runSubmission(match, side, userId, parsed.data.language, parsed.data.source, receiptMs);
   });
 
+  /* ── The keystroke relay (§10) ──────────────────────────────────────
+     Every send of source text goes through `match.mayView`. There is no
+     second path, and there must never be one: a competing player who can
+     receive the opposing side's deltas has won, silently. */
+
+  /** Who this socket is, relative to a given match. */
+  const viewerFor = (match: LiveMatch): Viewer => {
+    const side = match.sideOf(userId);
+    if (side) return { kind: "player", side };
+    return match.spectators.has(socket.id) ? { kind: "spectator" } : { kind: "none" };
+  };
+
+  const sendSnapshot = (match: LiveMatch, side: Side): void => {
+    if (!match.mayView(viewerFor(match), side)) return;
+    const doc = match.relay.doc(side);
+    socket.emit("editor.snapshot", { matchId: match.id, side, seq: doc.seq, text: doc.text });
+  };
+
+  socket.on("editor.snapshot", (raw) => {
+    const parsed = EditorSnapshotSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const match = matches.get(parsed.data.matchId);
+    const side = match?.sideOf(userId);
+    // Only a player may assert ground truth, and only for their OWN editor.
+    if (!match || !side) return;
+    match.relay.reset(side, parsed.data.seq, parsed.data.text);
+    void match.recordSnapshot(side, parsed.data.seq, parsed.data.text);
+    fanOutSnapshot(match, side);
+  });
+
+  socket.on("editor.delta", (raw) => {
+    const parsed = EditorDeltaSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const match = matches.get(parsed.data.matchId);
+    const side = match?.sideOf(userId);
+    if (!match || !side) return;
+
+    const applied = match.relay.apply(side, parsed.data);
+    if (!applied) {
+      /* A gap. Do not guess and do not apply — ask for ground truth. Splicing
+         onto the wrong base yields plausible code nobody wrote. */
+      const doc = match.relay.doc(side);
+      socket.emit("editor.desync", {
+        matchId: match.id,
+        expected: doc.seq + 1,
+        got: parsed.data.seq,
+      });
+      return;
+    }
+
+    void match.recordDelta(applied);
+    fanOutDelta(match, side, parsed.data);
+  });
+
+  socket.on("editor.resync", (raw) => {
+    const parsed = EditorResyncSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const match = matches.get(parsed.data.matchId);
+    if (!match) return;
+    const sides: Side[] = parsed.data.side ? [parsed.data.side] : ["p1", "p2"];
+    for (const side of sides) sendSnapshot(match, side);
+  });
+
+  socket.on("spectate.join", (raw) => {
+    const parsed = EditorResyncSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const match = matches.get(parsed.data.matchId);
+    if (!match) {
+      socket.emit("error", { code: "NO_MATCH", message: "unknown match" });
+      return;
+    }
+    /* A player in their own live match may NOT spectate it — that would be a
+       one-click bypass of the visibility rule, and §7's 45s ranked delay does
+       not close it. Refused by identity, at the gateway. */
+    if (
+      !canSpectate({
+        userId,
+        p1UserId: match.players.p1.userId,
+        p2UserId: match.players.p2.userId,
+        matchOver: match.isOver,
+      })
+    ) {
+      socket.emit("error", {
+        code: "SELF_SPECTATE",
+        message: "you cannot spectate a match you are playing in",
+      });
+      return;
+    }
+    match.spectators.add(socket.id);
+    for (const side of ["p1", "p2"] as const) sendSnapshot(match, side);
+  });
+
   socket.on("pulse.report", (raw) => {
     const parsed = PulseReportSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
@@ -679,6 +804,7 @@ io.on("connection", (socket: Socket) => {
   });
 
   socket.on("disconnect", () => {
+    for (const match of matches.values()) match.spectators.delete(socket.id);
     session.sockets.delete(socket.id);
     if (session.sockets.size > 0) return; // another tab is still open
 

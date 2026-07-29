@@ -24,7 +24,8 @@
     "test:smoke": "pnpm --filter @1v1/web test:smoke",
     "test:e2e": "playwright test -c e2e/playwright.config.ts",
     "probe:match": "node --experimental-strip-types apps/gateway/src/match-probe.ts",
-    "probe:requeue": "node --experimental-strip-types apps/gateway/src/requeue-probe.ts"
+    "probe:requeue": "node --experimental-strip-types apps/gateway/src/requeue-probe.ts",
+    "probe:visibility": "node --experimental-strip-types apps/gateway/src/visibility-probe.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

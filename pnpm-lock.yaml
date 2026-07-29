@@ -64,6 +64,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@1v1/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@1v1/db':
         specifier: workspace:*
         version: link:../../packages/db

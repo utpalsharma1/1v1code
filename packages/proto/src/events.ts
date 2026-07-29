@@ -58,12 +58,55 @@ export const PulseReportSchema = z.object({
   keys: z.number().int().nonnegative().max(10_000),
 });
 
+/* ── editor relay (§10, 2C-1) ──────────────────────────────────────────
+   One change from Monaco's onDidChangeModelContent, reduced to what an
+   applier and a paste detector both need.
+
+   `offset` and `length` are absolute character offsets rather than
+   line/column, so applying a change is a pure string splice and needs no model
+   of the document. Monaco emits the changes of one event in DESCENDING offset
+   order, which is what makes applying them in array order correct. */
+export const EditorChangeSchema = z.object({
+  offset: z.number().int().nonnegative(),
+  /** Characters replaced. 0 for a pure insertion. */
+  length: z.number().int().nonnegative(),
+  text: z.string(),
+});
+
+/** §10: enough to make a paste visible after the fact. No enforcement. */
+export const EditorOriginSchema = z.enum(["type", "paste", "undo", "redo", "other"]);
+
+export const EditorDeltaSchema = z.object({
+  matchId: z.string().min(1),
+  /** Per-side, monotonic, starting at 1. A gap means resync, never guess. */
+  seq: z.number().int().positive(),
+  changes: z.array(EditorChangeSchema).min(1).max(200),
+  origin: EditorOriginSchema.default("type"),
+});
+
+/** Sent by a client to establish or re-establish ground truth. */
+export const EditorSnapshotSchema = z.object({
+  matchId: z.string().min(1),
+  seq: z.number().int().nonnegative(),
+  text: z.string().max(MAX_SOURCE_BYTES),
+});
+
+export const EditorResyncSchema = z.object({
+  matchId: z.string().min(1),
+  /** Whose editor. Omitted means every side the caller may see. */
+  side: SideSchema.optional(),
+});
+
 export interface ClientToServer {
   "queue.join": (payload: z.infer<typeof QueueJoinSchema>) => void;
   "queue.leave": (payload: z.infer<typeof QueueLeaveSchema>) => void;
   "match.accept": (payload: z.infer<typeof MatchAcceptSchema>) => void;
   "code.submit": (payload: z.infer<typeof CodeSubmitSchema>) => void;
   "pulse.report": (payload: z.infer<typeof PulseReportSchema>) => void;
+  "editor.delta": (payload: z.infer<typeof EditorDeltaSchema>) => void;
+  "editor.snapshot": (payload: z.infer<typeof EditorSnapshotSchema>) => void;
+  "editor.resync": (payload: z.infer<typeof EditorResyncSchema>) => void;
+  "spectate.join": (payload: z.infer<typeof EditorResyncSchema>) => void;
 }
 
 /* ── server → client ──────────────────────────────────────────────────── */
@@ -237,6 +280,31 @@ export const OpponentStatusSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 
+/* ── server → client: the relay ────────────────────────────────────────
+   These carry SOURCE TEXT, so §10's visibility rule governs every send: a
+   competing player never receives them for the opposing side while the match
+   is live. The rule is enforced in the gateway, not here — a schema cannot
+   stop a socket being written to. */
+
+export const EditorDeltaOutSchema = EditorDeltaSchema.extend({
+  side: SideSchema,
+});
+
+export const EditorSnapshotOutSchema = z.object({
+  matchId: z.string(),
+  side: SideSchema,
+  /** The seq this text already includes. Deltas above it still apply. */
+  seq: z.number().int().nonnegative(),
+  text: z.string(),
+});
+
+/** Sent to a client whose deltas arrived with a gap: send us a snapshot. */
+export const EditorDesyncSchema = z.object({
+  matchId: z.string(),
+  expected: z.number().int().nonnegative(),
+  got: z.number().int().nonnegative(),
+});
+
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export interface ServerToClient {
@@ -256,6 +324,9 @@ export interface ServerToClient {
   "match.judging": (payload: z.infer<typeof JudgingHoldSchema>) => void;
   "opponent.pulse": (payload: z.infer<typeof OpponentPulseSchema>) => void;
   "opponent.status": (payload: z.infer<typeof OpponentStatusSchema>) => void;
+  "editor.delta": (payload: z.infer<typeof EditorDeltaOutSchema>) => void;
+  "editor.snapshot": (payload: z.infer<typeof EditorSnapshotOutSchema>) => void;
+  "editor.desync": (payload: z.infer<typeof EditorDesyncSchema>) => void;
   error: (payload: z.infer<typeof ErrorSchema>) => void;
 }
 
@@ -271,9 +342,14 @@ export const LOG_EVENT_TYPES = [
   "presence.changed",
   "submission.received",
   "submission.verdict",
+  "editor.delta",
+  "editor.snapshot",
   "match.ended",
 ] as const;
 export type RatingDelta = z.infer<typeof RatingDeltaSchema>;
 export type MatchOutcomeWire = z.infer<typeof MatchEndSchema>["outcome"];
+export type EditorChange = z.infer<typeof EditorChangeSchema>;
+export type EditorDelta = z.infer<typeof EditorDeltaSchema>;
+export type EditorOrigin = z.infer<typeof EditorOriginSchema>;
 export type VerdictName = z.infer<typeof VerdictNameSchema>;
 export type LogEventType = (typeof LOG_EVENT_TYPES)[number];

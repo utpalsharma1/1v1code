@@ -20,6 +20,8 @@ import {
   type Status,
   type Tier,
 } from "@1v1/ui";
+import { PULSE_SAMPLE_MS } from "@1v1/core/pulse";
+import type { EditorChange } from "@1v1/proto";
 
 /* ============================================================================
    The match screen — Phase 1's cinematics driven by real gateway events.
@@ -48,6 +50,7 @@ export interface MatchPlayer {
 }
 
 export interface MatchScreenProps {
+  matchId: string;
   you: Side;
   p1: MatchPlayer;
   p2: MatchPlayer;
@@ -79,6 +82,12 @@ export interface MatchScreenProps {
   inFlight: boolean;
   onSubmit: (language: "CPP17" | "PYTHON3", source: string) => void;
   onKeystrokes: (count: number) => void;
+  /** One ~50ms batch of Monaco changes (§10). */
+  onDelta: (batch: { seq: number; changes: EditorChange[]; origin: string }) => void;
+  /** Ground truth, sent on mount and after any desync. */
+  onSnapshot: (seq: number, text: string) => void;
+  /** Bumped by the page when the gateway reports a gap. */
+  desyncKey: number;
   onRematch: () => void;
   onHub: () => void;
 }
@@ -107,6 +116,7 @@ int main() {
 
 export function MatchScreen(props: MatchScreenProps) {
   const {
+    matchId,
     you,
     p1,
     p2,
@@ -124,6 +134,9 @@ export function MatchScreen(props: MatchScreenProps) {
     inFlight,
     onSubmit,
     onKeystrokes,
+    onDelta,
+    onSnapshot,
+    desyncKey,
     onRematch,
     onHub,
   } = props;
@@ -131,20 +144,49 @@ export function MatchScreen(props: MatchScreenProps) {
   const m = useMotion();
   const [language, setLanguage] = useState<"CPP17" | "PYTHON3">("PYTHON3");
   const [source, setSource] = useState(STARTERS.PYTHON3);
+  const seq = useRef(0);
+  const pending = useRef<EditorChange[]>([]);
+  const pendingOrigin = useRef<string>("type");
+  const sourceRef = useRef(STARTERS.PYTHON3);
+  const pasteArmed = useRef(false);
   const { controls: shakeControls, fire } = useScreenShake();
   const keystrokes = useRef(0);
   const opponent: Side = you === "p1" ? "p2" : "p1";
 
   /* §6.4: report keystroke COUNTS on a fixed cadence — never content. This is
      what makes the pulse line show thinking pauses versus typing bursts
-     without leaking a character of code. */
+     without leaking a character of code.
+
+     125ms, not 500ms: §6.4 asks for ~8fps, and a 500ms window smears a burst's
+     leading edge across four samples, which is the one thing the asymmetric
+     smoothing downstream exists to preserve. */
   useEffect(() => {
     const id = setInterval(() => {
       onKeystrokes(keystrokes.current);
       keystrokes.current = 0;
-    }, 500);
+    }, PULSE_SAMPLE_MS);
     return () => clearInterval(id);
   }, [onKeystrokes]);
+
+  /* §10: Monaco deltas, batched at ~50ms and sequence-numbered.
+     Only emitted when there is something to say — an idle editor is silent. */
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (pending.current.length === 0) return;
+      seq.current += 1;
+      onDelta({ seq: seq.current, changes: pending.current, origin: pendingOrigin.current });
+      pending.current = [];
+      pendingOrigin.current = "type";
+    }, 50);
+    return () => clearInterval(id);
+  }, [onDelta]);
+
+  // Ground truth on mount, and again whenever the gateway reports a gap.
+  useEffect(() => {
+    seq.current = 0;
+    pending.current = [];
+    onSnapshot(0, sourceRef.current);
+  }, [onSnapshot, desyncKey]);
 
   // A submitted pass shakes the screen (§6.6.4). Failure does not — it stings
   // for a second and gets out of the way rather than punishing with motion.
@@ -181,6 +223,9 @@ export function MatchScreen(props: MatchScreenProps) {
 
   return (
     <ShakeStage controls={shakeControls}>
+      {/* The match id, discoverable without a log scrape — /dev/spectate needs
+          it and so does anything automating this screen. */}
+      <span data-match-id={matchId} hidden />
       <ClutchEdge side={opponent} progress={opponentProgress} />
 
       <div className="flex min-h-dvh flex-col">
@@ -225,6 +270,12 @@ export function MatchScreen(props: MatchScreenProps) {
                     onClick={() => {
                       setLanguage(lang);
                       setSource(STARTERS[lang]);
+                      sourceRef.current = STARTERS[lang];
+                      // The whole document was replaced; re-establish ground
+                      // truth rather than emitting a delta nobody can apply.
+                      seq.current = 0;
+                      pending.current = [];
+                      onSnapshot(0, STARTERS[lang]);
                     }}
                     className={cn(
                       "focus-ring font-display px-2.5 py-1 text-12 font-bold tracking-[var(--track-hud)] uppercase",
@@ -267,9 +318,34 @@ export function MatchScreen(props: MatchScreenProps) {
                 theme="vs-dark"
                 language={language === "PYTHON3" ? "python" : "cpp"}
                 value={source}
-                onChange={(value) => {
+                onMount={(editor) => {
+                  /* §10 paste detection: capture the DATA, build no response.
+                     Monaco tells us a paste happened separately from the change
+                     itself, so flag the next batch. */
+                  editor.onDidPaste(() => {
+                    pasteArmed.current = true;
+                  });
+                }}
+                onChange={(value, event) => {
                   keystrokes.current += 1;
-                  setSource(value ?? "");
+                  const next = value ?? "";
+                  sourceRef.current = next;
+                  setSource(next);
+
+                  /* Monaco emits a single event's changes in DESCENDING offset
+                     order, and absolute offsets make applying them a pure
+                     string splice on the far side. Keep the order. */
+                  for (const change of event?.changes ?? []) {
+                    pending.current.push({
+                      offset: change.rangeOffset,
+                      length: change.rangeLength,
+                      text: change.text,
+                    });
+                  }
+                  if (pasteArmed.current) {
+                    pendingOrigin.current = "paste";
+                    pasteArmed.current = false;
+                  }
                 }}
                 options={{
                   fontFamily: "var(--ff-code)",

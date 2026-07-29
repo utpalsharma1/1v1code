@@ -48,3 +48,16 @@ export {
   generateCode,
   normaliseCode,
 } from "./codes.ts";
+
+/* §6.4 pulse level from real keystrokes. Pure maths, so it lives here rather
+   than in the UI package: the live HUD and any replay consumer must produce
+   identical traces from identical input. */
+export {
+  PULSE_FALL,
+  PULSE_FULL_SCALE,
+  PULSE_RISE,
+  PULSE_SAMPLE_MS,
+  PULSE_WINDOW,
+  pulseSeries,
+  pulseStep,
+} from "./pulse.ts";

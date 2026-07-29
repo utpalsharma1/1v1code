@@ -10,6 +10,7 @@ import {
   type MatchState,
 } from "@1v1/core";
 import type { PlayerCard, Side } from "@1v1/proto";
+import { EditorRelay, SNAPSHOT_INTERVAL_MS, canSee, type Viewer } from "./relay.ts";
 import { ReplayLog } from "./replay-log.ts";
 
 /* ============================================================================
@@ -73,6 +74,11 @@ export class LiveMatch {
   private readonly emitTo: EmitTo;
   private readonly onBeforeLive: (() => Promise<void>) | null;
   private readonly onFinished: (match: LiveMatch) => void;
+
+  /** §10 keystroke relay. Authoritative text per side lives here. */
+  readonly relay = new EditorRelay();
+  /** Sockets watching this match who are not playing in it. */
+  readonly spectators = new Set<string>();
 
   private clock: Stopwatch | null = null;
   private acceptDeadline: Deadline | null = null;
@@ -202,6 +208,7 @@ export class LiveMatch {
           });
           this.later(() => void this.apply({ type: "CLOCK_EXPIRED" }), this.durationMs);
           this.tickClock();
+          this.startSnapshots();
         }
         break;
       case "ENDED":
@@ -326,6 +333,51 @@ export class LiveMatch {
     return this.grace.get(side)?.deadline.remaining() ?? 0;
   }
 
+  /* ── Editor relay (§10) ──────────────────────────────────────────────── */
+
+  get isOver(): boolean {
+    return isTerminal(this.ctx.state);
+  }
+
+  /** The single gate on source text leaving this match. */
+  mayView(viewer: Viewer, side: Side): boolean {
+    return canSee(viewer, side, this.isOver);
+  }
+
+  /** Records a delta in the replay log under the §10 seq/offsetMs/wallMs
+   *  contract. The paste-detection fields ride along (§10): a large
+   *  single-change insertion is visible to anything reading the log. */
+  async recordDelta(applied: {
+    side: Side;
+    seq: number;
+    changes: unknown[];
+    origin: string;
+    inserted: number;
+    removed: number;
+  }): Promise<void> {
+    await this.log.record("editor.delta", applied);
+  }
+
+  async recordSnapshot(side: Side, seq: number, text: string): Promise<void> {
+    await this.log.record("editor.snapshot", { side, seq, text });
+    this.relay.markSnapshotted(side);
+  }
+
+  /** Periodic full snapshots, so replay and late joiners never walk the whole
+   *  stream. Started with the clock and stopped with the match. */
+  private startSnapshots(): void {
+    const tick = (): void => {
+      if (isTerminal(this.ctx.state)) return;
+      for (const side of ["p1", "p2"] as const) {
+        if (!this.relay.needsSnapshot(side)) continue;
+        const doc = this.relay.doc(side);
+        void this.recordSnapshot(side, doc.seq, doc.text);
+      }
+      this.later(tick, SNAPSHOT_INTERVAL_MS);
+    };
+    this.later(tick, SNAPSHOT_INTERVAL_MS);
+  }
+
   /* ── Submissions (§6.9) ─────────────────────────────────────────────── */
 
   /** Elapsed match time at the moment a side's accepted submission landed. */
@@ -387,6 +439,14 @@ export class LiveMatch {
     for (const { timer } of this.grace.values()) clearTimeout(timer);
     this.grace.clear();
     this.clock?.stop();
+
+    /* A final snapshot per side before the log closes, so a replay always ends
+       holding both complete documents and never has to reconstruct them from
+       the delta stream to show the finished solutions. */
+    for (const side of ["p1", "p2"] as const) {
+      const doc = this.relay.doc(side);
+      if (doc.text.length > 0) await this.log.record("editor.snapshot", { side, seq: doc.seq, text: doc.text });
+    }
 
     const outcome = this.ctx.outcome ?? { kind: "CANCELED" as const, reason: "NEVER_STARTED" as const };
     await this.log.record("match.ended", { outcome, elapsedMs: this.clock?.elapsed() ?? 0 });

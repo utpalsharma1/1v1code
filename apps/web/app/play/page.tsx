@@ -19,6 +19,7 @@ import {
   type Status,
   type Tier,
 } from "@1v1/ui";
+import { PULSE_WINDOW, pulseStep } from "@1v1/core/pulse";
 
 /* ============================================================================
    /play — the first time Phase 1's cinematics fire on a real match.
@@ -107,6 +108,9 @@ function Play() {
     ratings: { side: Side; before: number; after: number }[];
   } | null>(null);
   const [inFlight, setInFlight] = useState(false);
+  // Bumped when the gateway reports a delta gap, which makes the editor
+  // re-send ground truth. Recovery is a snapshot, never a guess (§10).
+  const [desyncKey, setDesyncKey] = useState(0);
   const [remainingMs, setRemainingMs] = useState(0);
   const [presence, setPresence] = useState<{ side: Side; graceMs: number } | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -310,12 +314,24 @@ function Play() {
 
     socket.on("match.judging", (payload: { outstanding: Side[] }) => setHolding(payload.outstanding));
 
+    socket.on("editor.desync", (payload: { expected: number; got: number }) => {
+      note(`editor desync (expected ${payload.expected}, got ${payload.got}) — resending`);
+      setDesyncKey((k) => k + 1);
+    });
+
     socket.on("opponent.pulse", (payload: { side: Side; keys: number }) => {
-      // Fixed-length window so the sparkline scrolls rather than growing.
-      setPulses((prev) => ({
-        ...prev,
-        [payload.side]: [...prev[payload.side], payload.keys].slice(-120),
-      }));
+      /* Raw keystroke counts go in; a smoothed 0–1 level comes out.
+
+         Feeding PulseLine the counts directly was wrong — it clamps to 0–1, so
+         every sample with any typing in it pinned to full scale and the graph
+         became a binary comb with no burst structure at all. `pulseStep` does
+         the normalisation and the §6.4 asymmetric smoothing that makes an
+         onset read as an onset. */
+      setPulses((prev) => {
+        const series = prev[payload.side];
+        const level = pulseStep(series.at(-1) ?? 0, payload.keys);
+        return { ...prev, [payload.side]: [...series, level].slice(-PULSE_WINDOW) };
+      });
     });
 
     socket.on(
@@ -457,6 +473,7 @@ function Play() {
     });
     return (
       <MatchScreen
+        matchId={match.matchId}
         you={match.you}
         p1={asPlayer(match.p1)}
         p2={asPlayer(match.p2)}
@@ -476,6 +493,9 @@ function Play() {
           emit("code.submit", { matchId: match.matchId, language, source })
         }
         onKeystrokes={(keys) => emit("pulse.report", { matchId: match.matchId, keys })}
+        onDelta={(batch) => emit("editor.delta", { matchId: match.matchId, ...batch })}
+        onSnapshot={(seq, text) => emit("editor.snapshot", { matchId: match.matchId, seq, text })}
+        desyncKey={desyncKey}
         onRematch={() => {
           setPhase("idle");
           setEnding(null);

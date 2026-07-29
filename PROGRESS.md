@@ -2,98 +2,109 @@
 
 ## SESSION STOP — read this first
 
-**The reload bug is fixed and tested. 2C is designed and split; no relay code written yet.**
-Working tree clean.
+**Phase 2C-1 is built and verified. The keystroke relay works end to end.** Working tree clean.
 
-### The reload bug, and what it actually was
+### The visibility rule, attacked rather than confirmed
 
-Two faults, one visible symptom.
+`pnpm probe:visibility` does not assert "the opponent received no deltas" — that passes trivially
+if the attacker never tried. It attacks:
 
-1. **`match.resync` never carried the problem back.** The match screen only renders when it has one,
-   so after a reload the page fell through to the lobby layout — which draws nothing at all for a
-   live match and offers Play only in `idle`. The match then ended into a screen that could not
-   render its own ending.
-2. **Nothing returned the client to idle.** The ending screen's own buttons were the only route out,
-   so any gap that stopped it rendering stranded the client. That is now a rule rather than a repair:
-   a terminal match returns to idle whether or not the ending can be shown.
+- **`onAny`**, so it catches every event the socket can deliver rather than a list of names I
+  happened to think of
+- asks for the opponent's editor directly (`editor.resync` with their side)
+- asks greedily for **both** sides at once
+- tries to **spectate its own live match**, the one-click bypass
+- **forges a snapshot** claiming to be the opponent's editor, to check the gateway attributes by
+  identity rather than by payload
 
-Resync also mapped `JUDGING` to the lobby; it maps to the match screen now, because §6.7b's hold is
-a beat of the match and not a reason to eject the player.
+Then it asserts a secret string the victim typed appears in *nothing* it received.
 
-**A third bug fell out of writing the test: a ghost in the matchmaking pool.** `attempt()` is async
-on a 2s interval, so a socket dying mid-call let the disconnect handler `ZREM` the player while the
-in-flight call `ZADD`ed them straight back — a sessionless entry that can never be matched but makes
-the pool look non-empty forever, which is what stopped `alone` ever being true. `attempt()` now
-re-checks after its await and evicts itself, and a pair resolving to a missing session evicts that
-partner instead of leaving them to be handed out again.
+**Positive control performed.** `BREAK_VISIBILITY=1` removes the enforcement, and the probe fails
+with `THE OPPONENT'S SOURCE LEAKED via editor.delta, editor.snapshot` — 22 events across 8 names
+instead of 15 across 7. Restored, it passes. A browser test covers the same ground through the real
+UI: a spectator sees the typed marker, the opponent's window never contains it, and a competitor
+asking to spectate their own match gets `SELF_SPECTATE`.
 
-`e2e/match.spec.ts` now reloads `/play` mid-match, lets the match end, and asserts Play is usable
-without a hard reload. **5/5 match tests, 12/12 browser tests.**
+Enforcement lives in `canSee` / `canSpectate` in `apps/gateway/src/relay.ts`, and **both fanout
+paths route through it**. There is no second path and there must never be one.
 
-### 2C is designed. It splits. Here is why.
+### The pulse line needed retuning, and here are the numbers
 
-The full design is now in **CLAUDE.md §10, *The keystroke relay*** — visibility rule, bandwidth
-figures, ordering and recovery contract, paste-detection data shape. Three answers up front:
+**You were right to ask. The smoothing transfers; the scale did not.**
 
-**1. What the opponent sees during LIVE — I agree with you, and the rule needs to be server-side.**
-Opponents get the pulse line and status ticker only; full side-by-side is for spectators, and for
-both players after the match ends. §6.4 says the pulse line exists to show thinking pauses versus
-typing bursts *without ever leaking a character of code*, and §6.5's compile pulse, clutch state and
-near-miss are all derived signals — a count, a rate, a threshold.
+Rising 0.6 / falling 0.18 was chosen to preserve burst onsets, and against real typing that is not
+merely preserved — it is the mechanism. Real keystrokes at 125ms are a sparse impulse train, mostly
+zeros and ones, so the fast attack is what turns the first keystroke of a burst into a visible onset
+and the slow release is what makes a pause read as a decline. Measured: **onset to 0.3 in ~250ms,
+release from 1.0 to 0.05 in ~2000ms** — an 8:1 asymmetry, intact.
 
-The part worth adding: **hiding it client-side is not a control.** If the gateway writes a delta to
-an opposing player's socket, a modified client reads it; the advantage is total, silent, and
-available to anyone who opens devtools. So the gateway must never send it.
+**What was wrong was `PULSE_FULL_SCALE`, which I first set to 2.5 by reasoning about headroom
+alone.** Simulating an eight-minute match at 8fps against Poisson keystrokes:
 
-And a hole your framing exposes: **a player in a live match must not be able to spectate that
-match**, or the spectator path becomes a one-click bypass. §7's 45-second ranked delay does not
-close it — 45-second-old source is still an enormous edge in an eight-minute match, and unranked
-delay is zero. The gateway refuses by identity.
+| full scale | 5 c/s typist | 9 c/s bursts | slow 3 c/s |
+| --- | --- | --- | --- |
+| 2.5 | mean 0.28 | mean 0.44 | 46% below 0.05 |
+| **1.5** | **mean 0.36, p50 0.40** | **mean 0.55, p95 0.95** | 54% below 0.05 |
+| 1.0 | mean 0.45 | p95 0.999 — pinned | 54% below 0.05 |
 
-**2. Bandwidth and ordering.** At ~4–5 chars/sec while actively typing and roughly 40% of an
-eight-minute match spent typing, that is ~1000–1200 change events, ~1 per non-empty 50ms batch:
+At 2.5 the trace hugs the floor for a normal typist, which inverts §6.4: a flatline is supposed to
+mean *stuck*, not *typing normally*. At 1.0 a merely ordinary typist already pins the graph so a
+burst has nowhere to go. **1.5 is where ordinary typing sits mid-range, a real burst reaches p95 ≈
+0.95 with headroom, and pauses still hit the floor.**
 
-| stream | batches / match | bytes / player |
-| --- | --- | --- |
-| player deltas (50ms) | ~1000–1200 | **~130 KB** |
-| 30s snapshots | 16 | ~16 KB |
-| spectator (200ms) | ~300 | ~80 KB |
-| spectator ranked (500ms) | ~120 | ~50 KB |
+**One honest consequence: real typing is 2–3× jaggier tick to tick than the simulator was** — mean
+absolute step ~0.076 against ~0.026. The simulator was smooth because it held a persistent target
+for dozens of ticks and a human does not. **I did not filter that out**, because the texture is the
+actual signal and smoothing it would be tuning the instrument to match the model instead of the
+world. It is the thing to judge by eye; the constants are in `packages/core/src/pulse.ts` with the
+table above.
 
-**~300 KB per match** for both editor streams; ~1.5 MB under frantic editing. Bytes are not the
-constraint — message *rate* is, which is why §7 batches spectators rather than compressing them.
+### What 2C-1 ships
 
-Ordering: Socket.IO is ordered and reliable per connection, so deltas cannot arrive out of order on
-a live socket. The real failure is **a gap across a reconnect**. Every batch carries a per-side
-monotonic `seq`; a receiver that sees anything other than `lastSeq + 1` **must not apply it**,
-because applying a delta to the wrong base yields plausible code that was never written — strictly
-worse than a visible gap. Recovery is `editor.resync` → full snapshot → replace the buffer. **Never
-interpolate.**
+- **Monaco deltas over the gateway**, batched at 50ms, per-side monotonic `seq`, absolute character
+  offsets so applying is a pure string splice on the far side.
+- **The gateway holds authoritative text per side**, which is what makes snapshots, late joiners and
+  gap recovery free rather than a replay of the stream.
+- **Gap recovery never guesses.** A delta that is not `lastSeq + 1` is refused, and the gateway asks
+  that client for a snapshot (`editor.desync`). Applying to the wrong base yields plausible code
+  nobody wrote, which is worse than a visible hole because nothing downstream can tell.
+- **Snapshots every 30s**, plus a final one per side before the log closes, so a replay always ends
+  holding both complete documents.
+- **Deltas in the JSONL log** under the existing `seq` / `offsetMs` / `wallMs` contract, carrying the
+  paste-detection shape. Verified on disk — a real batch reads
+  `ins=183 removed=0 origin=paste` against `ins=26 origin=type`, so a paste is unmistakable to
+  anything reading the log. No enforcement built, as specified.
+- **The pulse line on real keystrokes**, reported at 125ms (~8fps) rather than the old 500ms, which
+  smeared a burst's leading edge across four samples.
+- **`/dev/spectate`** — both editors side by side, gap-counting, with the match id now exposed on the
+  match screen so you can paste it in.
 
-**3. Paste detection — data shape now, response never (yet).** Each logged batch carries per-change
-inserted and replaced lengths, the batch's total inserted characters, and an `origin` of
-`type`/`paste`/`undo`/`other` where Monaco tells us. A 400-character single-change insertion at one
-`offsetMs` is then unmistakable to anything reading the log. No enforcement, no verdict, no UI.
+### Verified this session
 
-**The split**, recorded in §12:
+`probe:visibility` with a failing positive control · **e2e 14/14 in a real browser**, including
+typing reaching a spectator and never the opponent · core 56/56 (5 new pulse property tests) ·
+`probe:match` · `probe:requeue` · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · typecheck 7/7 ·
+production build clean.
 
-- **2C-1 — the relay.** Deltas, batching, per-side `seq`, 30s snapshots, gap recovery, delta records
-  in the JSONL log, the gateway-enforced visibility rule, the paste data shape, and the §6.4 pulse
-  line driven by real keystrokes at last. Plus the dev route showing both editors side by side —
-  which is what makes any of it verifiable by eye, the same argument as `/dev/hud` and
-  `/dev/sparring`.
-- **2C-2 — the spectator stream.** §7's tiered fanout (200ms, 500ms ranked), room broadcast rather
-  than per-socket sends, the late-joiner snapshot path, and the self-spectate ban across a real
-  audience.
+**Not verified: how the real pulse line looks.** That is the one thing this phase changed that only
+an eye can settle — see the jaggedness note above.
 
-**The seam is real rather than convenient.** Everything in 2C-2 is a *load* optimisation whose
-behaviour is unobservable at one viewer, and §7 ties it to the spectator feature proper. Building it
-against a dev route with a single consumer would be tuning a ceiling nobody is near, and the
-batching interacts with the delay badge and late-joiner path Phase 3 owns. Splitting keeps 2C-1's
-deliverable honest — a real pulse line and a complete log — instead of half a fanout tier nothing
-exercises.
+### Two bugs found by running it
 
-**Nothing in 2C is built.** The design is committed; the code is next session.
+- **`@1v1/core`'s index reaches `node:crypto`** via `codes.ts`, so importing the pulse helpers from
+  the package root broke every page with an unbundleable-scheme error — `/register` returned 500.
+  There is now a `@1v1/core/pulse` subpath export and the browser imports the leaf.
+- **`/dev/spectate` tore down its own socket on Watch.** The effect depended on `joined`, so setting
+  it rebuilt the socket and discarded the `spectate.join` that had just been sent. The page
+  connected, joined nothing, and showed two empty editors. It uses a ref now.
+
+### To see it
+
+1. **Window A — `/play`.** Sign in, **PLAY**.
+2. **Window B — `/dev/sparring`.** **Join queue**. Both **Accept**.
+3. **Window C — `/dev/spectate`.** Copy the match id — the gateway logs
+   `[gateway] match <id>: …`, or read `data-match-id` off the match screen — paste it, **Watch**.
+4. Type in A. It appears in C's left editor within ~50ms, and never anywhere in B.
 
 ### Bringing the stack back up, in order
 
@@ -113,30 +124,24 @@ setsid nohup pnpm --filter @1v1/web dev                                > /tmp/we
 pnpm test:smoke                          # RUN FIRST — asset integrity, ~10s
 ```
 
-**The judge worker is easy to forget and its absence looks like a product bug.** With it down every
-submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — a
-run of voids means check `/tmp/worker.log` first.
+**The judge worker is easy to forget and its absence looks like a product bug** — every submission
+hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match.
 
-**To play: two windows.** `/play` signed in, `/dev/sparring` for the opponent. There is no bot, so a
-single window will sit in an empty queue and say so. Full step-by-step, including how to stage the
-§6.7b hold and a receipt-order inversion, is in the commit for `8faa20a` and below.
-
-| to see | do |
-| --- | --- |
-| cells resolving one at a time | A: write anything, **Submit** |
-| the §6.7b hold | B: **Time limit** first, then A submits correct |
-| receipt order deciding | B: **Correct (reference)**, then A within ~1s |
-| victory / defeat + delta | A or B: **Correct (reference)** |
-| clutch edge | B: **Correct (reference)** on a 5+ test problem |
-| drop + 45s grace | B: **Drop socket**, then **Reconnect** |
+**There is no bot.** A single window sits in an empty queue and says so. Use `/dev/sparring`.
 
 Suites: `pnpm test:smoke` · `pnpm test:e2e` · `pnpm probe:match` · `pnpm probe:requeue` ·
-`pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` · `pnpm db:solutions` ·
-`node --experimental-strip-types --test packages/core/src/*.test.ts` ·
+`pnpm probe:visibility` · `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` ·
+`pnpm db:solutions` · `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
 `node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`
 
 **Shell note:** `pkill -f` has matched its own shell repeatedly here. Kill by PID from
 `ps -eo pid,cmd`, and start long-lived processes with `setsid … < /dev/null & disown`.
+
+### Next: 2C-2 — the spectator stream
+
+§7's tiered fanout (200ms, 500ms on ranked), room broadcast rather than per-socket sends, the
+late-joiner snapshot path, and the self-spectate ban across a real audience. Everything in it is a
+load optimisation unobservable at one viewer, which is why it was split.
 
 
 ## What class of check would have caught this — and what is still eye-only
