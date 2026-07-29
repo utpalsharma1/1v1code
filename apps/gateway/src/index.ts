@@ -7,7 +7,7 @@ import { prisma } from "@1v1/db";
 import { MatchAcceptSchema, QueueJoinSchema, type PlayerCard, type Side } from "@1v1/proto";
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
 import { Matchmaker, bandFor } from "./matchmaking.ts";
-import { identify, type Identity } from "./session.ts";
+import { identify, identifyById, type Identity } from "./session.ts";
 
 /* ============================================================================
    Gateway (§10, §12 Phase 2B-2)
@@ -246,10 +246,52 @@ async function leaveQueue(session: Session): Promise<void> {
 
 /* ── Socket lifecycle ─────────────────────────────────────────────────── */
 
+/* ── Handshake authentication ──────────────────────────────────────────
+   TWO PATHS, and the order matters.
+
+   1. TICKET (primary). The page fetches a short-lived single-use ticket from
+      its OWN origin, where the session cookie is unambiguously sent, and hands
+      it over in the Socket.IO auth payload. No cookie has to survive a
+      cross-origin request, so none of this depends on SameSite behaviour,
+      third-party cookie policy, or whether the browser attaches cookies to a
+      cross-origin WebSocket upgrade.
+
+   2. COOKIE (fallback). Kept so the headless probes and any same-origin
+      deployment keep working unchanged.
+
+   The log line below is deliberately permanent. When this broke, the one fact
+   nobody could establish without a browser was whether a Cookie header arrived
+   at all — so now the server says so on every attempt, including rejections. */
 io.use(async (socket, next) => {
-  const identity = await identify(socket.handshake.headers.cookie);
+  const auth = socket.handshake.auth as { ticket?: unknown } | undefined;
+  const ticket = typeof auth?.ticket === "string" ? auth.ticket : null;
+  const cookieHeader = socket.handshake.headers.cookie;
+  const origin = socket.handshake.headers.origin ?? "none";
+
+  let identity: Identity | null = null;
+  let via = "nothing";
+
+  if (ticket) {
+    // Single use: GETDEL so a ticket cannot be replayed if it leaks.
+    const userId = await redis.getdel(`socket:ticket:${ticket}`);
+    if (userId) {
+      identity = await identifyById(userId);
+      via = "ticket";
+    }
+  }
+  if (!identity && cookieHeader) {
+    identity = await identify(cookieHeader);
+    if (identity) via = "cookie";
+  }
+
+  console.log(
+    `[gateway] handshake transport=${socket.conn.transport.name} origin=${origin} ` +
+      `cookie=${cookieHeader ? "present" : "ABSENT"} ticket=${ticket ? "present" : "absent"} ` +
+      `-> ${identity ? `${identity.handle} via ${via}` : "REJECTED"}`,
+  );
+
   if (!identity) {
-    next(new Error("unauthenticated: no valid session cookie"));
+    next(new Error("unauthenticated: no valid ticket or session cookie"));
     return;
   }
   (socket.data as { identity: Identity }).identity = identity;

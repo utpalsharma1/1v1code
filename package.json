@@ -19,7 +19,8 @@
     "judge:reaper": "pnpm --filter @1v1/judge reaper",
     "db:users": "pnpm --filter @1v1/db seed:users",
     "gateway": "pnpm --filter @1v1/gateway start",
-    "db:solutions": "pnpm --filter @1v1/db solutions"
+    "db:solutions": "pnpm --filter @1v1/db solutions",
+    "test:signin": "pnpm --filter @1v1/gateway test:signin"
   },
   "devDependencies": {
     "turbo": "^2.10.7",

@@ -46,6 +46,28 @@ export function readCookie(header: string | undefined, name: string): string | n
  * An expired session is deleted on sight rather than merely rejected, so the
  * table does not accumulate dead rows that still look like valid tokens.
  */
+const SELECT = {
+  id: true,
+  handle: true,
+  rating: true,
+  ratingDev: true,
+  volatility: true,
+} as const;
+
+/** Resolve a user id straight to an Identity, for the ticket path. */
+export async function identifyById(userId: string): Promise<Identity | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: SELECT });
+  if (!user) return null;
+  return {
+    userId: user.id,
+    handle: user.handle,
+    rating: user.rating,
+    ratingDeviation: user.ratingDev,
+    volatility: user.volatility,
+    isBot: user.handle.startsWith("bot_"),
+  };
+}
+
 export async function identify(cookieHeader: string | undefined): Promise<Identity | null> {
   const token = readCookie(cookieHeader, COOKIE_NAME);
   if (!token) return null;

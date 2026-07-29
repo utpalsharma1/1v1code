@@ -2,73 +2,89 @@
 
 ## SESSION STOP — read this first
 
-**HEAD: `cdb0373`.** Working tree clean. Everything below is committed.
+**The auth blocker is fixed. 2B-4 is unblocked pending your browser check.** Everything below is
+committed; working tree clean.
 
-**2B-4 is designed and schema'd but NOT STARTED. It is blocked, and the blocker is not in 2B-4.**
+### What the blocker actually was, and what I could and could not prove
 
-### The blocker: cookie paste flow does not work in the browser
+You were right to rule out token rotation: one `db:users` run, immediate paste, so hypothesis 1 in
+the previous stop note could not explain it. I checked the cross-origin hypothesis directly and
+found **both sides provably correct**:
 
-Symptom, observed by the user: the browser holds the pasted `1v1_session` cookie, but the server
-rejects it. `/play` renders, the socket connect fails, and every browser verification is blocked
-behind that — which in turn blocks 2B-4, because 2B-4's deliverable starts with "register in a
-fresh browser".
+- The gateway returns `Access-Control-Allow-Origin: http://localhost:3000` and
+  `Access-Control-Allow-Credentials: true` — an explicit origin, not a wildcard, so the
+  wildcard-plus-credentials incompatibility does not apply here.
+- The shipped client bundle, extracted from `/_next/static/chunks/app/play/page.js`, really does
+  carry `{ withCredentials: true, transports: ["websocket","polling"] }` and the right gateway URL.
 
-**What is NOT the cause. Server-side auth is verified working** (checked with a real socket client
-against the running gateway, both directions):
+**So I could not settle it from the server, and I am not going to claim I did.** With both ends
+correct the remaining variable is what the browser chooses to attach to a cross-origin WebSocket
+upgrade, and there is no browser in this environment to observe it. Two responses, because guessing
+harder was not going to work:
 
-```
-VALID cookie   -> CONNECTED         (server auth works)
-STALE cookie   -> REJECTED: unauthenticated: no valid session cookie
-```
+1. **Permanent instrumentation.** Every handshake now logs transport, origin, whether a `Cookie`
+   header was present, whether a ticket was present, and which path authenticated it. The next
+   browser attempt records the answer instead of requiring it to be inferred.
+2. **The dependency is gone.** `/play` now fetches a ticket from `POST /api/socket-ticket` — the
+   app's **own origin**, where the cookie is unambiguously sent — and hands it to the gateway in the
+   Socket.IO `auth` payload. Nothing on the connect path depends on cross-origin cookie behaviour.
 
-So `identify()`, the session lookup, the expiry check and the CORS credentials config are all fine.
-The fault is in cookie **delivery or freshness**, not verification.
+The ticket is 32 random bytes, lives in Redis for 60 seconds, and is consumed with `GETDEL` so it is
+**single use** — a leaked ticket is worth one connection inside one minute. The cookie path is kept
+as a fallback so headless probes and any future same-origin deployment do not regress.
 
-**Ranked hypotheses for the next session:**
+**This is also what production needs, not just a workaround.** The gateway will be on a different
+host than the web app, which is cross-*site*, where cookie-based socket auth is on a path browsers
+are actively closing off. Building the ticket flow now is cheaper than discovering it at deploy.
 
-1. **`pnpm db:users` invalidates every previously pasted cookie — most likely cause.**
-   `prisma/seed-users.ts` does `session.deleteMany({ where: { userId } })` before creating a new
-   one, so *every run rotates all three tokens*. This session ran `db:users` again at the very end,
-   which would have killed any cookie pasted earlier. **Fix: make the seed idempotent** — reuse an
-   existing unexpired session instead of deleting, or print the existing token. This is a footgun
-   the seed script created and it should not survive.
-2. **Cross-origin cookie delivery from `:3000` to `:4000`.** Same-site but cross-origin. The client
-   sets `withCredentials: true` and the gateway sets `credentials: true` with an explicit origin,
-   which *should* work — but `transports: ["websocket", "polling"]` tries WebSocket first, and
-   browser cookie attachment on cross-origin WebSocket upgrades is worth verifying directly rather
-   than assuming.
-3. Cookie scope: `document.cookie` with `path=/` is host-only for `localhost` and ports are not part
-   of cookie scope, so this *should* be fine — check it in devtools before spending time here.
+### The other three items
 
-**Diagnostic that will settle it in one step:** open devtools → Network → the `socket.io` request to
-`:4000` → check whether a `Cookie:` header is present. Present and rejected means a stale token
-(hypothesis 1). Absent means a delivery problem (hypothesis 2).
+- **`db:users` is idempotent.** It reuses any session with more than 24h left instead of
+  `deleteMany`-ing first. Re-running the seed no longer logs anyone out. That footgun was mine and
+  it is gone.
+- **The on-page instructions describe something that works.** `/play`'s signed-out screen now links
+  to `/register` and `/login` and mentions no cookie and no console step, and `db:users` prints
+  "SIGN IN THROUGH THE UI" rather than a paste ritual. A separate screen now distinguishes
+  **gateway unreachable** from **not signed in** — conflating them is what sent the last debugging
+  session in the wrong direction.
+- **`apps/gateway/src/signin.test.ts` — 12 tests, the one that was missing.** It drives real HTTP
+  against the dev server with a hand-rolled cookie jar, exactly as a browser would, and finishes by
+  opening a **real socket** to the gateway. Register → cookie → ticket → socket, ticket replay
+  refused, forged ticket refused, no credentials refused, cookie fallback intact, logout revokes,
+  login re-issues, wrong password sets no cookie.
 
-**Note:** a Socket.IO polling handshake returns HTTP 200 and a `sid` *without any cookie* — Engine.IO
-transport negotiation runs before the auth middleware. `curl`ing the handshake is not an auth test,
-and an earlier check in this session was misread as one.
+**Why it could not have caught this before: the form posted to a server action.** A server action is
+only reachable through the RSC protocol, so nothing could drive the sign-in path a browser uses.
+Auth now goes through `/api/auth/{register,login,logout}` route handlers and the form posts to the
+same endpoints the test does. A test that enters through a different door than the UI can pass while
+the UI is broken — which is precisely how this got missed. Same shape as the `--ulimit nproc` trap
+and the lone-surrogate exploit: correct parts, untested seam.
 
-### Verified — do not re-litigate
+### What is verified, and what still is not
 
-- 26 judge containment tests, including the `INTERNAL_ERROR` invariant class, which caught a live
-  match-voider (lone surrogate in source → `UnicodeEncodeError` → internal error → VOID match).
+Verified this session, by running it: 12/12 sign-in, 10/10 matchmaking, 26/26 judge containment
+(incl. the INTERNAL_ERROR class), 101 seed cases, 20/20 bot solutions ACCEPTED, typecheck 7/7,
+production build clean, all routes 200.
+
+**Still not verified: anything seen by a human eye.** No browser exists here. The end-to-end test
+proves the ticket seam works over real HTTP and a real socket, which is strictly more than was true
+before — but it is not the same as two browser windows, and your check is what closes it.
+
+### Verified earlier — do not re-litigate
+
 - 48 core tests: Glicko-2 against Glickman's published example, match state machine incl. the §6.9
   receipt-order fairness property, event log incl. ordering surviving a backward clock step, bot
   model, shareable codes.
-- 10 matchmaking tests, incl. 50 concurrent joins → 25 disjoint matches, nobody lost.
-- 101 seed test cases agree with reference solutions; 20/20 bot solutions ACCEPTED by the real judge.
-- Gateway end to end headlessly: two clients cookie-authenticate, queue, pair after the band widens,
-  accept idempotently, count down, reach LIVE, with a gapless replay log on disk.
+- 50 concurrent queue joins → 25 disjoint matches, nobody lost or double-matched.
+- Gateway end to end headlessly: two clients authenticate, queue, pair after the band widens, accept
+  idempotently, count down, reach LIVE, with a gapless replay log on disk.
 - Reconnection: drop → opponent notified with 45s grace → return → full resync → no forfeit.
-- Auth at library level: 12 checks incl. gateway resolving a real cookie and deleting expired rows.
+- Submission persistence, the match screen, the live bot, Glicko applied to a real outcome and the
+  §6.7b hold screen remain **2B-4**, unstarted.
 
-### NOT verified — assume nothing
-
-- **Anything in a browser.** No browser exists in the agent environment. `/play`'s cinematics,
-  the `/register` and `/login` forms, the cookie round-trip, and every visual claim about Phase 0
-  and Phase 1 are unconfirmed by eye.
-- Submission persistence (no `Submission` row is written yet), the match screen, the live bot,
-  Glicko applied to a real outcome, the §6.7b hold screen. All 2B-4.
+**A Socket.IO polling handshake returns HTTP 200 and a `sid` without any cookie** — Engine.IO
+transport negotiation runs before the auth middleware. `curl`ing the handshake is not an auth test.
+That retraction stands.
 
 ### Bringing the stack back up, in order
 
@@ -85,15 +101,25 @@ nohup node --experimental-strip-types apps/judge/src/index.ts   > /tmp/worker.lo
 nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.log 2>&1 &
 nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 &
 
-pnpm db:users                            # ROTATES all session tokens — see blocker
+pnpm db:users                            # idempotent; does NOT rotate tokens
 ```
 
-Routes: `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`. Gateway on `:4000`.
+**To play: open http://localhost:3000/register and sign up.** Two windows, two accounts — one normal,
+one private, so the sessions are separate. Seeded logins are `arjun@example.com` /
+`rohan@example.com` with password `dev-password-1v1`. The printed tokens exist only for headless
+probes; there is nothing to paste.
 
-Verification suite: `pnpm judge:test` (needs Docker + images), `pnpm db:verify`,
-`pnpm db:solutions` (needs the worker running),
+Routes: `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`, `/dev/kitchen-sink`. Gateway on
+`:4000` (no `/healthz` — probe `/socket.io/?EIO=4&transport=polling`).
+
+Verification suite: `pnpm test:signin` (needs web + gateway + Redis + Postgres up), `pnpm judge:test`
+(needs Docker + images), `pnpm db:verify`, `pnpm db:solutions` (needs the worker running),
 `node --experimental-strip-types --test packages/core/src/*.test.ts`,
-`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts` (needs Redis).
+`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`.
+
+**If the browser still fails, read `/tmp/gateway.log` first.** Each handshake logs one line naming
+transport, origin, cookie presence, ticket presence and the authenticating path. That line is the
+diagnostic that was missing.
 
 **Shell note:** `pkill -f` has matched its own shell twice in this project. Use a bracketed pattern —
 `pkill -f "gateway/src/inde[x].ts"` — or kill by PID from `ps -eo pid,cmd`.

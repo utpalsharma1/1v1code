@@ -76,10 +76,43 @@ function Play() {
   }, []);
 
   useEffect(() => {
-    // withCredentials so the session cookie rides along on the handshake —
-    // identity is a real cookie, never a query parameter.
-    const socket = io(GATEWAY, { withCredentials: true, transports: ["websocket", "polling"] });
-    socketRef.current = socket;
+    let socket: Socket | null = null;
+    let cancelled = false;
+
+    /* Fetch a ticket from OUR OWN origin first, where the session cookie is
+       unambiguously sent, then hand it to the gateway. Nothing here depends on
+       a cookie surviving a cross-origin WebSocket upgrade — which is exactly
+       what could not be observed from the server when this was broken. */
+    void (async () => {
+      let ticket: string | null = null;
+      try {
+        const response = await fetch("/api/socket-ticket", {
+          method: "POST",
+          credentials: "same-origin",
+        });
+        if (response.status === 401) {
+          if (!cancelled) setAuthError("NOT_SIGNED_IN");
+          return;
+        }
+        if (response.ok) {
+          ticket = ((await response.json()) as { ticket: string }).ticket;
+        }
+      } catch {
+        if (!cancelled) setAuthError("Could not reach the app server for a socket ticket.");
+        return;
+      }
+      if (cancelled) return;
+
+      socket = io(GATEWAY, {
+        withCredentials: true,
+        transports: ["websocket", "polling"],
+        auth: ticket ? { ticket } : {},
+      });
+      socketRef.current = socket;
+      wire(socket);
+    })();
+
+    function wire(socket: Socket) {
 
     socket.on("connect", () => {
       setConnected(true);
@@ -88,7 +121,13 @@ function Play() {
     });
     socket.on("connect_error", (error) => {
       setConnected(false);
-      setAuthError(error.message);
+      // A transport failure is NOT an auth failure. Conflating them made a
+      // gateway that was simply unreachable render as "Not signed in", which
+      // sent the last debugging session in the wrong direction entirely.
+      const message = error.message || "";
+      const isAuth = /unauthenticated/i.test(message);
+      setAuthError(isAuth ? message : `GATEWAY_UNREACHABLE:${message}`);
+      note(isAuth ? `rejected: ${message}` : `gateway unreachable: ${message}`);
     });
     socket.on("disconnect", () => {
       setConnected(false);
@@ -151,25 +190,54 @@ function Play() {
       note(`error ${payload.code}: ${payload.message}`),
     );
 
+    }
+
     return () => {
-      socket.close();
+      cancelled = true;
+      socket?.close();
+      socketRef.current = null;
     };
   }, [note]);
 
   const emit = (event: string, payload: unknown = {}) => socketRef.current?.emit(event, payload);
 
+  if (authError?.startsWith("GATEWAY_UNREACHABLE")) {
+    return (
+      <main className="mx-auto max-w-2xl px-6 py-16">
+        <Card title="Gateway unreachable" tone="elevated">
+          <p className="text-fail text-13">{authError.replace("GATEWAY_UNREACHABLE:", "") || "connection failed"}</p>
+          <p className="text-fg-dim mt-3 text-13 leading-relaxed">
+            You are signed in — this is a transport problem, not an authentication one. Start the
+            gateway with{" "}
+            <span className="tabular text-fg">
+              node --experimental-strip-types apps/gateway/src/index.ts
+            </span>{" "}
+            and reload.
+          </p>
+        </Card>
+      </main>
+    );
+  }
+
   if (authError) {
     return (
       <main className="mx-auto max-w-2xl px-6 py-16">
         <Card title="Not signed in" tone="elevated">
-          <p className="text-fail text-13">{authError}</p>
-          <p className="text-fg-dim mt-3 text-13 leading-relaxed">
-            The gateway requires a real session cookie — identity is never a query parameter.
-            Registration UI lands in 2B-3. Until then, run{" "}
-            <span className="tabular text-fg">pnpm db:users</span> and paste the printed{" "}
-            <span className="tabular text-fg">document.cookie</span> line into this tab&apos;s
-            console, then reload.
+          <p className="text-fg-dim text-13 leading-relaxed">
+            Sign in to play. Identity comes from a real session cookie issued by{" "}
+            <span className="tabular text-fg">/register</span> — there is no console step and no
+            cookie to paste.
           </p>
+          <div className="mt-4 flex gap-2">
+            <a href="/register">
+              <Button variant="solid" tone="player">
+                Create account
+              </Button>
+            </a>
+            <a href="/login">
+              <Button variant="outline">Sign in</Button>
+            </a>
+          </div>
         </Card>
       </main>
     );

@@ -1,19 +1,63 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Button, Card } from "@1v1/ui";
-import type { FormState } from "./actions";
 
-export function AuthForm({
-  mode,
-  action,
-}: {
-  mode: "register" | "login";
-  action: (prev: FormState, form: FormData) => Promise<FormState>;
-}) {
-  const [state, formAction, pending] = useActionState(action, { error: null });
+/* The form posts JSON to /api/auth/*, not to a server action.
+
+   A server action is only reachable through the RSC protocol, so the sign-in
+   path could not be driven by a test — and that is precisely where it broke.
+   Posting to a route handler means the end-to-end test exercises the same
+   endpoint the browser does, which is the only kind of test that could have
+   caught this. */
+
+export function AuthForm({ mode }: { mode: "register" | "login" }) {
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const isRegister = mode === "register";
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+
+    const form = new FormData(event.currentTarget);
+    const payload = isRegister
+      ? {
+          handle: String(form.get("handle") ?? ""),
+          email: String(form.get("email") ?? ""),
+          password: String(form.get("password") ?? ""),
+        }
+      : {
+          email: String(form.get("email") ?? ""),
+          password: String(form.get("password") ?? ""),
+        };
+
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Same origin, so the Set-Cookie on the response is stored and every
+        // later request carries it. No cross-origin cookie question arises.
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setError(data.error ?? `Request failed (${response.status})`);
+        setPending(false);
+        return;
+      }
+      router.push("/play");
+      router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Network error");
+      setPending(false);
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-16">
@@ -27,7 +71,7 @@ export function AuthForm({
       </div>
 
       <Card>
-        <form action={formAction} className="flex flex-col gap-4">
+        <form onSubmit={onSubmit} className="flex flex-col gap-4">
           {isRegister && (
             <Field
               label="Handle"
@@ -45,9 +89,9 @@ export function AuthForm({
             hint={isRegister ? "At least 10 characters" : undefined}
           />
 
-          {state.error && (
+          {error && (
             <p className="text-fail text-13" role="alert">
-              {state.error}
+              {error}
             </p>
           )}
 
