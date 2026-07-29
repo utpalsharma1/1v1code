@@ -96,8 +96,11 @@ export async function login(email: string, password: string): Promise<AuthResult
 
 export async function createSession(userId: string): Promise<void> {
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  // High-entropy session token, not the default cuid. A cuid is
+  // collision-resistant but it is not a secret: it embeds a timestamp and a
+  // counter, so it is guessable in a way a session bearer token must never be.
   const session = await prisma.session.create({
-    data: { userId, expiresAt },
+    data: { id: randomBytes(32).toString("base64url"), userId, expiresAt },
     select: { id: true },
   });
   const jar = await cookies();

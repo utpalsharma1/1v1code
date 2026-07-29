@@ -269,6 +269,13 @@ The Hub's **PLAY** button is the largest element on screen. On click it does not
 - Live text: `Scanning 1420–1480 · 47 players in queue`. Widen the search band visibly every 10s and say so: `Widening search…`.
 - Cancel is always one click, always visible.
 
+**Widening has a ceiling, and pairing is atomic.** Both matter more than they look.
+
+- **Band:** starts at ±30 and widens by 25 every 10s, to a **ceiling of ±400**. On reaching the ceiling it stops and the player simply keeps waiting — an unbounded band eventually pairs a 900 with a 2400, which is not a match, it is a punishment for being at the edge of the ladder. The queue copy says `Widening search…` while it widens and stops saying it at the ceiling, because claiming to widen when you are not is a lie the player can feel.
+- **Rematch cooldown:** the same pair cannot be matched in ranked again for **180s**. Without it, a two-player pool ping-pongs the same fixture forever, and the §8 rating update assumes some independence between consecutive matches.
+- **A pool of one is the normal case in development, not an edge case.** After `MM_BOT_AFTER_MS` (20s in dev) with no human partner, the player is matched against the bot (§13.6). This is why the bot exists from day one.
+- **Pairing must be atomic inside Redis.** Read-then-write lets the same player be matched twice, or two players both pair with a third. The find-partner / remove-both / create-match sequence is one Lua script, which Redis executes single-threaded, so it is safe across multiple gateway processes even though we run one. Anything less is a race that only shows up under load.
+
 ### 6.2 Queue pop — the first cinematic
 
 This is the dopamine moment. Budget: **1.4s**.
@@ -458,6 +465,18 @@ server → client:  queue.status, match.found, match.start, opponent.status,
 
 - Editor deltas: batched at ~50ms, sequence-numbered, with periodic full snapshots every 30s for late-joining spectators.
 - Every match writes an append-only JSONL event log to disk/S3 — this file *is* the replay. Replay playback must be a pure function of that log. Do not build a separate recording system.
+
+### Event log durability — write-behind, and why
+
+**Apply the effect first, then append the event.** The log is a *recording*, not a recovery journal.
+
+The alternative, write-ahead, logs intent before applying it. That is correct for a database that must recover its own state, and wrong here: a crash between the write and the apply leaves a log claiming the countdown finished when it never did. Replay would then show something that did not happen, and there is no way for a consumer to tell. Authoritative state lives in the gateway and in Postgres; the log's only job is to be *true*.
+
+Write-behind's failure mode is losing the tail — the last few events before a crash. That is bounded, detectable, and honest.
+
+**Buffering and worst case.** Writes go through a buffered stream and are explicitly flushed on every lifecycle transition and at match end. Worst case loss is therefore the events since the last transition — in 2B that is a handful, and in 2C it is at most one 50ms delta batch. Nothing is fsynced per event; a match-end fsync is enough, because a log that survives to `ENDED` is a complete replay.
+
+**A log that ends mid-match is a state, not an error.** It means the match was interrupted — the gateway died, or the process was killed. A consumer must: order by `seq`, report a gap rather than silently closing it, tolerate a torn final line (normal for an append-only file caught mid-write), and render the recording as ending there. Never refuse to play a truncated log, and never fabricate a terminal event to tidy it up.
 - Server is authoritative on the clock. The client's clock is display only and re-syncs on every server tick.
 - Rate-limit every inbound event per socket.
 

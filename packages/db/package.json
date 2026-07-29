@@ -15,7 +15,8 @@
     "migrate": "prisma migrate dev",
     "push": "prisma db push",
     "seed": "node --experimental-strip-types prisma/seed.ts",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "seed:users": "node --experimental-strip-types prisma/seed-users.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0"
