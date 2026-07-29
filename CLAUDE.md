@@ -393,12 +393,25 @@ The screen, from the moment your own verdict settles while theirs is outstanding
 
 ### 6.8b Resubmission
 
-**Unlimited attempts. Each failed submission adds 30 seconds to your final elapsed time. One outstanding submission per player at a time.**
+**Unlimited attempts. One outstanding submission per player at a time. In ranked 1v1 there is no time penalty, because there is nothing for it to act on.**
 
-- **Elapsed time is already the tiebreak** (§6.9), so it is the natural currency for a penalty — no new mechanic, no new number for a player to learn, and it is consistent with §6.8's failed-hack penalty.
-- **Free resubmission would destroy §6.5.** If a failed submit costs nothing, the near-miss shatter is theatre: the opponent's bar cracks and they simply try again. The whole beat depends on failure hurting.
-- **A hard attempt cap is worse.** It makes the last attempt agonising in a way that encourages *not* submitting, which is the opposite of what the format wants. A time penalty keeps players submitting while making guessing expensive.
-- **One outstanding submission per player** is what actually bounds judge load — far better than a rate limit. It caps a match at two concurrent jobs no matter how hard anyone mashes, and it falls out naturally because §6.6 locks the editor while judging. The global per-identity rate limit (§11) stays as a backstop against abuse outside a match, and does not conflict: one-outstanding already caps a player at roughly one submission per judge round trip.
+The cost of a wrong answer is **the in-flight lock**, and that is enough:
+
+- While your submission is being judged you cannot submit again. A wrong C++ answer therefore costs about 5.5 seconds of being unable to try anything; a wrong Python answer costs about 1.8.
+- That is **self-balancing and needs no invented number**. The penalty scales with the language you chose and the judge's real behaviour, rather than with a constant somebody picked.
+- It is also what bounds judge load — two concurrent jobs per match no matter how hard anyone mashes, which is a stronger guarantee than a rate limit. The global per-identity limit (§11) stays as a backstop against abuse outside a match and does not conflict: one-outstanding already caps a player at roughly one submission per judge round trip.
+- **Free resubmission would still be wrong**, which is why the lock matters. If failing cost literally nothing, §6.5's near-miss shatter would be theatre — the bar cracks and they immediately try again.
+- **A hard attempt cap is worse than either.** It makes the last attempt agonising in a way that encourages *not* submitting, which is the opposite of what the format wants.
+
+**Time penalties exist only in modes where elapsed time is the score.** In ranked 1v1 receipt order decides outright (§6.9), so a time penalty would be decorative — it cannot change who wins. It applies where the clock genuinely is the result:
+
+- **Daily problem** and **Ghost Races**, where you are racing a time rather than a person.
+- **Bo3**, where cumulative elapsed time breaks a 1–1 series.
+- **Hack mode** (§6.8), where both players have already solved and the phase exists to reorder them.
+
+In those modes a failed submission adds **30 seconds** and a failed hack adds 30 seconds, on the same scale for the same reason.
+
+**A penalty never alters receipt order.** It adjusts an elapsed-time *score*, which is a different quantity that only some modes read. If you ever find yourself wanting a penalty to change who submitted first, the design has gone wrong.
 
 **Receipt order decides the match. Verdict order never does.** This is a fairness rule, not a timing detail, and it is easy to get wrong by accident.
 
@@ -414,6 +427,12 @@ So: entering `JUDGING` records the set of outstanding submissions. Each verdict 
 
 If a player submits again while already in `JUDGING`, the earlier submission keeps its receipt stamp — a later submission cannot improve your position in the ordering, only your correctness.
 
+**Penalties never alter receipt order.** Time penalties (§6.8b) adjust an elapsed-time *score*, which only some modes read; receipt order is a separate, immutable fact about when the gateway saw a submission. Nothing may reorder it — not a failed attempt, not a failed hack, not a mode setting. If receipt order could be bought or sold, the fairness guarantee above is worth nothing.
+
+**A lost verdict is a no-contest, not a loss.** If any submission resolves `INTERNAL_ERROR` — the judge worker died, a Redis message was lost, a container failed for reasons that are not the player's code — the match ends `VOID`: **no rating change for either side**, recorded and displayed as a void in match history, and it does not consume a placement match. Losing rating because our infrastructure failed is indefensible, and a player cannot tell our fault from theirs.
+
+This puts a hard constraint on the judge: **`INTERNAL_ERROR` must never be reachable from user code.** If a submission can provoke it, a losing player can void any match they are about to lose. Every hostile input the containment suite covers — memory exhaustion, output flood, fork bomb, compile bomb — must produce a *real* verdict. That the print flood once produced `INTERNAL_ERROR` (§11) was therefore not only a robustness bug; it was an exploitable one.
+
 ---
 
 ## 7. Other screens
@@ -422,7 +441,45 @@ If a player submits again while already in `JUDGING`, the earlier submission kee
 
 **Draft / pick-ban** (Phase 3, and it's the second signature screen). Both players see five problem categories. They alternately ban two each on a 15-second per-pick timer. Banned cards crack and desaturate with a hard sound. The final category card flips over to reveal the problem. This is pure MOBA DNA applied to something nobody has applied it to, it is cheap to build, and it will be the thing people screenshot.
 
-**Spectate.** Both editors side by side, read-only Monaco, the full HUD, a viewer count, a live emote stream floating up the right edge, and a scrubber if joining late. Ranked and tournament matches are delayed 45 seconds to prevent stream-sniping — show the delay badge openly.
+**Spectate.** Both editors side by side, read-only Monaco, the full HUD, a viewer count, a live emote stream floating up the right edge, and a scrubber if joining late.
+
+### Spectating in detail (Phase 3)
+
+*The live panel — what makes a match worth clicking — is deliberately not specced yet. Everything below is.*
+
+**By code.** `/watch/<code>` resolves to a live match regardless of visibility. `PUBLIC` matches are additionally listed in the live panel; `UNLISTED` matches are reachable by code only. Ranked defaults to `PUBLIC`, challenge matches to `UNLISTED`.
+
+**No account required to watch.** A shared link reaching a stranger who watches a live match is the best growth path we have, and a registration wall in front of it converts that stranger into a bounce. Spectating is anonymous and read-only, with a register prompt that never blocks the stream.
+
+**Be honest in the copy: unlisted is not private.** Anyone holding the code can watch, and can pass it on. The UI must say that in those words rather than implying secrecy we do not enforce. True invite-only — an allowlist, or a code that dies on first use — is a later feature, and until it exists we should not let a player believe they have it.
+
+**Fanout is a room broadcast, never per-socket sends.** Serialise once, write N times. The ceiling on our current architecture is roughly **500–1000 viewers per match on a single gateway process**, and it is set by *message rate*, not connection count: 2C's editor deltas at ~50ms give about 40 messages/second/match, so a thousand viewers is 40k writes/second, which saturates one Node event loop. Where it breaks is single-process fanout, and the fix is staged — the Redis adapter first so gateways scale horizontally (see §12's deployment phase), then a dedicated fanout tier if a match ever needs tens of thousands. Do not attempt per-socket sends at any size; it fails an order of magnitude earlier.
+
+**Late joiners get a snapshot, not replayed deltas.** Replaying an hour of keystrokes to catch someone up is both slow and pointless. This depends on the periodic full snapshots in 2C and should not be built before them.
+
+**Delay.** Ranked and tournament matches are delayed **45 seconds**, mandatory, to prevent stream-sniping — show the delay badge openly. Challenge and custom matches default to **no delay**, with a host toggle: friends watching friends is the entire point of those, and a 45-second delay ruins the experience it exists to enable.
+
+**Emotes.** Spectators get the §6.5 wheel, rate-limited per viewer. Above a threshold, stop rendering individual emotes and aggregate into a burst meter — 500 separate 🔥 is noise, whereas a meter that spikes is a crowd. The aggregation *is* the feature at scale, not a degradation of it.
+
+### Challenge links (Phase 2D)
+
+**This is the launch feature.** Ranked matchmaking needs a population that does not exist on day one; a challenge link needs exactly two people who already know each other, so it brings its own audience. Everything about it should be optimised for the invited person, who has never heard of us.
+
+- A player generates a link, picks **mode and difficulty band**, and sends it. The **first person to open it joins**; the match starts when both accept, through the normal §6.2 accept flow.
+- **The link must survive the opponent not being online yet.** It expires after **24 hours**. A stale link does not 404 — it shows who challenged whom, that it expired, and a one-click *"send one back"* that creates a fresh challenge aimed at the original host. A dead end here is a lost player.
+- **Guests may play without registering.** If registration is required before a first match, most invited people will never play, and that single decision probably costs more than every other growth feature combined. A guest gets a `User` row with `isGuest` set and no credentials.
+  - A guest **can**: accept a challenge, play the match, see the result, rematch, and watch.
+  - A guest **cannot**: earn or lose rating (their matches are unrated for both sides), appear on leaderboards, queue for ranked matchmaking, or create their own challenge links — that last one keeps a guest account from being a spam primitive.
+  - The result screen prompts them to **register and keep the result**, which claims the same row rather than starting them over. Guest rows expire after 7 days if unclaimed.
+- **Rematch is one click from the result screen, with no new link.** The pairing already exists; making two friends re-share a URL between every game is the kind of friction that ends a session early.
+
+### Clip export (Phase 2D)
+
+Auto-generate a short **vertical** video of the final seconds of a close match, ending on the win animation, offered on the victory screen.
+
+This is the actual distribution mechanism. A link travels to people who already know the sender; a clip travels to people who do not, and it carries the one thing a screenshot cannot — the moment the bar fills and the screen flares. Everything else in §7 competes for existing attention; this is the only feature that manufactures it.
+
+It should be one tap, watermarked, and require no editing. If a player has to think about it, they will not do it.
 
 **Replay.** Keystroke-level scrubber, variable speed (0.5×–8×), both players synced. Timeline markers for compiles, submissions, and idle pauses over 20s. A **divergence marker** auto-detecting where the match was decided. A time breakdown: reading / thinking / typing / debugging.
 
@@ -482,6 +539,16 @@ This uses Glicko's own uncertainty measure instead of an invented threshold, whi
 
 **The bot's own rating is fixed and never updated.** It is a measuring stick, not a competitor; letting players drag it around would let a coordinated group move the reference point everyone else is measured against.
 
+**RD growth reopens the gate, and that is intended.** Because RD grows with inactivity (§8, Glicko-2), a settled player who stops playing eventually climbs back over 100 and bot matches count again. That is not a leak, it is **re-placement**: if the system has not seen you in months it genuinely does not know whether you are still that good, and admitting that is the entire purpose of RD.
+
+The numbers make it safe rather than merely defensible:
+
+- **RD is capped at 350**, the Glicko-2 convention and the same ceiling a brand-new account starts at. It cannot grow without bound.
+- From a settled **RD 80 it takes 34 days of complete inactivity** to cross back over 100 (30 days only reaches 98.3). From RD 60 it takes 59 days.
+- One match brings it back down, so the farm rate is roughly **one rated bot match per month**, each worth very little because RD 100 is still fairly confident.
+
+A month of waiting for one low-value update is not an exploit, it is a correct model doing its job.
+
 #### Solutions — through the real judge
 
 **The bot submits real source through the real judge.** Not a scripted outcome. Problems are chosen dynamically at mean − 120, so a recorded solve cannot cover them, and more importantly a scripted outcome means a bot match exercises a different code path from a human match — which is exactly the path that then breaks in production. A bot that goes through the judge keeps the judge honest and keeps itself honest.
@@ -496,6 +563,22 @@ A bot rated 1300 that always solves in four minutes is not rated 1300. Time is d
 2. **When it solves**, given that it does, is drawn from a lognormal whose median is a fraction of the match: `f = clamp(0.25 + 0.5 · (d + 400) / 800, 0.15, 0.9)` where `d = problemRating − botRating`. An easy problem lands around a quarter of the way in, one at its own rating around halfway, a hard one late. Jitter is lognormal σ ≈ 0.25 so two matches on the same problem never look identical.
 
 Because §8 selects at mean − 120, `d` is usually negative: the bot usually solves, at a pace that is beatable but not free. That is the intended feel — a real opponent, not a wall and not a gift.
+
+#### Losing behaviour
+
+**When the bot draws "will not solve", it must still behave like a human who is losing.** This is not a nicety: §6.4's pulse line makes activity visible, so a bot that goes silent at 2:00 and never moves again is an obvious tell, and a player who works out mid-match that they are playing a bot has been told something we promised to tell them up front.
+
+What a human losing actually looks like, in rough order of frequency:
+
+1. **They keep working and never finish.** This is the common case and it is the bot's default: the typing model (§13.6) runs for the full match, with the same think / burst / edit / pause structure as a solving run. No going quiet, no flatline that lasts to the buzzer.
+2. **They submit something wrong and carry on.** With moderate probability the bot makes one failed submission at a plausible time — usually later than a winning submission would land — and then resumes typing. It pays the same in-flight lock (§6.8b) a human would.
+3. **They stall near the end.** A short quiet stretch in the final ~30 seconds is realistic rather than suspicious; a human who knows they have lost does stop typing. Late quiet is fine, mid-match silence is not.
+
+The failing submission needs source that is *plausibly* wrong — ideally correct on the samples and wrong on hidden tests, which is what a human failure looks like. Perturbing the reference solution mechanically tends to fail on test 1, which is its own tell. **The problem-authoring pipeline should therefore carry an optional known-incorrect solution per problem** alongside the correct one, so the bot's failures look like near-misses instead of typos. Until that exists the bot should prefer behaviour (1) over a cheap perturbation.
+
+#### Labelling
+
+**The bot is disclosed in the queue-pop nameplate, before the countdown, and never revealed afterwards.** `PlayerCard.isBot` already carries the flag over the wire; the nameplate must render a `BOT` chip beside the handle so it is visible during §6.2's collision, while the player still has the accept window. Disclosure that arrives on the victory screen is worse than no disclosure at all — it converts a fair loss into a trick.
 
 Handles carry league color everywhere outside a match — the full rule, including tier aura and why most tiers don't get one, is in §4 under *League color on handles*. Inside a match, side color wins; nothing in §6 ever renders a handle in tier color.
 
@@ -613,6 +696,21 @@ A replay that sorts by timestamp is a replay that reorders itself when the host 
 - **An orphan reaper runs as its own process**, killing any container labelled `com.1v1.judge=1` older than 30s. It deliberately does not import or depend on the worker: the case it exists for is the worker dying, and a reaper that dies with it is decoration.
 - **Concurrency is a straight multiplier on worst-case memory** — 256 MB × slots. Default 4 (1 GB), hard ceiling 16. Size it against measured free memory, not core count: these jobs are memory-bound long before they are CPU-bound, and each container is already pinned to half a core.
 - **Rate-limit submissions per user**, not just per connection. The pool is small by design and therefore cheap to saturate; a single `while true` around a submit call is enough to make the queue unbounded for everyone.
+- **Rate-limit per IP as well as per user, before public deployment.** Registration is free, so a per-user limit alone is bypassed by registering again — it throttles honest users and nobody else. Per-IP is imperfect (shared NAT, mobile carriers, VPNs) so it must be looser than the per-user limit and must never be the only control; the two together are what actually holds.
+
+### Abuse expectations once this is public
+
+**Someone will try to mine cryptocurrency on the judge.** The reasoning that it is worthless holds, but for one specific reason, and it is worth being precise about which:
+
+- **`--network none` is what kills it**, not the CPU cap. Mining requires a pool connection to fetch work and submit shares; with no network there is nowhere to send a share, so the work has no value even if it completes. Solo mining anything real inside 5 seconds at half a core is not a strategy.
+- The 5s wall clock and `--cpus 0.5` reduce the yield, but on their own they would only make mining *slow*, not pointless. If network access is ever granted to any language runtime — a package manager, a fetch API, a DNS-based side channel — this protection evaporates and the CPU caps alone will not save us.
+
+**What that reasoning misses**, and what we should actually plan for:
+
+- **The attacker does not need to profit, only to cost us money.** Sustained submission of CPU-maximal jobs is a straightforward resource-exhaustion attack. It is bounded by the rate limits and the concurrency cap, not by the sandbox — the sandbox contains each job perfectly while the fleet still burns.
+- **Compilation is the cheaper attack surface**, because the compile budget is 10s of CPU against 5s for execution, and a compile bomb reaches it with a five-line file.
+- **The judge is a free compute oracle.** Someone can farm out a brute-force search in 5-second chunks across many submissions and read the answers back through verdicts, or through timing. Rate limiting is the only control here; the sandbox is not designed to stop it and cannot.
+- **Egress via verdict is a real if low-bandwidth channel.** A submission can encode a few bits per test case in which tests pass. Nothing to do about it, worth knowing it exists.
 
 ### The containment suite is not optional, and it needs a positive control
 
@@ -647,9 +745,50 @@ On **Glicko-2**: it is defined over rating *periods*, not per-game updates. Appl
 
 **Phase 2C — Keystroke relay.** Monaco delta streaming, ~50ms batching, sequence numbers, and periodic full snapshots so late-joining spectators can catch up.
 
+**Phase 2D — Challenge links and clip export.** *Moved up from Phase 4, because the launch plan changed.* Challenge link generation and redemption, guest play, one-click rematch, and clip export — all specced in §7.
+
+The reasoning for the move: **ranked matchmaking needs a population we will not have on day one, and a challenge link does not.** A link needs exactly two people who already know each other, so it carries its own audience into an empty product. Shipping ranked first means shipping a queue that never pops. This phase is what makes the deployment worth doing, so it comes before the features that assume a crowd.
+
+**Phase 2E — Deployment.** A single VM running docker-compose: Postgres, Redis, the gateway, the web app, and the judge worker.
+
+**The judge is why this cannot be serverless.** It runs one container per submission, so the host must be able to run containers — nested containers rule out Fargate and equivalents, and Docker-in-Docker would be a security downgrade on the single component whose entire job is executing untrusted code. A plain VM with a Docker socket is both simpler and safer here.
+
+Scope: TLS termination, environment separation (a real staging database, never a shared one), automated Postgres backups with a restore that has actually been tested, log retention, and **the Socket.IO Redis adapter** — not because we need a second gateway on day one, but because §7's spectator fanout ceiling is a single process and retrofitting the adapter after state has spread across handlers is exactly the kind of change that goes wrong. Per-IP rate limiting (§11) lands here too.
+
 **Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 
 **Phase 4 — Depth.** Bo3, Blitz, Debug Duel, **hack phase (§6.8)**, Ghost Races (race a stored replay — this makes the site feel populated at zero cost and solves the empty-queue problem), tournaments, sound library, cosmetics.
+
+---
+
+### The problem bank — a parallel workstream, and a launch blocker
+
+**This runs alongside the phases rather than inside one**, because it is the only deliverable measured in weeks of writing rather than sessions of building, and blocking a phase on it would stall everything.
+
+**20 problems will not survive two friends playing a weekend.** Worse, §8 selects at mean − 120 with an adaptive spread, and that selection is only meaningful if there is real choice at every rating — a thin band means the same problem repeatedly, which is the fastest way to make a competitive product feel small. **Target 60+ before any public launch**, spread so that every 100-point bucket from 800 to 2000 has at least three problems.
+
+**Do not scrape Codeforces, LeetCode, AtCoder, HackerRank or Project Euler.** Their statements and test data are copyrighted and using them violates their terms. This is not a risk to manage, it is a line not to cross.
+
+What *is* usable:
+
+- **Original problems we write.** The primary source, and the only unambiguous one.
+- **The classic task, restated.** An *algorithmic idea* — longest increasing subsequence, minimum spanning tree, edit distance — is not copyrightable; the specific prose of somebody's statement and their specific test data are. Implementing a well-known task with our own statement, our own constraints and our own generated tests is exactly how the first 20 were made and is entirely legitimate.
+- **Properly licensed sets**, where the licence permits commercial use and derivative works (CC-BY, CC-BY-SA, public domain). Each one checked individually rather than assumed from a general impression that a site is "open".
+- **Commissioned problems** under work-for-hire, if we ever pay setters.
+
+**Nothing enters the bank without passing the pipeline**, which already exists and is the thing that makes bulk authoring safe: statement, constraints, test cases, a **validator** enforcing those constraints (§6.8), a **known-correct reference solution**, and mechanical verification that the reference passes every test and that the tests agree with it. That check caught five bad expected outputs in the first 20 — including a problem whose own test data violated its stated constraint, which would have made the hack phase police a promise the problem broke. Reading does not catch those; running does.
+
+The pipeline should also grow an **optional known-incorrect solution** per problem, for the bot's losing behaviour (§8).
+
+**Realistic effort per problem**, for planning how many to write by hand versus draft and verify:
+
+| difficulty | statement + tests + validator + solution | notes |
+| --- | --- | --- |
+| 800–1200 | **45–90 min** | few edge cases, small test set |
+| 1200–1700 | **1.5–3 h** | needs tests that defeat plausible wrong approaches |
+| 1700–2200 | **3–6 h** | anti-heuristic cases and performance tests dominate |
+
+Sixty problems at a ~2 hour average is roughly **120 hours of authoring** — a real project, not a side task. Drafting with assistance and then verifying mechanically cuts it to perhaps **30–45 minutes each**, because verification is the bottleneck and verification is already automated. Budget around **30–40 hours** for 60 problems that way, and spend the hand-written effort on the top of the range, where test design is the actual work and a weak test set silently accepts wrong solutions.
 
 ---
 

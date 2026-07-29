@@ -41,3 +41,10 @@ export {
   solveProbability,
   type BotPlan,
 } from "./bot.ts";
+export {
+  CODE_ALPHABET,
+  CODE_LENGTH,
+  formatCode,
+  generateCode,
+  normaliseCode,
+} from "./codes.ts";

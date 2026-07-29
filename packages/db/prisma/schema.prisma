@@ -17,9 +17,17 @@ datasource db {
 model User {
   id           String   @id @default(cuid())
   handle       String   @unique
-  email        String   @unique
-  passwordHash String
+  /// Nullable because a guest (a challenge-link invitee who has not registered)
+  /// is a real User row with no credentials. Postgres permits many NULLs in a
+  /// unique index, so this stays unique for everyone who does have one.
+  email        String?  @unique
+  passwordHash String?
   createdAt    DateTime @default(now())
+
+  /// Guests can play a challenge link unrated and nothing else (S7).
+  isGuest        Boolean   @default(false)
+  /// Guests are reaped after this; claiming the account clears it.
+  guestExpiresAt DateTime?
 
   // Glicko-2. Rating is hidden behind the tier ladder (§8) but stored raw.
   rating       Int      @default(1200)
@@ -31,6 +39,8 @@ model User {
   submissions  Submission[]
   matchesAsP1  Match[]      @relation("MatchP1")
   matchesAsP2  Match[]      @relation("MatchP2")
+  challengesHosted  Challenge[] @relation("ChallengeHost")
+  challengesAccepted Challenge[] @relation("ChallengeGuest")
   ratingEvents RatingEvent[]
 
   @@index([rating])
@@ -191,10 +201,39 @@ enum MatchState {
   ABANDONED
 }
 
+/// PUBLIC is listed in the live panel and watchable by code; UNLISTED is
+/// watchable by code only. UNLISTED is NOT private - see S7.
+enum MatchVisibility {
+  PUBLIC
+  UNLISTED
+}
+
+enum MatchOrigin {
+  MATCHMAKING
+  CHALLENGE
+  REMATCH
+}
+
 model Match {
   id        String     @id @default(cuid())
   mode      MatchMode  @default(RANKED)
   state     MatchState @default(PENDING)
+
+  /// Spectator code: 10 Crockford-Base32 characters, generated from a CSPRNG
+  /// exactly like a session token. NOT a cuid - the cuid lesson from the session
+  /// table applies here too, and a walkable code makes UNLISTED meaningless.
+  /// 32^10 = 1.13e15, so a random guess hits one of a million live matches with
+  /// probability 8.9e-10. Unique constraint plus retry covers collisions.
+  spectatorCode String  @unique
+  visibility    MatchVisibility @default(PUBLIC)
+  origin        MatchOrigin     @default(MATCHMAKING)
+  /// Spectator delay in ms. 45000 for ranked and tournament (stream-sniping),
+  /// 0 for challenge and custom unless the host raises it (S7).
+  spectatorDelayMs Int @default(45000)
+
+  /// Set when this match came from a challenge link, so its origin survives.
+  challengeId String?    @unique
+  challenge   Challenge? @relation(fields: [challengeId], references: [id], onDelete: SetNull)
 
   p1Id      String
   p1        User       @relation("MatchP1", fields: [p1Id], references: [id])
@@ -220,6 +259,37 @@ model Match {
   @@index([p1Id])
   @@index([p2Id])
   @@index([state])
+  @@index([visibility, state])
+}
+
+/// A challenge link (S7, Phase 2D). Created before an opponent exists, which is
+/// the whole point: the link has to survive the other person not being online.
+model Challenge {
+  id       String   @id @default(cuid())
+  /// Same alphabet and entropy as spectatorCode, and same reasoning.
+  code     String   @unique
+  hostId   String
+  host     User     @relation("ChallengeHost", fields: [hostId], references: [id], onDelete: Cascade)
+
+  mode           MatchMode       @default(CASUAL)
+  visibility     MatchVisibility @default(UNLISTED)
+  /// Target problem rating band, so the host can pick difficulty up front.
+  ratingMin      Int             @default(800)
+  ratingMax      Int             @default(2000)
+  /// Whether an unregistered guest may accept. Unrated if so.
+  allowGuest     Boolean         @default(true)
+
+  /// A stale link must show something specific rather than 404 - see S7.
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  consumedById String?
+  consumedBy  User?     @relation("ChallengeGuest", fields: [consumedById], references: [id], onDelete: SetNull)
+
+  match     Match?
+  createdAt DateTime @default(now())
+
+  @@index([hostId])
+  @@index([expiresAt])
 }
 
 model RatingEvent {
