@@ -2,96 +2,99 @@
 
 ## SESSION STOP — read this first
 
-**The auth blocker is fixed. 2B-4 is unblocked pending your browser check.** Everything below is
-committed; working tree clean.
+**Both browser bugs had one root cause, and it was mine.** Fixed, with a positive control proving
+both the cause and the check. Working tree clean.
 
-### What the blocker actually was, and what I could and could not prove
+### Root cause: `next build` and `next dev` shared `.next`
 
-You were right to rule out token rotation: one `db:users` run, immediate paste, so hypothesis 1 in
-the previous stop note could not explain it. I checked the cross-origin hypothesis directly and
-found **both sides provably correct**:
+Last session I ran `pnpm build` as part of a regression sweep **while the dev server was running**.
+`next build` replaced the chunks and the asset manifest that the running dev process was still
+serving from its in-memory manifest. From then on:
 
-- The gateway returns `Access-Control-Allow-Origin: http://localhost:3000` and
-  `Access-Control-Allow-Credentials: true` — an explicit origin, not a wildcard, so the
-  wildcard-plus-credentials incompatibility does not apply here.
-- The shipped client bundle, extracted from `/_next/static/chunks/app/play/page.js`, really does
-  carry `{ withCredentials: true, transports: ["websocket","polling"] }` and the right gateway URL.
+- every route returned **200**, because the HTML document renders server-side and needs no assets;
+- every `/_next/static/*` URL that document referenced **404'd**.
 
-**So I could not settle it from the server, and I am not going to claim I did.** With both ends
-correct the remaining variable is what the browser chooses to attach to a cross-origin WebSocket
-upgrade, and there is no browser in this environment to observe it. Two responses, because guessing
-harder was not going to work:
+So the page arrived as correct unstyled HTML with a dead React runtime. That is *both* reported bugs:
 
-1. **Permanent instrumentation.** Every handshake now logs transport, origin, whether a `Cookie`
-   header was present, whether a ticket was present, and which path authenticated it. The next
-   browser attempt records the answer instead of requiring it to be inferred.
-2. **The dependency is gone.** `/play` now fetches a ticket from `POST /api/socket-ticket` — the
-   app's **own origin**, where the cookie is unambiguously sent — and hands it to the gateway in the
-   Socket.IO `auth` payload. Nothing on the connect path depends on cross-origin cookie behaviour.
+- **Bug 1, no CSS anywhere.** `layout.css` 404'd. Global, every route, exactly as described.
+- **Bug 2, registration silently fails.** `main-app.js`, `app-pages-internals.js` and `polyfills.js`
+  404'd, so React never hydrated, so `onSubmit` was never attached, so the browser did what an
+  unhandled form does by default: **a GET to the current URL with every field in the query string.**
+  The old log proves it — `GET /register?handle=utpal+&email=…&password=…`. The page reloaded, which
+  looks precisely like "nothing happened".
 
-The ticket is 32 random bytes, lives in Redis for 60 seconds, and is consumed with `GETDEL` so it is
-**single use** — a leaked ticket is worth one connection inside one minute. The cookie path is kept
-as a fallback so headless probes and any future same-origin deployment do not regress.
+**Proven, not inferred.** I re-ran `pnpm build` against the live dev server and the smoke test went
+from 5/5 to 0/5 with the exact reported symptoms; cleaning `.next` and restarting restored it.
 
-**This is also what production needs, not just a workaround.** The gateway will be on a different
-host than the web app, which is cross-*site*, where cookie-based socket auth is on a path browsers
-are actively closing off. Building the ticket flow now is cheaper than discovering it at deploy.
+**Your case-sensitivity hypothesis was sound but is ruled out.** All 127 relative import specifiers
+resolve on ext4, and only two `.css` files exist — `apps/web/app/globals.css` and
+`packages/ui/tokens.css` — both referenced with exact case. Tailwind v4 was compiling correctly the
+whole time: the served stylesheet is 49 KB, carries `--ink`, `--p1`, `--p2`, `--ff-display`,
+`.bg-ink`, `.text-fg` and `clip-path`, and contains no `bg-red-500`, which confirms the `@theme`
+reset applied rather than a default theme being served.
 
-### The other three items
+**The collision is now structurally impossible.** `next.config.ts` takes `distDir` from
+`NEXT_DIST_DIR`, and the build and start scripts set it to `.next-build`. Verified: a full
+production build now runs with the dev server up and smoke stays 5/5.
 
-- **`db:users` is idempotent.** It reuses any session with more than 24h left instead of
-  `deleteMany`-ing first. Re-running the seed no longer logs anyone out. That footgun was mine and
-  it is gone.
-- **The on-page instructions describe something that works.** `/play`'s signed-out screen now links
-  to `/register` and `/login` and mentions no cookie and no console step, and `db:users` prints
-  "SIGN IN THROUGH THE UI" rather than a paste ritual. A separate screen now distinguishes
-  **gateway unreachable** from **not signed in** — conflating them is what sent the last debugging
-  session in the wrong direction.
-- **`apps/gateway/src/signin.test.ts` — 12 tests, the one that was missing.** It drives real HTTP
-  against the dev server with a hand-rolled cookie jar, exactly as a browser would, and finishes by
-  opening a **real socket** to the gateway. Register → cookie → ticket → socket, ticket replay
-  refused, forged ticket refused, no credentials refused, cookie fallback intact, logout revokes,
-  login re-issues, wrong password sets no cookie.
+### Two things you should know, unprompted
 
-**Why it could not have caught this before: the form posted to a server action.** A server action is
-only reachable through the RSC protocol, so nothing could drive the sign-in path a browser uses.
-Auth now goes through `/api/auth/{register,login,logout}` route handlers and the form posts to the
-same endpoints the test does. A test that enters through a different door than the UI can pass while
-the UI is broken — which is precisely how this got missed. Same shape as the `--ulimit nproc` trap
-and the lone-surrogate exploit: correct parts, untested seam.
+- **Your password went into a URL.** The unhydrated form GET put it in the address bar, browser
+  history and the dev server log. The log has since rotated and the value is gone from disk, but
+  **it is still in your browser history — change it if you reuse it anywhere.**
+- **No account was ever created.** The database holds only the three seeded users, which is
+  consistent with the diagnosis: the GET never reached the POST handler.
 
-### What is verified, and what still is not
+### The fixes
 
-Verified this session, by running it: 12/12 sign-in, 10/10 matchmaking, 26/26 judge containment
-(incl. the INTERNAL_ERROR class), 101 seed cases, 20/20 bot solutions ACCEPTED, typecheck 7/7,
-production build clean, all routes 200.
+- **`distDir` split**, above. The cause, removed rather than cleaned up.
+- **`apps/web/smoke.test.ts` — 5 checks.** Fetches every route, extracts every stylesheet and script
+  the browser *would* fetch, and demands each returns 200 with real content; asserts the CSS carries
+  our tokens and not Tailwind's defaults; asserts the auth forms declare `method="post"` and an
+  `action`. Positive control performed: it fails 5/5 on a deliberately re-broken build.
+- **The form can no longer degrade into a credential leak.** `method="post"` and
+  `action="/api/auth/{mode}"` are now on the form, and the route handlers accept form encoding as
+  well as JSON, answering a form post with a 303 to `/play` or back to the form with `?error=`.
+  **Without JS the form now works instead of failing silently, and the password stays in the body.**
+  Two new sign-in cases cover it (14/14).
+- **Landing page copy** updated from "Phase 0 · Foundation — nothing is playable yet" to Phase 2B,
+  with a `/play` entry added.
 
-**Still not verified: anything seen by a human eye.** No browser exists here. The end-to-end test
-proves the ticket seam works over real HTTP and a real socket, which is strictly more than was true
-before — but it is not the same as two browser windows, and your check is what closes it.
+### Bug 3, first half: I could not reproduce it
+
+`/register` renders `<h1>Create account</h1>`, a handle field, and a link reading "Sign in" → `/login`.
+`/login` renders `<h1>Sign in</h1>` and "Create one" → `/register`. Both correct, verified against
+the served HTML. What you describe — "Sign in" copy with a "Create one" link to `/register` — is
+exactly `/login`. With no stylesheet there is no type hierarchy, so the heading and the link text
+render identically and the two pages are genuinely hard to tell apart. **Please re-check now that
+CSS loads**; if it still happens I need the URL bar contents, because the markup says it cannot.
+
+### Verified this session
+
+Smoke 5/5 (plus a 0/5 positive control) · sign-in 14/14 · matchmaking 10/10 · core 48/48 ·
+typecheck 7/7 · production build clean · every route 200 with all assets 200.
+
+**Still unverified: everything that requires a human eye.** See the list below — it is the answer to
+"what else shares this property", and it is the thing to read before 2B-4.
 
 ### Verified earlier — do not re-litigate
 
-- 48 core tests: Glicko-2 against Glickman's published example, match state machine incl. the §6.9
-  receipt-order fairness property, event log incl. ordering surviving a backward clock step, bot
-  model, shareable codes.
-- 50 concurrent queue joins → 25 disjoint matches, nobody lost or double-matched.
-- Gateway end to end headlessly: two clients authenticate, queue, pair after the band widens, accept
-  idempotently, count down, reach LIVE, with a gapless replay log on disk.
-- Reconnection: drop → opponent notified with 45s grace → return → full resync → no forfeit.
-- Submission persistence, the match screen, the live bot, Glicko applied to a real outcome and the
-  §6.7b hold screen remain **2B-4**, unstarted.
-
-**A Socket.IO polling handshake returns HTTP 200 and a `sid` without any cookie** — Engine.IO
-transport negotiation runs before the auth middleware. `curl`ing the handshake is not an auth test.
-That retraction stands.
+- 26 judge containment tests incl. the `INTERNAL_ERROR` invariant class, which caught a live
+  match-voider (lone surrogate → `UnicodeEncodeError` → internal error → VOID match).
+- Glicko-2 against Glickman's published example; §6.9 receipt-order fairness; event log ordering
+  surviving a backward clock step; 50 concurrent joins → 25 disjoint matches.
+- Gateway end to end headlessly: authenticate, queue, pair after the band widens, accept
+  idempotently, count down, reach LIVE, gapless replay log on disk. Reconnection with 45s grace.
+- 101 seed cases agree with their reference solutions; 20/20 bot solutions ACCEPTED.
+- Submission persistence, the match screen, the live bot, Glicko on a real outcome and the §6.7b
+  hold screen remain **2B-4**, unstarted.
 
 ### Bringing the stack back up, in order
 
 ```bash
 cd ~/1v1.code
 docker compose up -d                     # Postgres 17 + Redis 7, wait for healthy
-set -a && . ./.env && set +a             # DATABASE_URL, REDIS_URL, ports
+set -a && . ./.env && set +a
 
 pnpm install                             # only if deps changed
 pnpm db:push && pnpm db:seed             # schema + 20 problems (idempotent)
@@ -102,27 +105,100 @@ nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.l
 nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 &
 
 pnpm db:users                            # idempotent; does NOT rotate tokens
+pnpm test:smoke                          # RUN THIS FIRST — asset integrity, ~10s
 ```
 
-**To play: open http://localhost:3000/register and sign up.** Two windows, two accounts — one normal,
-one private, so the sessions are separate. Seeded logins are `arjun@example.com` /
-`rohan@example.com` with password `dev-password-1v1`. The printed tokens exist only for headless
-probes; there is nothing to paste.
+**`pnpm test:smoke` before any browser verification.** It is ten seconds and it is the difference
+between debugging the product and debugging the build.
 
-Routes: `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`, `/dev/kitchen-sink`. Gateway on
-`:4000` (no `/healthz` — probe `/socket.io/?EIO=4&transport=polling`).
+**To play: http://localhost:3000/register.** Two windows, one normal and one private. Seeded logins
+are `arjun@example.com` / `rohan@example.com`, password `dev-password-1v1`. Nothing to paste.
 
-Verification suite: `pnpm test:signin` (needs web + gateway + Redis + Postgres up), `pnpm judge:test`
-(needs Docker + images), `pnpm db:verify`, `pnpm db:solutions` (needs the worker running),
-`node --experimental-strip-types --test packages/core/src/*.test.ts`,
+Routes: `/`, `/register`, `/login`, `/play`, `/dev/hud`, `/dev/judge`, `/dev/kitchen-sink`. Gateway
+on `:4000` (no `/healthz` — probe `/socket.io/?EIO=4&transport=polling`).
+
+Suites: `pnpm test:smoke` · `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` ·
+`pnpm db:solutions` (worker up) · `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
 `node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`.
 
-**If the browser still fails, read `/tmp/gateway.log` first.** Each handshake logs one line naming
-transport, origin, cookie presence, ticket presence and the authenticating path. That line is the
-diagnostic that was missing.
+**Shell note:** `pkill -f` has matched its own shell twice here. Kill by PID from `ps -eo pid,cmd`.
 
-**Shell note:** `pkill -f` has matched its own shell twice in this project. Use a bracketed pattern —
-`pkill -f "gateway/src/inde[x].ts"` — or kill by PID from `ps -eo pid,cmd`.
+
+## What class of check would have caught this — and what is still eye-only
+
+**Asked for after the third bug of the same shape. This is the list, not another one-at-a-time fix.**
+
+### The shape all three share
+
+`--ulimit nproc`, the RSC seam, and the 404'd assets are the same failure: **the assertion was true
+and irrelevant, because the check and the user sat in different layers.**
+
+| | what was asserted | what the user experienced |
+| --- | --- | --- |
+| `nproc` | "no escape was observed" | nothing ever executed |
+| RSC seam | the route handler accepts JSON | the form posted through the RSC protocol |
+| assets | the route returns 200 | the assets that route references 404'd |
+
+The generalisation of §11's *assert the mechanism, not the absence*: **assert at the layer the user
+occupies, and follow the artifact's own references rather than only the URL you chose to request.**
+Every check in this project so far asserted on a response to a request *I* composed. None asked what
+a client would then do with it. That is the missing class, and `smoke.test.ts` is the first member.
+
+### Machine-checkable, and currently NOT checked
+
+These *feel* like they need eyes. They do not. Each is a design requirement in CLAUDE.md that can
+silently regress with nothing reporting it, exactly like the stylesheet did.
+
+1. **Fonts actually load.** `next/font` emits files; if they 404 the entire type system falls back to
+   system sans and the product still "works". This is the identical failure mode to bug 1 and it is
+   not covered — the smoke test checks CSS and JS, not font assets. **Highest priority.**
+2. **Glow at rest (§4).** The spec says audit the *built* CSS: every shadow rule must be a `:hover`,
+   a one-shot event class, or the sub-ten-second clock. Done once by hand, never since. Pure grep on
+   the compiled stylesheet.
+3. **No hardcoded hex (§13.2).** Grep source for `#[0-9a-f]{3,8}` outside `tokens.css`. One line.
+4. **Contrast ratios (§4).** The 4.5:1 claims for P-colored text on `--surface` and `--ink` text on
+   P-colored buttons are computable from the tokens. Currently asserted in prose only — edit a token
+   and the claim goes stale in silence.
+5. **Colorblind separation floors (§4).** P1/P2 ≥ 1.70 deuteranopia, `--fail` vs P2 ≥ 1.60,
+   `--grandmaster` vs `--fail` and vs `--p2`. All computable. Same staleness risk, and §4 explicitly
+   says *verify with a dichromat simulation, not by eye* — so this one is arguably wrong to leave to
+   eyes at all.
+6. **Tabular numerals (§4).** Every clock, rating and score must be `tabular-nums`. Assertable on the
+   components.
+7. **Mirrored corner cuts.** P1 cuts TL/BR, P2 mirrors. Checkable in built CSS.
+8. **Reduced-motion parity (§5, §13.9).** Every animation honoured in the same commit that writes it.
+   Partly static (every animating component under the motion-pref provider), fully checkable with a
+   browser forcing the media query.
+9. **Focus visible everywhere (§13.9).**
+10. **No horizontal overflow at 1280px and at mobile (§13.8).**
+11. **60fps and no layout thrash during a match (§5).** Needs browser tracing. Hard, not impossible.
+
+**Items 8–11 need a real headless browser, which this project does not have.** Adding Playwright
+would move most of this list from "eye-only" to "tested", and would also have caught bugs 1 and 2
+directly — a browser that renders `/register` and clicks the button finds both in one assertion.
+**§13.3 says ask before adding a dependency, so I am asking rather than adding.** It is dev-only and
+does not touch the shipped bundle.
+
+### Genuinely eye-only — judgment, not verification
+
+No check will ever settle these. They are why §13.7 exists.
+
+1. **The §2 verdict.** Does it read as a fighting-game HUD in the language of a code editor, or as a
+   generic dark dashboard with neon accents? This is the whole brief and it is unfalsifiable by test.
+2. **Motion feel.** ζ and overshoot are computed and asserted; whether 10.4% overshoot *reads* as an
+   impact rather than a bounce is taste. Same for `dur.reveal` at 165ms reading as tense not frantic.
+3. **Cinematic pacing.** Whether the 60ms offset in the queue pop reads as a collision.
+4. **Saturation as reward (§2.2).** Whether the resting UI genuinely feels muted, so that a passing
+   test *lands*.
+5. **Typography in situ.** Martian Mono at 48/72px, optical letter-spacing, whether the display type
+   carries the weight the brief wants.
+6. **Colour on real hardware.** ΔE is computed; how the palette sits on your panel is not.
+7. **Whether it feels like a match.** The actual product thesis.
+
+**The split matters more than either list.** Items 1–11 above were being treated as category-two —
+"can only be checked by looking" — when they are category-one and were simply untested. That
+misfiling is what produced three bugs of the same shape. The eye should be spent on the seven things
+below, not on catching 404s.
 
 
 ## Corrections round — an invariant that caught a live exploit

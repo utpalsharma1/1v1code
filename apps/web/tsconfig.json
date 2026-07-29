@@ -12,6 +12,14 @@
     },
     "incremental": true
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  // `.next-build` is the production output directory — see next.config.ts. Both
+  // are listed because dev and build deliberately no longer share one.
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next-build/types/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }

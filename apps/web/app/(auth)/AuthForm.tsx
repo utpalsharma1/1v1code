@@ -1,21 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Button, Card } from "@1v1/ui";
 
-/* The form posts JSON to /api/auth/*, not to a server action.
+/* The form posts to /api/auth/*, not to a server action.
 
    A server action is only reachable through the RSC protocol, so the sign-in
    path could not be driven by a test — and that is precisely where it broke.
    Posting to a route handler means the end-to-end test exercises the same
    endpoint the browser does, which is the only kind of test that could have
-   caught this. */
+   caught this.
+
+   `method="post"` and `action` are load-bearing, not decoration. Without them a
+   browser that has not hydrated falls back to its default — a GET to the current
+   URL — which silently reloads the page and writes the password into the URL,
+   history and server log. That is exactly what happened. With them, the no-JS
+   path is a real POST that works and leaks nothing. */
 
 export function AuthForm({ mode }: { mode: "register" | "login" }) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
+  const params = useSearchParams();
+  // Populated by the no-JS redirect path, so a failure without hydration is
+  // still visible instead of looking like nothing happened.
+  const [error, setError] = useState<string | null>(params.get("error"));
   const [pending, setPending] = useState(false);
   const isRegister = mode === "register";
 
@@ -71,7 +80,12 @@ export function AuthForm({ mode }: { mode: "register" | "login" }) {
       </div>
 
       <Card>
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
+        <form
+          method="post"
+          action={`/api/auth/${mode}`}
+          onSubmit={onSubmit}
+          className="flex flex-col gap-4"
+        >
           {isRegister && (
             <Field
               label="Handle"

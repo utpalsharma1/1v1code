@@ -218,6 +218,51 @@ describe("sign-in path, end to end", () => {
     (result as Socket).close();
   });
 
+  test("a native form post registers, redirects, and leaks no credential", async () => {
+    /* The path a browser takes when React has not hydrated. It used to be a GET
+       to the current URL with the password in the query string, which looked
+       like "nothing happened" and wrote the password to history and the log.
+       It must now be a real POST that works. */
+    const fresh = new Jar();
+    const who = `frm_${Date.now().toString(36).slice(-6)}`;
+    const response = await fetch(`${WEB}/api/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        handle: who,
+        email: `${who}@example.com`,
+        password: "correct-horse-battery-staple",
+      }).toString(),
+      redirect: "manual",
+    });
+    fresh.absorb(response);
+
+    assert.equal(response.status, 303, "a form post must redirect, not return JSON");
+    const location = response.headers.get("location") ?? "";
+    assert.match(location, /\/play$/, `must land on /play, got ${location}`);
+    assert.ok(!/password=/i.test(location), "the redirect must not carry credentials");
+    assert.ok(fresh.get("1v1_session"), "the form post must establish a session");
+
+    const ticket = await post("/api/socket-ticket", fresh);
+    assert.equal(ticket.status, 200, "the form-post session must work like any other");
+
+    const { prisma } = await import("@1v1/db");
+    await prisma.user.deleteMany({ where: { email: `${who}@example.com` } });
+  });
+
+  test("a failed form post returns an error without echoing the password", async () => {
+    const response = await fetch(`${WEB}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email: account.email, password: "wrong" }).toString(),
+      redirect: "manual",
+    });
+    assert.equal(response.status, 303);
+    const location = response.headers.get("location") ?? "";
+    assert.match(location, /\/login\?error=/, "the user must see why it failed");
+    assert.ok(!/wrong/.test(location), "the submitted password must not appear in the URL");
+  });
+
   test("a wrong password is refused and sets no cookie", async () => {
     const fresh = new Jar();
     const response = await post("/api/auth/login", fresh, {
