@@ -26,6 +26,40 @@ async function registerAndQueue(page: Page): Promise<string> {
   return handle;
 }
 
+test("/play survives a socket blip and stays matchable", async ({ browser }) => {
+  /* The bug that made the match screen unreachable by hand: a queued player
+     whose socket blipped was dropped from the Redis pool and never put back,
+     while their screen carried on showing the queue card. Any Next dev
+     recompile did it. This reloads /play mid-queue — a harder blip than a
+     recompile — and then checks a sparring client can still find them. */
+  test.setTimeout(180_000);
+
+  const player = await browser.newContext();
+  const partner = await browser.newContext();
+  const play = await player.newPage();
+  const spar = await partner.newPage();
+
+  await registerAndQueue(play);
+  await play.getByRole("button", { name: /^play$/i }).click();
+  await expect(play.getByText(/queue is empty|searching/i).first()).toBeVisible({ timeout: 40_000 });
+
+  // The blip: a full reload drops the socket and opens a new one.
+  await play.reload();
+  await expect(play.getByText(/^connected$/i)).toBeVisible({ timeout: 20_000 });
+
+  await spar.goto("/dev/sparring");
+  await expect(spar.getByText(/connected · sparring_/i)).toBeVisible({ timeout: 20_000 });
+  await spar.getByRole("button", { name: /join queue/i }).click();
+
+  // If the pool forgot the reloaded player, this never appears.
+  await expect(spar.locator("section", { hasText: /events/i })).toContainText(/match found/i, {
+    timeout: 60_000,
+  });
+
+  await player.close();
+  await partner.close();
+});
+
 test("two players: queue, pair, accept, solve in Monaco, and finish rated", async ({ browser }) => {
   test.setTimeout(240_000);
 
@@ -124,8 +158,13 @@ test("an unaccepted match is CANCELED, never VOID", async ({ browser }) => {
 
   // Deliberately do not accept. The window is 12s.
   const events = spar.locator("section", { hasText: /events/i });
-  await expect(events).toContainText(/CANCELED/i, { timeout: 40_000 });
-  await expect(events).not.toContainText(/VOID/i);
+  await expect(events).toContainText(/match end: CANCELED/i, { timeout: 40_000 });
+  /* Scoped to the outcome line, not the whole log. A bare /VOID/i match also
+     hit the "no rating change (canceled, void, or unrated)" line, which is
+     explanatory copy rather than an outcome — a test failing on correct text,
+     the same shape as an earlier check that flagged the word "console" in a
+     sentence saying there was no console step. */
+  await expect(events).not.toContainText(/match end: VOID/i);
 
   await player.close();
   await partner.close();

@@ -127,11 +127,36 @@ export default function SparringPage() {
       socket.on("match.judging", (p: { outstanding: string[] }) =>
         note(p.outstanding.length ? `hold: awaiting ${p.outstanding.join(", ")}` : "hold resolved"),
       );
-      socket.on("match.end", (p: { outcome: { kind: string; winner?: string } }) => {
-        setState("ended");
-        setMatchId(null);
-        note(`match end: ${p.outcome.kind}${p.outcome.winner ? ` (${p.outcome.winner})` : ""}`, "in");
-      });
+      socket.on(
+        "match.end",
+        (p: {
+          outcome: { kind: string; winner?: string; reason?: string };
+          ratings?: { side: string; before: number; after: number }[];
+        }) => {
+          setState("ended");
+          setMatchId(null);
+          note(
+            `match end: ${p.outcome.kind}${p.outcome.winner ? ` (${p.outcome.winner})` : ""}${
+              p.outcome.reason ? ` — ${p.outcome.reason}` : ""
+            }`,
+            "in",
+          );
+          /* Surface the rating delta. A match that ends with no visible change
+             is indistinguishable from one where Glicko silently did not fire,
+             and "no rating change" is itself a real outcome here — CANCELED,
+             VOID and any unrated pairing all produce an empty array. Say which
+             it is rather than showing nothing. */
+          const ratings = p.ratings ?? [];
+          if (ratings.length === 0) {
+            note("  no rating change (canceled, void, or unrated)", "in");
+          } else {
+            for (const r of ratings) {
+              const d = r.after - r.before;
+              note(`  rating ${r.side}: ${r.before} → ${r.after} (${d >= 0 ? "+" : ""}${d})`, "in");
+            }
+          }
+        },
+      );
       socket.on("error", (p: { code: string; message: string }) =>
         note(`error ${p.code}: ${p.message}`, "bad"),
       );

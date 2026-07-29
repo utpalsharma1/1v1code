@@ -43,7 +43,14 @@ interface Session {
   queuedAt: number | null;
   queueTimer: NodeJS.Timeout | null;
   matchId: string | null;
+  /** Survives a dropped socket so a reconnect can put the player back in the
+   *  pool. See the note on the disconnect handler — without this a transient
+   *  blip silently un-queues someone whose screen still says "Searching". */
+  wantsQueue: boolean;
 }
+
+/** Sessions outlive their sockets, so a reconnect can restore queue intent. */
+const queueIntent = new Map<string, boolean>();
 
 const sessions = new Map<string, Session>();
 const matches = new Map<string, LiveMatch>();
@@ -368,9 +375,11 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
   userMatch.set(a.userId, id);
   userMatch.set(b.userId, id);
   for (const userId of [a.userId, b.userId]) {
+    queueIntent.delete(userId);
     const session = sessions.get(userId);
     if (session) {
       session.matchId = id;
+      session.wantsQueue = false;
       stopQueueTimers(session);
     }
   }
@@ -414,6 +423,8 @@ function stopQueueTimers(session: Session): void {
  */
 async function joinQueue(session: Session): Promise<void> {
   if (session.matchId) return;
+  session.wantsQueue = true;
+  queueIntent.set(session.identity.userId, true);
   session.queuedAt = monotonicMs();
 
   const attempt = async (): Promise<void> => {
@@ -469,7 +480,10 @@ async function joinQueue(session: Session): Promise<void> {
      They are correct and re-deriving them later would be waste. */
 }
 
+/** Explicit departure: the player asked, so the intent goes too. */
 async function leaveQueue(session: Session): Promise<void> {
+  session.wantsQueue = false;
+  queueIntent.delete(session.identity.userId);
   stopQueueTimers(session);
   await matchmaker.leave(session.identity.userId);
   toUser(session.identity.userId, "queue.left", {});
@@ -541,6 +555,7 @@ io.on("connection", (socket: Socket) => {
       queuedAt: null,
       queueTimer: null,
       matchId: userMatch.get(userId) ?? null,
+      wantsQueue: queueIntent.get(userId) ?? false,
     };
     sessions.set(userId, session);
   }
@@ -557,6 +572,20 @@ io.on("connection", (socket: Socket) => {
       void match.reconnected(side);
       socket.emit("match.resync", match.resyncFor(side));
     }
+  } else if (session.wantsQueue && session.queuedAt === null) {
+    /* THE SAME COURTESY FOR THE QUEUE, and it is not cosmetic.
+
+       Disconnecting removes a player from the Redis pool, which is right — a
+       socket that is gone must not be matched. But nothing put them back, and
+       `queue.left` was emitted to a socket that no longer existed, so the
+       client kept rendering the queue card while the server had forgotten it.
+       The result: /play looked like it was queueing forever and was invisible
+       to everyone else in the pool. Any blip did it — a Next dev recompile, a
+       laptop sleeping, the 20s ping timeout.
+
+       Queue intent now survives the socket, so coming back puts you back. */
+    console.log(`[gateway] ${identity.handle} reconnected while queued — rejoining the pool`);
+    void joinQueue(session);
   }
 
   socket.on("queue.join", (raw) => {
@@ -640,7 +669,11 @@ io.on("connection", (socket: Socket) => {
     if (session.sockets.size > 0) return; // another tab is still open
 
     console.log(`[gateway] ${identity.handle} disconnected`);
-    void leaveQueue(session);
+    /* Leave the POOL but keep the INTENT. A socket that is gone must not be
+       matched, and a player who is coming straight back should not have to
+       re-queue by hand — least of all silently. */
+    stopQueueTimers(session);
+    void matchmaker.leave(userId);
 
     const matchId = userMatch.get(userId);
     const match = matchId ? matches.get(matchId) : undefined;

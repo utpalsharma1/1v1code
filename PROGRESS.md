@@ -2,127 +2,87 @@
 
 ## SESSION STOP — read this first
 
-**Phase 2B-4 is built and verified. Human vs human, no bot.** Working tree clean.
+**`/play` is matchable. The match screen is reachable by hand.** Working tree clean.
 
-### The VOID you asked about was not a LIVE match resolving
+### 1. The pools were always shared. A reconnect silently emptied one side.
 
-The match never started. The replay log for that match reads
-`ACCEPTING -> ABANDONED (ACCEPT_TIMEOUT)` at +12010ms, outcome `VOID/NEVER_STARTED`, problem
-`longest-common-prefix` rated **1100** — which matches your log line exactly, and both accounts were
-1200 at RD 350, matching "same rating, no widening needed".
+`/dev/sparring` and `/play` are the same thing to the gateway — both are just authenticated
+sockets going through the same `joinOrPair` Lua script. Proof it already worked: match
+`6f711268` paired `pwm_hfmzi` (a real `/play` session) against a sparring client.
 
-**Cause: `QueuePop` is `fixed inset-0 z-50` with no `pointer-events-none`, and it renders exactly
-when the Accept button is on screen behind it.** The button was covered. Neither of you could accept,
-so the window timed out. You saw the plates collide and the VS badge because that is the cinematic;
-the countdown and GO you remember were the pop's own sequence, not `match.countdown` — the log has
-neither. The accept control now lives **inside** the cinematic, where §6.2 already puts the accept
-pips, with the window counting down beside it.
+**The actual bug: a queued player whose socket blipped was removed from the Redis pool and never
+put back.** On disconnect the gateway called `leaveQueue`, which removed them from Redis, emitted
+`queue.left` **to a socket that no longer existed**, and deleted the session. On reconnect a fresh
+session was built with `queuedAt: null` and nothing re-queued. So the browser kept rendering the
+queue card — it had never been told otherwise — while the server had forgotten the player entirely.
 
-**And you were right that it was also a state machine problem.** `VOID` was overloaded. §6.9 gives it
-one meaning — our infrastructure failed — and folding "nobody accepted" and "both disconnected" into
-it made a genuine no-contest indistinguishable from an abandoned queue pop, which destroys the one
-signal it carries. Routine cancellation is now `CANCELED`; `VOID` takes only `INTERNAL_ERROR`. A test
-asserts no ordinary path can reach `VOID`, and a browser test asserts the same through the UI.
+That is exactly what you saw: `/play` sitting in a queue it was no longer in, and sparring clients
+correctly reporting `alone in the pool (1)` because the pool really did contain only them.
 
-**A related gap that fix exposed:** an `INTERNAL_ERROR` verdict was being treated as an ordinary
-wrong answer, so a lost verdict cost a player the match. It now ends the match `VOID` immediately,
-with no rating change — including when the other side already had an accepted submission. If we
-cannot vouch for the match, we do not hand anyone a win from it.
+**Any blip did it**, which is why it hit you and not the automated tests: a Next dev recompile, a
+laptop sleeping, the 20s ping timeout. The tests connect once and never reload.
 
-### Playwright: nothing had landed, and I said so
+**Fix:** queue *intent* now survives the socket. Disconnecting still removes you from the pool — a
+socket that is gone must not be matched — but a reconnect with no match in progress puts you back
+and says so in the log. Explicit `queue.leave` and pairing both clear the intent.
 
-No authorization had reached me — I asked at the end of the previous turn and your reply was the next
-message. So I did the two you named first.
+**Positive control performed.** `pnpm probe:requeue` drives queue → drop socket → reconnect → second
+player queues. With the fix disabled it fails 3/3 with *"after reconnecting, the player received no
+queue.status at all — still forgotten"*. With it restored, it passes. There is also a browser test
+that reloads `/play` mid-queue — a harder blip than a recompile — and then checks a sparring client
+can still find them.
 
-- **`e2e/fonts.spec.ts`** — every font file served with real bytes, all three §4 families actually
-  renderable, the `h1` genuinely resolving to the display face. This caught **my own** bad assertion
-  first: it demanded the families be `loaded` on the landing page, but fonts load lazily and nothing
-  there uses `--ff-code`, so JetBrains Mono was legitimately unloaded. It now forces the fetch with
-  `document.fonts.load()`, which distinguishes "not needed yet" from "not there".
-- **`e2e/signin.spec.ts`** — registration typed into real fields and submitted with a real click,
-  asserting the redirect, that no credential ever appears in a URL, that the session survives a
-  reload and mints a socket ticket, and that a wrong password produces a visible error.
+### 2. Ratings were written. The log just did not say so.
 
-### The bot is held. Its foundations are untouched.
+Checked directly rather than inferred — `RatingEvent` rows for your match `29e18aad`:
 
-No live wiring, no `BOT` chip, no `FakeTypist` integration — all reverted, including the chip I had
-already added to `Nameplate`, `QueuePop` and `MatchHUD`. What stays, built and unused:
-`packages/core/src/bot.ts` (Elo-expectation solve model, lognormal solve time, RD > 100 rating gate)
-and `packages/db/src/solutions.ts` (20 solutions, still verified by `pnpm db:solutions`).
+```
+sparring_zgn0ms   1200 -> 1362
+sparring_dpahhv   1200 -> 1038
+```
 
-### 1. The empty queue — what I chose
+Glicko fired correctly and symmetrically. The sparring page simply never rendered `match.end`'s
+`ratings` array. It does now, and when the array is empty it says **"no rating change (canceled,
+void, or unrated)"** rather than showing nothing — because you were right that silence and a
+genuine no-change are indistinguishable otherwise.
 
-**The queue never expires, but it stops pretending.**
+### 3. Exact steps to reach the match screen
 
-A hard timeout is wrong: it ejects a player from a queue they may still want to be in, and nothing
-about an empty pool makes waiting invalid — a queued socket costs nothing. Queueing silently forever
-is worse, and it is the version you named: §5 only permits a loop that encodes live state, and the
-radar sweeping over a provably empty pool implies a match is coming when nothing can produce one.
+Two windows. **Order matters only in that both must be queued at once.**
 
-So the queue stays open and the **claim** changes. `queue.status` now carries an authoritative
-`alone`. Once it has held for 20s the card drops the radar and says:
+1. **Window A — `http://localhost:3000/play`.** Sign in (or register). Wait for **connected** in the
+   top right. Click **PLAY**. It will say *Queue is empty* after ~20s; that is correct and it is
+   still queued.
+2. **Window B — `http://localhost:3000/dev/sparring`.** Wait for *connected · sparring_…*. Click
+   **Join queue**.
+3. They pair within ~2s. **Window A** shows the queue pop; click **Accept** inside the cinematic.
+   **Window B**: click **Accept**.
+4. Countdown `3 · 2 · 1 · GO`, then the match screen: HUD, problem panel, Monaco.
 
-> **Queue is empty** — Nobody else is queuing. You are still in the queue and will be matched the
-> moment someone joins — there is just no one to find right now.  ·  *Leave queue*
+**Then, for the beats you listed:**
 
-Nothing is cancelled, nothing is invented, and the sweep stops the instant it would become a lie.
-A browser test asserts all four of those strings.
+| what you want to see | do this |
+| --- | --- |
+| test cells resolving one at a time | A: write anything and **Submit**. Watch A's own bar fill cell by cell. |
+| the opponent's bar filling | B: **Correct (reference)**. Watch B's side of A's HUD. |
+| **the §6.7b hold** | B: **Time limit** *first*. Then A: submit a correct solution. B's receipt is earlier, its verdict lands last — the hold renders on A. |
+| **receipt order deciding** | B: **Correct (reference)**, then A submits correct within ~1s. Earlier receipt wins even if the other verdict returns first. |
+| victory + rating delta | A submits correct and wins. The delta counts up on the victory screen; B's log prints both sides. |
+| defeat | B: **Correct (reference)** and let it land first. |
+| clutch edge | B: **Correct (reference)** on a problem with 5+ tests — the edge appears once B passes 80%. |
+| disconnect + 45s grace | B: **Drop socket**. Watch A's HUD. B: **Reconnect** before 45s to see resync. |
 
-### 2. `/dev/sparring` — a second player on command
-
-Not a bot, and the file says so at the top. No solve model, no rating integrity, no labelling, no
-human-like typing. One identity **per tab** — a single shared account made two tabs fight over one
-session, because the gateway keys everything on user id — minted through
-`/api/dev/sparring-ticket`, which 404s when `NODE_ENV=production`.
-
-Controls: join / leave queue · accept · **Correct (reference)** · wrong answer · time limit · paste
-anything · drop socket · reconnect. The reference button pulls the same reviewed solution
-`pnpm db:solutions` verifies, so a sparring win is a real win rather than a fixture.
-
-**How to stage the §6.7b hold**, which is the one you flagged as hard:
-
-1. Open `/play` in your window and `/dev/sparring` in another. Queue in both.
-2. Once live, click **Time limit** in the sparring tab *first* — it takes the full limit on every
-   test, so its verdict lands last.
-3. Submit a correct solution from your own window *second*.
-
-The sparring side has the earlier receipt and the later verdict, so the hold renders and §6.9's rule
-that receipt order decides is exercised rather than assumed. **For receipt order between two passes:**
-click *Correct (reference)* in both windows a second apart — both are ACCEPTED, and the earlier
-receipt must win regardless of which verdict returns first.
-
-`Drop socket` is how to see the disconnected nameplate and the 45s grace countdown without closing a
-tab.
-
-### What 2B-4 ships
-
-- **Submissions persisted with the §6.9 receipt stamp** taken at the gateway *before* the job is
-  queued — before validation, before the database. `Submission.receiptMs` is a `BigInt` from the
-  monotonic clock; `queueWaitMs` and `judgeMs` are recorded as diagnostics and are never inputs.
-- **The match screen** — `MatchHUD`, Monaco, the problem panel, and Phase 1's cinematics driven by
-  real events: cells resolving one at a time, compile pulse, clutch edge above 80%, near-miss
-  shatter, verdict panel, the §6.7b hold, victory/defeat with the real rating delta. Draw, canceled
-  and void get their own screen rather than borrowing the victory cinematic.
-- **§6.8b in-flight lock** — unlimited attempts, one outstanding submission, and the button says
-  "Judging…" rather than going quietly dead.
-- **Glicko-2 on real outcomes**, with both pre-match ratings snapshotted at match creation so the
-  §6.7 delta belongs to *this* match.
-- **Three bugs found by running it**, all fixed: a foreign-key violation because the `Match` row was
-  written at settlement while `Submission.matchId` references it; the same row then written
-  fire-and-forget, which a fast submit beat (it is now awaited before the match goes LIVE); and
-  `match.found` broadcast without the per-side `you`, so the accept control could not render at all.
+The reference-solution button pulls the same reviewed source `pnpm db:solutions` verifies, so a
+sparring win is a real win rather than a fixture.
 
 ### Verified this session, by running it
 
-Two-player headless probe (`pnpm probe:match`): two humans pair with no bot, per-test results stream
-individually and in order, the hold holds and is ended by the result, **receipt order decides the win**
-(A submitted 700ms earlier and won on an equal race), and Glicko moved both sides ±162.
+`probe:requeue` (with a failing positive control) · `probe:match` two-player: receipt order decides,
+Glicko ±162 · **e2e 11/11 in a real browser**, including `/play` surviving a reload and staying
+matchable · core 51/51 · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · typecheck 7/7.
 
-`e2e` 10/10 in a real browser · core 51/51 · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · phase
-guard 2/2 · typecheck 7/7 · production build clean.
-
-**Not verified: how any of it looks or feels.** The browser tests prove the flow works; they say
-nothing about whether the match screen reads as §2 wants. That is still your eye.
+**Still unverified: how any of it looks.** Every §6 cinematic from countdown to victory now has a
+reachable path, and no human has watched one.
 
 ### Bringing the stack back up, in order
 
@@ -142,21 +102,19 @@ setsid nohup pnpm --filter @1v1/web dev                                > /tmp/we
 pnpm test:smoke                          # RUN FIRST — asset integrity, ~10s
 ```
 
-**The judge worker is easy to forget and its absence looks like a product bug.** With it down, every
-submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which now correctly voids the match —
-so a run of voids means check `/tmp/worker.log` before suspecting anything else.
+**The judge worker is easy to forget and its absence looks like a product bug.** With it down every
+submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — so
+a run of voids means check `/tmp/worker.log` first.
 
-**To play: two windows.** `/play` signed in, and `/dev/sparring` for the opponent. There is no bot,
-so a single window will sit in an empty queue and say so.
+**There is no bot.** A single window will sit in an empty queue and say so. Use `/dev/sparring`.
 
-Suites: `pnpm test:smoke` · `pnpm test:e2e` (browser) · `pnpm probe:match` (two-player, headless) ·
+Suites: `pnpm test:smoke` · `pnpm test:e2e` · `pnpm probe:match` · `pnpm probe:requeue` ·
 `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` · `pnpm db:solutions` ·
 `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
 `node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`
 
 **Shell note:** `pkill -f` has matched its own shell repeatedly here. Kill by PID from
-`ps -eo pid,cmd`, and start long-lived processes with `setsid … < /dev/null & disown` so a later kill
-cannot walk back up the process group.
+`ps -eo pid,cmd`, and start long-lived processes with `setsid … < /dev/null & disown`.
 
 
 ## What class of check would have caught this — and what is still eye-only
