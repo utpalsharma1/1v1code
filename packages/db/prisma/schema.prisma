@@ -92,6 +92,14 @@ model Problem {
   /// source; the row only names it.
   validatorKey String
 
+  /// §7 / the problem format: the I/O contract, without which a statement is a
+  /// riddle rather than a problem. Required in the seed type and enforced by
+  /// verify-seed.
+  inputFormat   String @default("")
+  outputFormat  String @default("")
+  /// Why each sample produces its output — the part that teaches the format.
+  note          String @default("")
+
   timeLimitMs   Int @default(5000)
   memoryLimitMb Int @default(256)
 

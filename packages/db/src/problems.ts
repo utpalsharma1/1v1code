@@ -16,14 +16,44 @@ export interface SeedTest {
   isSample?: boolean;
 }
 
+/* THE CODEFORCES STRUCTURE, and it is not optional.
+
+   A statement without an input format is not a problem, it is a riddle. A
+   competitive programmer cannot begin without knowing whether input is space-
+   or newline-separated, whether the first line is a count, or whether trailing
+   whitespace matters — and guessing costs minutes in an eight-minute match.
+
+   Every field below is required, and `verify-seed.ts` fails the seed if any is
+   missing or if a problem has fewer than two samples. That check is the forcing
+   function: a problem cannot enter the bank half-written. */
 export interface SeedProblem {
   slug: string;
   title: string;
   topic: SeedTopic;
   rating: number;
   validatorKey: string;
+  /** The setup and the task. Not the I/O contract — that goes below. */
   statement: string;
+  /** Exactly what arrives on stdin, line by line, including any leading count.
+   *
+   *  OPTIONAL IN THE TYPE, REQUIRED BY `verify-seed`. The 20 seeded problems
+   *  predate this format and none of them has it yet, so making it a compile
+   *  error would stop the repo building rather than stop bad problems shipping.
+   *  `pnpm db:verify` fails while any problem is incomplete, which is the check
+   *  that actually matters — and it names every offender rather than the first. */
+  inputFormat?: string;
+  /** Exactly what to print, including formatting and trailing-whitespace rules. */
+  outputFormat?: string;
+  /** Every bound, explicitly. MUST agree with the validator, which is the
+   *  source of truth — the statement is not allowed to promise something the
+   *  validator would reject, or §6.8's hack phase would police a broken promise. */
   constraints: string;
+  /** Why each sample produces its output. This is the part that teaches the
+   *  format and the part most likely to be skipped. Required by `verify-seed`. */
+  note?: string;
+  /** Samples (`isSample: true`) are PUBLIC — shown in the statement and run as
+   *  the first tests, so a player gets fast feedback on whether they understood
+   *  the format. Everything else is hidden. At least two samples are required. */
   tests: SeedTest[];
 }
 

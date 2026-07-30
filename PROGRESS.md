@@ -2,79 +2,96 @@
 
 ## SESSION STOP — read this first
 
-**`probe:lifecycle` is built and passing, and it found a real replay-log bug on its first run.
-Challenge creation is next and everything blocking it is decided.** Working tree clean.
-Cold start: `pnpm stack`.
+**`pnpm db:verify` NOW FAILS. That is deliberate — it is the forcing function for the problem
+format, and all 20 problems are incomplete.** Working tree clean, typecheck green, everything else
+passing. Cold start: `pnpm stack`.
 
-### The lifecycle contract exists, and writing it first paid for itself immediately
+### What landed
 
-`apps/gateway/src/lifecycle-probe.ts` drives a complete match through one **pairing strategy** and
-reports everything worth comparing: the state sequence read back from the replay log, the log's
-record types in order, the §6.7b hold, a mid-match reconnect, and the outcome. `assertCanonical`
-holds the contract:
+**1. The guest band rule is in §8 and cannot be re-derived.** When either side is a guest, the host's
+explicit `ratingMin`/`ratingMax` **replaces** mean − 120 entirely — no blending, no averaging. The
+argument is written down: a guest's `1200` is the schema default, a placeholder written because the
+column is non-null, and feeding it into a mean yields 1080 for a 1200 host — *plausible and wrong*,
+which is worse than absent because nobody re-examines a reasonable-looking number.
 
-```
-states:  MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED
-log:     match.created · match.state · match.accepted · countdown.beat · match.started
-         · submission.received · submission.verdict · match.ended
-plus:    the hold was announced · reconnect produced a resync carrying the problem
-         · both sides agree on the match and disagree on their side
-         · a 10-char Crockford spectator code
-```
+**2. The problem format is defined and enforced.** `SeedProblem` now carries `inputFormat`,
+`outputFormat` and `note` alongside `statement` and `constraints`, with the Codeforces structure and
+the reasoning in the type. `verify-seed` fails the seed if any problem is missing one, or has fewer
+than two samples, and it **names every offender rather than the first**.
 
-It is deliberately structured as `runLifecycle({ pairing })` with `viaMatchmaking` as the only
-strategy today. **When challenge creation lands it runs the same function with a different pairing
-and the same assertions must pass** — not similar output, the same assertions.
+**3. Samples were already better modelled than I expected.** `isSample` exists on `SeedTest` and on
+the Prisma `TestCase`, 40 tests are already marked as samples, they are already seeded, and
+`verify-seed` already checks every test byte-for-byte against the reference solution — **so sample
+outputs are already mechanically verified.** The gap was never the data. It is that **samples are
+never shown to the player**, which is a rendering gap, not a schema one.
 
-**The bug it found: `submission.verdict` never reached the replay log.** `verdictArrived` applied the
-transition and *then* recorded the verdict, but applying a decisive verdict cascades through
-`resolve()` to `finish()`, which closes the log. The record was written into a closed stream and
-silently dropped — so **every decisive verdict was missing from its own replay**, and a replay showed
-a match ending with nothing explaining why. §10 claims replay is a pure function of the log; it
-wasn't.
+**4. A bug in my own forcing function, caught by running it.** The format check first used
+`process.exitCode = 1`, and the script's final `process.exit(failures === 0 ? 0 : 1)` overwrote it —
+so it printed a wall of twenty real problems and then **reported success**. Same class as a green tick
+on a meaningless result. It is a hard `process.exit(1)` now, verified.
 
-The fix distinguishes two things that write-behind conflates. **Write-behind is about EFFECTS:**
-never log a transition that has not happened. A verdict is not a transition — it is a fact that
-already arrived from the judge — so it is recorded before being applied, while the transition it
-causes is still written write-behind by `apply`. That distinction is now in the code comment, because
-the naive reading of the rule is what produced the bug.
+### Why `db:verify` failing is the correct state to hand over
 
-This is the third time writing the check before the feature has surfaced something: the containment
-suite's positive control, the sign-in seam, and now this.
+All 20 problems are missing `inputFormat`, `outputFormat` and `note`. I did **not** retrofit them,
+and I want to be plain about why rather than dress it up: writing twenty correct I/O contracts and
+sample explanations is careful per-problem work, and I did not have the room left to do it well. A
+*wrong* input format is worse than a missing one — a player will trust it, exactly as you said about
+sample outputs — so guessing at twenty of them would have been the damaging choice.
+
+What is handed over instead is the machine-checkable definition of "done": `pnpm db:verify` fails
+today, names all twenty, and will pass only when every one is complete. **The check exists before the
+work, which is the order that has now caught four bugs.**
+
+The fields are optional in the TypeScript type and required by `verify-seed`, deliberately: making
+them compile errors would stop the repo building rather than stop bad problems shipping, and it would
+report the first offender instead of all twenty.
+
+### Per-problem effort under the new format — what you asked for
+
+The format roughly **doubles** the non-algorithmic writing per problem. Measured against the existing
+20, which have statement + constraints + tests only:
+
+| piece | 800–1200 | 1200–1700 | 1700–2200 |
+| --- | --- | --- | --- |
+| statement (setup + task) | 10 min | 20 min | 30 min |
+| **input / output format** | **10 min** | **12 min** | **15 min** |
+| constraints, matched to the validator | 5 min | 10 min | 15 min |
+| **2+ samples + the note explaining them** | **15 min** | **25 min** | **35 min** |
+| validator | 10 min | 20 min | 30 min |
+| reference solution | 10 min | 30 min | 90 min |
+| test design (the real work at the top end) | 15 min | 45 min | 120 min |
+| **total** | **~75 min** | **~2.7 h** | **~5.6 h** |
+
+Against the old format's 45–90 min / 1.5–3 h / 3–6 h, the added ~35 minutes is almost entirely the
+**note**: explaining why sample 1 produces its output is the part that teaches the format, and it is
+the part that cannot be generated without actually understanding the problem.
+
+**The split I would recommend.** Drafting with me and verifying mechanically lands at **~30–40 min
+per problem** for 800–1700, because the pipeline already does the expensive checking — `db:verify`
+runs every test and every sample against the reference and refuses disagreement. Above 1700 the
+bottleneck is **test design**, which is judgement, not typing: an anti-heuristic case has to defeat
+the specific wrong approaches a strong player will try, and that does not compress.
+
+So: **draft the 800–1700 band with me** (roughly 30 problems to get past 60, ~15–20 hours), and
+**hand-write the 1700–2200 band yourself**, where a weak test set silently accepts wrong solutions and
+the cost of that is invisible until someone exploits it.
 
 ### Verified this session
 
-`probe:lifecycle` PASS · `probe:visibility` 10/10 · `probe:match` · `probe:latejoin` 6/6 ·
-**e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · build clean.
+typecheck 7/7 · core 56/56 · `probe:lifecycle` PASS · `probe:visibility` 10/10 · `probe:match` ·
+`probe:latejoin` 6/6 · smoke 5/5 · **`db:verify` fails by design, exit 1, naming all 20.**
 
-### CHALLENGE LINKS — next, with the contract now in place
+### Next session, in order
 
-Nothing about the design is open. The remaining work, in order:
-
-1. **Challenge creation.** `POST /api/challenge` → a `Challenge` row (the model already exists,
-   unused: `code`, `hostId`, `mode`, `visibility`, `ratingMin`, `ratingMax`, `allowGuest`,
-   `expiresAt`, `consumedAt`, `consumedById`). A `/c/<code>` route resolves it. `createMatch` gains a
-   second entry point that takes two identities plus an explicit rating band instead of a pairing.
-   **Then `probe:lifecycle` runs with `viaChallenge` and must pass unchanged.**
-2. **Guests.** A credential-less `User` with `isGuest`, an ordinary session cookie (so reconnect,
-   grace and resync need no new code), handle `guest-<4 hex>`, a gateway refusal on `isGuest` for
-   challenge creation shaped like `playerOnly`, the claim flow that mutates the same row, and the
-   sweeper — 24h if never played, 7 days if played, and it deletes only guests with no `Match` rows.
-3. **Expiry and the dead end.** 24h per §7. A stale link shows who challenged whom and offers
-   *"send one back"* rather than a 404.
-4. **Rematch** from the result screen with no new link, and `UNLISTED` with `spectatorDelayMs: 0`.
-
-**The pieces already in place, so they are not work:** `rated` is decided in `createMatch` from
-`isRated` and disclosed on the queue pop before the countdown; `isRated` already returns false when
-either side is a guest; `Identity` and `PlayerCard` carry `isGuest`; the spectator code is generated
-with no reference to account state, so a guest match is shareable and `spectate.watch` reads no
-`isGuest`, rating or session.
-
-**The one thing to be careful about:** `createMatch` currently reads both players' ratings for
-`pickProblem`. With a guest there is no meaningful rating, so the host's explicit
-`ratingMin`/`ratingMax` band must replace the mean−120 computation rather than adjust it — a guest's
-default 1200 is not a rating, it is a placeholder, and treating it as one would silently pick
-problems around 1080.
+1. **Retrofit the 20 problems** to the new format until `db:verify` passes. This is the launch blocker
+   and it is now measurable.
+2. **Render it** — samples as monospace blocks with a per-input copy button, limits and constraints at
+   the top where a competitive programmer looks. The Prisma fields exist; nothing is plumbed to the
+   match screen yet.
+3. **Challenge links**, unchanged and still fully specified: creation → `probe:lifecycle` under
+   `viaChallenge` with the same assertions → guests → expiry/stale-link/rematch/UNLISTED. The §8 rule
+   above is the one new constraint on it.
+4. **20 new problems**, spread across the band.
 
 ## What class of check would have caught this — and what is still eye-only
 

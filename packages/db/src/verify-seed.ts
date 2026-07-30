@@ -324,7 +324,42 @@ function verify(): number {
     failures++;
   };
 
-  for (const problem of PROBLEMS as SeedProblem[]) {
+  /* THE FORMAT IS ENFORCED, not encouraged.
+
+   A problem missing its input format, output format, note, or a second sample
+   is not solvable as presented, and 20 problems shipped in exactly that state.
+   Failing the seed is the forcing function: an incomplete problem cannot enter
+   the bank, so the gap cannot accumulate silently again. */
+const formatFailures: string[] = [];
+for (const problem of PROBLEMS) {
+  const missing = (["inputFormat", "outputFormat", "note"] as const).filter(
+    (field) => !problem[field] || problem[field].trim().length === 0,
+  );
+  if (missing.length > 0) {
+    formatFailures.push(`${problem.slug}: missing ${missing.join(", ")}`);
+  }
+  const samples = problem.tests.filter((t) => t.isSample).length;
+  if (samples < 2) {
+    formatFailures.push(`${problem.slug}: has ${samples} sample(s), needs at least 2`);
+  }
+}
+if (formatFailures.length > 0) {
+  console.error("\nPROBLEM FORMAT INCOMPLETE — these are not solvable as presented:");
+  for (const f of formatFailures) console.error(`  ${f}`);
+  console.error(
+    `\n${formatFailures.length} issue(s). Every problem needs a statement, an input format,\n` +
+      "an output format, constraints, a note explaining the samples, and >= 2 samples.\n" +
+      "Samples are also verified byte-for-byte against the reference solution below.\n",
+  );
+  /* A HARD exit, not `exitCode`. The final `process.exit(failures === 0 …)`
+     below overwrote it, which made this check advisory — it printed a wall of
+     real problems and then reported success. An incomplete problem set must
+     stop the seed, and reporting it while exiting 0 is the same class of bug as
+     a green tick on a meaningless result. */
+  process.exit(1);
+}
+
+for (const problem of PROBLEMS as SeedProblem[]) {
     const solver = SOLVERS[problem.slug];
     const validate = getValidator(problem.validatorKey);
     const marks: string[] = [];

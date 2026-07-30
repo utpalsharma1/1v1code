@@ -552,6 +552,8 @@ Every problem carries a rating **on the same numeric scale as players**. A 1600 
 The offset is a **per-mode constant**, not a global:
 
 - **Ranked duel** — mean − 120.
+
+**When either side is a guest, the host's explicit band REPLACES mean − 120 entirely.** It does not blend, adjust, or average with it. A guest has no rating: the `1200` on their row is the schema default, a placeholder written because the column is non-null, and it is not evidence about anything. Feeding it into a mean produces `(1200 + host) / 2 − 120`, which for a 1200 host is 1080 — a plausible-looking number derived from a value that means nothing. **Plausible and wrong is worse than absent**, because nobody re-examines a number that looks reasonable. So a challenge match involving a guest selects from `Challenge.ratingMin`/`ratingMax` and the guest's stored rating is not read at all. `probe:lifecycle` asserts both halves: the problem falls inside the host's band, and moving the guest's stored rating does not move the selection.
 - **Blitz** — substantially lower again; the match is short and there is no time to think your way out of a hard problem.
 - **Bo3** — escalating across games. Open below the ranked offset and climb toward it by game three, so a series builds instead of flattening.
 
