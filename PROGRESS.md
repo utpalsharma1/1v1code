@@ -2,91 +2,79 @@
 
 ## SESSION STOP — read this first
 
-**The three safe-by-accident channels are fixed. Guest lifecycle decided in §7. Unrated is disclosed
-before the countdown. CHALLENGE LINKS NOT STARTED.** Working tree clean. Cold start: `pnpm stack`.
+**`probe:lifecycle` is built and passing, and it found a real replay-log bug on its first run.
+Challenge creation is next and everything blocking it is decided.** Working tree clean.
+Cold start: `pnpm stack`.
 
-### 1. The three channels — fixed, not deferred
+### The lifecycle contract exists, and writing it first paid for itself immediately
 
-- **`match.found` and `match.resync` now share one constructor**, `playerCardView` in `relay.ts`.
-  You were right that this was the compile-error leak described in advance: one payload shape
-  reachable through two paths, only one of them ever audited, so a field added to `PlayerCard` would
-  have appeared in both and been reviewed in neither.
-- **`userId` is off the wire.** No client read it — the gateway resolves sides server-side via
-  `sideOf` — and an internal identifier with no client use has no business being sent.
-- **`match.end`'s `ratings` stays, and is now argued in §10** rather than left defensible. The
-  argument: in a two-player match your own delta implies your opponent's, because the outcome is
-  known, both pre-match ratings were already on screen from §6.2, and Glicko is symmetric. §10 also
-  records the limit you named — **it stops being obviously fine above two participants**, where
-  "yours implies theirs" is false and it becomes a roster leak wearing a scoreboard. Flagged to be
-  reconsidered *before* any such mode ships, not after.
+`apps/gateway/src/lifecycle-probe.ts` drives a complete match through one **pairing strategy** and
+reports everything worth comparing: the state sequence read back from the replay log, the log's
+record types in order, the §6.7b hold, a mid-match reconnect, and the outcome. `assertCanonical`
+holds the contract:
 
-### 2. Guest lifecycle — decided in §7
+```
+states:  MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED
+log:     match.created · match.state · match.accepted · countdown.beat · match.started
+         · submission.received · submission.verdict · match.ended
+plus:    the hold was announced · reconnect produced a resync carrying the problem
+         · both sides agree on the match and disagree on their side
+         · a 10-char Crockford spectator code
+```
 
-**Naming: `guest-7f2a`.** Obviously a guest, stable for the match, not demeaning — nobody is called
-"Anonymous" or "Player 2". The suffix keeps two guests distinguishable in a spectator's history.
+It is deliberately structured as `runLifecycle({ pairing })` with `viaMatchmaking` as the only
+strategy today. **When challenge creation lands it runs the same function with a different pairing
+and the same assertions must pass** — not similar output, the same assertions.
 
-**Cleanup, with a sweeper rather than a hope:**
+**The bug it found: `submission.verdict` never reached the replay log.** `verdictArrived` applied the
+transition and *then* recorded the verdict, but applying a decisive verdict cascades through
+`resolve()` to `finish()`, which closes the log. The record was written into a closed stream and
+silently dropped — so **every decisive verdict was missing from its own replay**, and a replay showed
+a match ending with nothing explaining why. §10 claims replay is a pure function of the log; it
+wasn't.
 
-- Unclaimed, **never played** → garbage after **24 hours**. Long enough for a link opened tonight and
-  claimed tomorrow morning; short enough that link-scanning cannot accumulate rows.
-- Unclaimed, **has played** → kept **7 days**, because their match history is exactly what the claim
-  flow offers them and deleting it early makes the offer worthless.
-- **Claimed** → no longer a guest, never swept.
+The fix distinguishes two things that write-behind conflates. **Write-behind is about EFFECTS:**
+never log a transition that has not happened. A verdict is not a transition — it is a fact that
+already arrived from the judge — so it is recorded before being applied, while the transition it
+causes is still written write-behind by `apply`. That distinction is now in the code comment, because
+the naive reading of the rule is what produced the bug.
 
-The sweeper deletes only guests with **no `Match` rows**, which retains the 7-day cohort by that rule
-rather than by a second check that could drift out of step with it.
-
-**The claim keeps the same row.** Registering from the result screen sets `email`, `passwordHash` and
-`handle` on the *existing* `User` and clears `isGuest`. Nothing is copied, so history follows by
-identity rather than migration — which is the entire reason to claim the row instead of making a
-second one.
-
-**Claiming after the session expires is refused, and says why.** The claim is authorised by holding
-the guest's session; without it there is no way to prove the claimant is that guest, and allowing a
-claim by handle alone would let anyone adopt any guest's history. An expired claim offers ordinary
-registration instead — a new account, described honestly as one.
-
-**Guest identity is now on `Identity` and `PlayerCard`**, read from the `User` row, so the paths that
-need it have it. `isRated` already returned false for a guest, so Glicko, the RD gate and the rating
-events were correct before this and remain so.
-
-### 3. Unrated is disclosed BEFORE the countdown
-
-`rated` is decided in `createMatch` using the existing `isRated`, travels on `match.found` and
-`match.resync`, and the queue pop shows **`unrated · no rating change`** while the accept window is
-still open. Same rule §8 applied to the bot, for the same reason: players work it out either way
-from a result screen with no delta, and finding out late converts a fair result into a trick.
+This is the third time writing the check before the feature has surfaced something: the containment
+suite's positive control, the sign-in seam, and now this.
 
 ### Verified this session
 
-`probe:visibility` 10/10 · `probe:match` (receipt order, Glicko both directions) · `probe:latejoin`
-6/6 character-exact · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · build clean.
+`probe:lifecycle` PASS · `probe:visibility` 10/10 · `probe:match` · `probe:latejoin` 6/6 ·
+**e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · build clean.
 
-**Not verified by eye:** the `unrated` chip on the queue pop. It needs a guest or a bot to appear,
-and neither exists in a normal two-registered-player match — so it will first be visible when
-challenge links land.
+### CHALLENGE LINKS — next, with the contract now in place
 
-### CHALLENGE LINKS — not started; everything blocking them is now decided
+Nothing about the design is open. The remaining work, in order:
 
-The design debt is gone. What remains is build order, unchanged:
+1. **Challenge creation.** `POST /api/challenge` → a `Challenge` row (the model already exists,
+   unused: `code`, `hostId`, `mode`, `visibility`, `ratingMin`, `ratingMax`, `allowGuest`,
+   `expiresAt`, `consumedAt`, `consumedById`). A `/c/<code>` route resolves it. `createMatch` gains a
+   second entry point that takes two identities plus an explicit rating band instead of a pairing.
+   **Then `probe:lifecycle` runs with `viaChallenge` and must pass unchanged.**
+2. **Guests.** A credential-less `User` with `isGuest`, an ordinary session cookie (so reconnect,
+   grace and resync need no new code), handle `guest-<4 hex>`, a gateway refusal on `isGuest` for
+   challenge creation shaped like `playerOnly`, the claim flow that mutates the same row, and the
+   sweeper — 24h if never played, 7 days if played, and it deletes only guests with no `Match` rows.
+3. **Expiry and the dead end.** 24h per §7. A stale link shows who challenged whom and offers
+   *"send one back"* rather than a 404.
+4. **Rematch** from the result screen with no new link, and `UNLISTED` with `spectatorDelayMs: 0`.
 
-1. **`probe:lifecycle` against matchmaking first.** Capture the canonical state sequence, the event-log
-   shape, and behaviour under abandonment, reconnection and the §6.7b hold. That defines "identical"
-   before there is a second creation path to rationalise against.
-2. **Challenge creation**, which must pass that same probe unchanged.
-3. Guests end to end: creation with a session cookie, the `guest-xxxx` handle, the gateway refusal on
-   `isGuest` for link creation, the claim flow, the sweeper.
-4. Expiry (24h per §7), the stale-link screen with its "send one back" affordance, one-click rematch,
-   `UNLISTED` with zero spectator delay.
+**The pieces already in place, so they are not work:** `rated` is decided in `createMatch` from
+`isRated` and disclosed on the queue pop before the countdown; `isRated` already returns false when
+either side is a guest; `Identity` and `PlayerCard` carry `isGuest`; the spectator code is generated
+with no reference to account state, so a guest match is shareable and `spectate.watch` reads no
+`isGuest`, rating or session.
 
-**Difficulty:** the host picks a band via `Challenge.ratingMin`/`ratingMax`, which already exist. With
-a guest involved that band is the *only* input, because mean−120 has no second rating to work from.
-Two registered players keep mean−120 sampled within the host's band.
-
-**Already confirmed from the code:** a guest match is shareable — the spectator code is generated in
-`createMatch` with no reference to account state, and `spectate.watch` → `canSpectate` →
-`sendSnapshot` reads no `isGuest`, no rating and no session. The anonymous `/watch` viewer and a
-guest remain separate paths: **an anonymous viewer cannot play; a guest can.**
+**The one thing to be careful about:** `createMatch` currently reads both players' ratings for
+`pickProblem`. With a guest there is no meaningful rating, so the host's explicit
+`ratingMin`/`ratingMax` band must replace the mean−120 computation rather than adjust it — a guest's
+default 1200 is not a rating, it is a placeholder, and treating it as one would silently pick
+problems around 1080.
 
 ## What class of check would have caught this — and what is still eye-only
 

@@ -458,13 +458,28 @@ export class LiveMatch {
     internalError = false,
   ): Promise<void> {
     if (isAccepted) this.solvedElapsed.set(side, this.clock?.elapsed() ?? 0);
-    await this.apply({ type: "VERDICT", submissionId, accepted: isAccepted, internalError });
+
+    /* RECORD BEFORE APPLYING, and only here.
+
+       §10's write-behind rule is about EFFECTS: never log a transition that has
+       not happened yet. This is not a transition — the verdict is a fact that
+       already arrived from the judge — and applying it can cascade all the way
+       to `finish()`, which closes the log. Recording afterwards therefore wrote
+       into a closed stream and the record was silently dropped, so every
+       decisive verdict was missing from its own replay: the log showed a match
+       ending with nothing explaining why.
+
+       Found by probe:lifecycle on its first run, which is exactly what it was
+       written for. The state transition itself is still written write-behind,
+       by `apply`. */
     await this.log.record("submission.verdict", {
       side,
       submissionId,
       accepted: isAccepted,
       internalError,
     });
+
+    await this.apply({ type: "VERDICT", submissionId, accepted: isAccepted, internalError });
     if (!isTerminal(this.ctx.state)) this.emitJudging();
   }
 
