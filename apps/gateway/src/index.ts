@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import Redis from "ioredis";
 import { Server, type Socket } from "socket.io";
-import { generateCode, monotonicMs } from "@1v1/core";
+import { generateCode, monotonicMs, normaliseCode } from "@1v1/core";
 import { prisma } from "@1v1/db";
 import {
   CodeSubmitSchema,
@@ -12,16 +12,17 @@ import {
   MatchAcceptSchema,
   PulseReportSchema,
   QueueJoinSchema,
+  SpectateWatchSchema,
   type Language,
   type PlayerCard,
   type Side,
 } from "@1v1/proto";
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
-import { Matchmaker, bandFor } from "./matchmaking.ts";
+import { BAND_CEILING, BAND_INTERVAL_MS, Matchmaker, bandFor } from "./matchmaking.ts";
 import { applyOutcome, snapshot, type RatingSnapshot } from "./rating.ts";
 import { canSpectate, type Viewer } from "./relay.ts";
 import { SubmissionRunner, isInFlight, receipt } from "./submissions.ts";
-import { identify, identifyById, type Identity } from "./session.ts";
+import { anonymousIdentity, identify, identifyById, type Identity } from "./session.ts";
 
 /* ============================================================================
    Gateway (§10, §12 Phase 2B-2)
@@ -284,7 +285,7 @@ async function persistMatch(match: LiveMatch, problemId: string): Promise<void> 
     await prisma.match.create({
       data: {
         id: match.id,
-        spectatorCode: generateCode(),
+        spectatorCode: match.spectatorCode,
         p1Id: match.players.p1.userId,
         p2Id: match.players.p2.userId,
         problemId,
@@ -371,9 +372,11 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
   const [p1Snapshot, p2Snapshot] = await Promise.all([snapshot(a.userId), snapshot(b.userId)]);
 
   const id = randomUUID();
+  const spectatorCode = generateCode();
   const problemRow = problem;
   const match: LiveMatch = new LiveMatch({
     id,
+    spectatorCode,
     players: { p1: await cardFor(a), p2: await cardFor(b) },
     problem,
     emitTo: (side, event, payload) => emitToSide(match, side, event, payload),
@@ -513,6 +516,11 @@ async function joinQueue(session: Session): Promise<void> {
       inQueue,
       // Authoritative, because the client must never have to infer it.
       alone: inQueue <= 1,
+      /* The queue card shows PROGRESS, not just "widening…", so it needs both
+         the ceiling and the time to the next step. Computed here because the
+         schedule is §6.1's and the client must not re-derive it. */
+      ceiling: BAND_CEILING,
+      nextStepMs: widening ? BAND_INTERVAL_MS - (elapsed % BAND_INTERVAL_MS) : null,
     });
   };
 
@@ -565,9 +573,16 @@ io.use(async (socket, next) => {
 
   if (ticket) {
     // Single use: GETDEL so a ticket cannot be replayed if it leaks.
-    const userId = await redis.getdel(`socket:ticket:${ticket}`);
-    if (userId) {
-      identity = await identifyById(userId);
+    const subject = await redis.getdel(`socket:ticket:${ticket}`);
+    if (subject === "anon") {
+      /* §7: watching requires no account. This identity may watch and do
+         nothing else — every player action is refused by `playerOnly` below,
+         server-side, because a registration wall in front of a shared live
+         match converts our best growth path into a bounce. */
+      identity = anonymousIdentity(randomUUID());
+      via = "anonymous ticket";
+    } else if (subject) {
+      identity = await identifyById(subject);
       via = "ticket";
     }
   }
@@ -635,7 +650,16 @@ io.on("connection", (socket: Socket) => {
     void joinQueue(session);
   }
 
+  /* §7: an anonymous viewer may watch and do nothing else.
+     Enforced here rather than by hiding buttons — the client is not ours. */
+  const playerOnly = (event: string): boolean => {
+    if (!identity.isAnonymous) return true;
+    socket.emit("error", { code: "SPECTATOR_ONLY", message: `${event} requires an account` });
+    return false;
+  };
+
   socket.on("queue.join", (raw) => {
+    if (!playerOnly("queue.join")) return;
     const parsed = QueueJoinSchema.safeParse(raw ?? {});
     if (!parsed.success) {
       socket.emit("error", { code: "BAD_PAYLOAD", message: "queue.join" });
@@ -644,9 +668,13 @@ io.on("connection", (socket: Socket) => {
     void joinQueue(session);
   });
 
-  socket.on("queue.leave", () => void leaveQueue(session));
+  socket.on("queue.leave", () => {
+    if (!playerOnly("queue.leave")) return;
+    void leaveQueue(session);
+  });
 
   socket.on("match.accept", (raw) => {
+    if (!playerOnly("match.accept")) return;
     const parsed = MatchAcceptSchema.safeParse(raw ?? {});
     if (!parsed.success) {
       socket.emit("error", { code: "BAD_PAYLOAD", message: "match.accept" });
@@ -663,6 +691,7 @@ io.on("connection", (socket: Socket) => {
   });
 
   socket.on("code.submit", (raw) => {
+    if (!playerOnly("code.submit")) return;
     /* THE RECEIPT STAMP, TAKEN FIRST (§6.9).
 
        Before validation, before the database, before the job is queued. It is
@@ -716,6 +745,7 @@ io.on("connection", (socket: Socket) => {
   };
 
   socket.on("editor.snapshot", (raw) => {
+    if (!playerOnly("editor.snapshot")) return;
     const parsed = EditorSnapshotSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
     const match = matches.get(parsed.data.matchId);
@@ -728,6 +758,7 @@ io.on("connection", (socket: Socket) => {
   });
 
   socket.on("editor.delta", (raw) => {
+    if (!playerOnly("editor.delta")) return;
     const parsed = EditorDeltaSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
     const match = matches.get(parsed.data.matchId);
@@ -760,6 +791,66 @@ io.on("connection", (socket: Socket) => {
     for (const side of sides) sendSnapshot(match, side);
   });
 
+  /** Attach this socket as a spectator, having already passed the identity check. */
+  const attachSpectator = (match: LiveMatch): void => {
+    match.spectators.add(socket.id);
+    socket.emit("spectate.ready", {
+      matchId: match.id,
+      code: match.spectatorCode,
+      p1: match.players.p1,
+      p2: match.players.p2,
+      problem: { title: match.problem.title, rating: match.problem.rating },
+      delayMs: match.spectatorDelayMs,
+      state: match.state,
+    });
+    for (const side of ["p1", "p2"] as const) sendSnapshot(match, side);
+  };
+
+  const refuseSpectate = (match: LiveMatch): boolean => {
+    /* A player in their own live match may NOT watch it, by code or by id.
+       This is the obvious bypass — a competitor holds their own match's
+       spectator code by construction — and §7's 45s ranked delay does not
+       close it, since 45-second-old source is still an enormous edge and
+       unranked delay is zero. Refused by identity, at the gateway. */
+    if (
+      canSpectate({
+        userId,
+        p1UserId: match.players.p1.userId,
+        p2UserId: match.players.p2.userId,
+        matchOver: match.isOver,
+      })
+    ) {
+      return false;
+    }
+    socket.emit("error", {
+      code: "SELF_SPECTATE",
+      message: "you cannot spectate a match you are playing in",
+    });
+    return true;
+  };
+
+  socket.on("spectate.watch", (raw) => {
+    const parsed = SpectateWatchSchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      socket.emit("error", { code: "BAD_CODE", message: "malformed code" });
+      return;
+    }
+    const code = normaliseCode(parsed.data.code);
+    if (!code) {
+      socket.emit("error", { code: "BAD_CODE", message: "not a valid spectator code" });
+      return;
+    }
+    const match = [...matches.values()].find((m) => m.spectatorCode === code);
+    if (!match) {
+      // Deliberately the same answer for "never existed", "already finished"
+      // and "mistyped": a different message per case is a probing oracle.
+      socket.emit("error", { code: "NO_LIVE_MATCH", message: "no live match for that code" });
+      return;
+    }
+    if (refuseSpectate(match)) return;
+    attachSpectator(match);
+  });
+
   socket.on("spectate.join", (raw) => {
     const parsed = EditorResyncSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
@@ -768,28 +859,12 @@ io.on("connection", (socket: Socket) => {
       socket.emit("error", { code: "NO_MATCH", message: "unknown match" });
       return;
     }
-    /* A player in their own live match may NOT spectate it — that would be a
-       one-click bypass of the visibility rule, and §7's 45s ranked delay does
-       not close it. Refused by identity, at the gateway. */
-    if (
-      !canSpectate({
-        userId,
-        p1UserId: match.players.p1.userId,
-        p2UserId: match.players.p2.userId,
-        matchOver: match.isOver,
-      })
-    ) {
-      socket.emit("error", {
-        code: "SELF_SPECTATE",
-        message: "you cannot spectate a match you are playing in",
-      });
-      return;
-    }
-    match.spectators.add(socket.id);
-    for (const side of ["p1", "p2"] as const) sendSnapshot(match, side);
+    if (refuseSpectate(match)) return;
+    attachSpectator(match);
   });
 
   socket.on("pulse.report", (raw) => {
+    if (!playerOnly("pulse.report")) return;
     const parsed = PulseReportSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
     const match = matches.get(parsed.data.matchId);

@@ -863,7 +863,30 @@ Scope: TLS termination, environment separation (a real staging database, never a
 
 **Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
 
-**Phase 4 — Depth.** Bo3, Blitz, Debug Duel, **hack phase (§6.8)**, Ghost Races (race a stored replay — this makes the site feel populated at zero cost and solves the empty-queue problem), tournaments, sound library, cosmetics.
+## Phase 4 — DEFERRED IN FULL
+
+**Everything in this phase is deferred. It is not upcoming work, and no session should plan against it.** The design stays in this document because the design work is done and worth keeping; the *scheduling* is what has changed.
+
+Deferred: **Bo3 · Blitz · Debug Duel · Optimization Duel · Code Golf · Blind Mode · Mystery Mode · the hack phase (§6.8) · team modes · Battle Royale · tournaments · the full sound library · cosmetics · battle pass · guilds.**
+
+**The reasoning is depth before breadth.** Make ranked 1v1 excellent, then add modes one at a time. Every additional mode multiplies the surface that has to be polished — its own HUD states, its own cinematics, its own edge cases in the state machine, its own balance questions — and **eight half-finished modes are worth less than one that feels incredible.** §2 says the product exists because a match should feel like a match; that is a claim about quality, and breadth is the fastest way to stop being able to make it.
+
+This supersedes the earlier framing of §6.8 as "if scope ever has to be cut, cut elsewhere first". That sentence was about cutting the hack phase *relative to other Phase 4 modes*, and it still holds inside Phase 4 — the hack phase is the best of them. It was never an argument for shipping Phase 4 before ranked 1v1 is excellent.
+
+### The road to launch
+
+Only these, in order:
+
+1. **The shareable spectator link** — `/watch/<code>`.
+2. **2C-2** — the spectator stream: §7's tiered fanout, room broadcast, late-joiner snapshots.
+3. **Challenge links** (Phase 2D) — the launch feature, because it brings its own audience.
+4. **Deployment** (Phase 2E).
+
+Nothing else.
+
+### Ghost Races — flagged, not scheduled
+
+**The one deferred item with a real argument for promotion, and it is deliberately left undecided here.** Racing a stored replay makes the site feel populated when nobody is online, which is the *actual* risk for a competitive product at launch — not missing modes. It also reuses the replay log rather than adding a system. See the assessment in `PROGRESS.md`; it is not in the road to launch above until that decision is made explicitly.
 
 ---
 

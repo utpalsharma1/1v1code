@@ -14,6 +14,11 @@
        one-click bypass
      · sends a snapshot claiming to be the opponent's editor, to check the
        gateway attributes by identity rather than by payload
+     · uses its OWN MATCH'S SPECTATOR CODE against the /watch path, which is
+       the obvious bypass now that the code is printed on the player's screen —
+       a competitor holds it by construction
+     · mints an ANONYMOUS watch ticket and tries the same code from it, in case
+       identity is only checked on the signed-in path
 
    Then it asserts that a distinctive string typed by the victim appears in
    NOTHING the attacker received, from any of those paths.
@@ -55,6 +60,18 @@ async function connect(cookie: string): Promise<Socket> {
     method: "POST",
     headers: { Cookie: cookie },
   });
+  const { ticket } = (await response.json()) as { ticket: string };
+  const socket = io(GATEWAY, { transports: ["websocket"], auth: { ticket }, reconnection: false });
+  await new Promise<void>((resolve, reject) => {
+    socket.on("connect", () => resolve());
+    socket.on("connect_error", (e) => reject(new Error(e.message)));
+  });
+  return socket;
+}
+
+/** A viewer with no account, exactly as /watch/<code> creates one. */
+async function anonymousSocket(): Promise<Socket> {
+  const response = await fetch(`${WEB}/api/watch-ticket`, { method: "POST" });
   const { ticket } = (await response.json()) as { ticket: string };
   const socket = io(GATEWAY, { transports: ["websocket"], auth: { ticket }, reconnection: false });
   await new Promise<void>((resolve, reject) => {
@@ -150,6 +167,44 @@ async function main(): Promise<void> {
   attacker.emit("editor.resync", { matchId, side: victimSide });
   await new Promise((r) => setTimeout(r, 600));
 
+  /* The spectator code is on the attacker's own screen — they are playing in
+     the match — so `/watch/<code>` is the path a competitor would actually
+     reach for. It must be refused by identity exactly like spectate.join. */
+  const code = (vf as unknown as { spectatorCode?: string }).spectatorCode ?? "";
+  log(`attack 6: watch my own match by its spectator code (${code || "none sent"})`);
+  if (!code) failures.push("match.found carried no spectatorCode — cannot test the /watch bypass");
+  attacker.emit("spectate.watch", { code });
+  await new Promise((r) => setTimeout(r, 700));
+
+  log("attack 7: same code, from a fresh anonymous watch ticket");
+  const anon = await anonymousSocket();
+  const anonCaught: string[] = [];
+  anon.onAny((event: string, ...args: unknown[]) => anonCaught.push(`${event} ${JSON.stringify(args)}`));
+  anon.emit("spectate.watch", { code });
+  await new Promise((r) => setTimeout(r, 900));
+
+  /* An anonymous viewer SHOULD see the source — that is the product pitch, and
+     §7 says watching needs no account. What it must not be able to do is play.
+     So this asserts both halves: it got the code's stream, and every player
+     action it tried was refused. */
+  const anonSawSource = anonCaught.some((c) => c.includes(SECRET));
+  if (!anonSawSource) {
+    failures.push("an anonymous viewer could NOT see the match — §7 says watching needs no account");
+  }
+  for (const [event, payload] of [
+    ["queue.join", { mode: "RANKED" }],
+    ["code.submit", { matchId, language: "PYTHON3", source: "print(1)" }],
+    ["editor.delta", { matchId, seq: 1, changes: [{ offset: 0, length: 0, text: "x" }], origin: "type" }],
+  ] as const) {
+    anonCaught.length = 0;
+    anon.emit(event as never, payload as never);
+    await new Promise((r) => setTimeout(r, 250));
+    if (!anonCaught.some((c) => c.includes("SPECTATOR_ONLY"))) {
+      failures.push(`an anonymous socket was not refused ${event}`);
+    }
+  }
+  anon.close();
+
   /* ── The verdict ──────────────────────────────────────────────────── */
 
   const leaked = caught.filter((c) => c.payload.includes(SECRET));
@@ -159,9 +214,14 @@ async function main(): Promise<void> {
     );
   }
 
-  // The spectate attempt must have been refused, explicitly.
-  const refusal = caught.find((c) => c.event === "error" && c.payload.includes("SELF_SPECTATE"));
-  if (!refusal) failures.push("self-spectate was not refused with SELF_SPECTATE");
+  // Both self-spectate attempts must have been refused, explicitly. Two are
+  // expected: one via spectate.join, one via the /watch code path.
+  const refusals = caught.filter((c) => c.event === "error" && c.payload.includes("SELF_SPECTATE"));
+  if (refusals.length < 2) {
+    failures.push(
+      `expected SELF_SPECTATE on both spectate.join and spectate.watch, saw ${refusals.length}`,
+    );
+  }
 
   // And the attacker's forged snapshot must not have corrupted the victim.
   const forged = caught.some((c) => c.payload.includes("attacker owned this"));

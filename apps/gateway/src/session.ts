@@ -26,6 +26,25 @@ export interface Identity {
   ratingDeviation: number;
   volatility: number;
   isBot: boolean;
+  /** §7: spectating requires no account. An anonymous socket may watch and do
+   *  nothing else — no queue, no accept, no submit, no editor writes. The
+   *  gateway refuses those by this flag rather than by hoping the client
+   *  behaves, because a registration wall in front of a shared live match
+   *  converts our best growth path into a bounce. */
+  isAnonymous?: boolean;
+}
+
+/** A viewer with no account. Never persisted, never rated, never in a match. */
+export function anonymousIdentity(id: string): Identity {
+  return {
+    userId: `anon:${id}`,
+    handle: "spectator",
+    rating: 0,
+    ratingDeviation: 0,
+    volatility: 0,
+    isBot: false,
+    isAnonymous: true,
+  };
 }
 
 /** Minimal, allocation-light cookie header parse. */

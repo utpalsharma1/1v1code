@@ -61,3 +61,13 @@ export {
   pulseSeries,
   pulseStep,
 } from "./pulse.ts";
+
+/* §11 paste diagnostic. Reads the delta records the relay already logs and
+   reduces them to numbers. No enforcement — see the file header. */
+export {
+  LARGE_INSERTION_CHARS,
+  describeProfile,
+  pasteProfile,
+  type DeltaRecord,
+  type PasteProfile,
+} from "./paste-profile.ts";

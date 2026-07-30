@@ -1,6 +1,10 @@
 import {
   Deadline,
   Stopwatch,
+  describeProfile,
+  pasteProfile,
+  type DeltaRecord,
+  type PasteProfile,
   initialContext,
   isTerminal,
   monotonicMs,
@@ -64,6 +68,10 @@ type EmitTo = (side: Side, event: string, payload: unknown) => void;
 
 export class LiveMatch {
   readonly id: string;
+  /** §7: the shareable handle. `/watch/<code>` resolves by this, never by id. */
+  readonly spectatorCode: string;
+  /** §7: 45s on ranked to stop stream-sniping, 0 on challenge matches. */
+  readonly spectatorDelayMs: number;
   readonly players: LiveMatchPlayers;
   readonly problem: MatchProblem;
   readonly durationMs: number;
@@ -79,6 +87,10 @@ export class LiveMatch {
   readonly relay = new EditorRelay();
   /** Sockets watching this match who are not playing in it. */
   readonly spectators = new Set<string>();
+  /** §11 paste diagnostic: the same records that go to the log, kept for the
+   *  post-match profile. Bounded by the delta count, which §10 puts at ~1200
+   *  per side per match, so this is a few hundred KB at worst. */
+  private readonly deltaRecords: DeltaRecord[] = [];
 
   private clock: Stopwatch | null = null;
   private acceptDeadline: Deadline | null = null;
@@ -87,6 +99,8 @@ export class LiveMatch {
 
   constructor(opts: {
     id: string;
+    spectatorCode: string;
+    spectatorDelayMs?: number;
     players: LiveMatchPlayers;
     problem: MatchProblem;
     emit: Emit;
@@ -99,6 +113,8 @@ export class LiveMatch {
     durationMs?: number;
   }) {
     this.id = opts.id;
+    this.spectatorCode = opts.spectatorCode;
+    this.spectatorDelayMs = opts.spectatorDelayMs ?? 45_000;
     this.players = opts.players;
     this.problem = opts.problem;
     this.emit = opts.emit;
@@ -245,6 +261,7 @@ export class LiveMatch {
   foundPayload() {
     return {
       matchId: this.id,
+      spectatorCode: this.spectatorCode,
       p1: this.players.p1,
       p2: this.players.p2,
       problemRating: this.problem.rating,
@@ -256,6 +273,7 @@ export class LiveMatch {
   resyncFor(side: Side) {
     return {
       matchId: this.id,
+      spectatorCode: this.spectatorCode,
       state: this.ctx.state,
       you: side,
       p1: this.players.p1,
@@ -356,6 +374,12 @@ export class LiveMatch {
     removed: number;
   }): Promise<void> {
     await this.log.record("editor.delta", applied);
+    this.deltaRecords.push(applied as DeltaRecord);
+  }
+
+  /** §11: numbers only, computed once the match is done. */
+  pasteProfiles(): Record<string, PasteProfile> {
+    return pasteProfile(this.deltaRecords);
   }
 
   async recordSnapshot(side: Side, seq: number, text: string): Promise<void> {
@@ -446,6 +470,16 @@ export class LiveMatch {
     for (const side of ["p1", "p2"] as const) {
       const doc = this.relay.doc(side);
       if (doc.text.length > 0) await this.log.record("editor.snapshot", { side, seq: doc.seq, text: doc.text });
+    }
+
+    /* §11 paste diagnostic, written into the log with the ending so the
+       evidence base accumulates from day one. Collected, never judged. */
+    const profiles = this.pasteProfiles();
+    if (Object.keys(profiles).length > 0) {
+      await this.log.record("paste.profile", { profiles });
+      for (const [side, profile] of Object.entries(profiles)) {
+        console.log(`[match ${this.id}] paste ${describeProfile(side, profile)}`);
+      }
     }
 
     const outcome = this.ctx.outcome ?? { kind: "CANCELED" as const, reason: "NEVER_STARTED" as const };

@@ -29,7 +29,8 @@
     "stack": "bash scripts/up.sh up",
     "stack:fresh": "bash scripts/up.sh up --fresh",
     "stack:down": "bash scripts/up.sh down",
-    "stack:status": "bash scripts/up.sh status"
+    "stack:status": "bash scripts/up.sh status",
+    "pulse:calibrate": "node --experimental-strip-types packages/core/src/calibrate-pulse.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

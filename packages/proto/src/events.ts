@@ -97,6 +97,12 @@ export const EditorResyncSchema = z.object({
   side: SideSchema.optional(),
 });
 
+/** §7: `/watch/<code>` resolves by SPECTATOR CODE, never by match id.
+ *  The code is the shareable thing; the id is an internal handle. */
+export const SpectateWatchSchema = z.object({
+  code: z.string().min(4).max(32),
+});
+
 export interface ClientToServer {
   "queue.join": (payload: z.infer<typeof QueueJoinSchema>) => void;
   "queue.leave": (payload: z.infer<typeof QueueLeaveSchema>) => void;
@@ -107,6 +113,7 @@ export interface ClientToServer {
   "editor.snapshot": (payload: z.infer<typeof EditorSnapshotSchema>) => void;
   "editor.resync": (payload: z.infer<typeof EditorResyncSchema>) => void;
   "spectate.join": (payload: z.infer<typeof EditorResyncSchema>) => void;
+  "spectate.watch": (payload: z.infer<typeof SpectateWatchSchema>) => void;
 }
 
 /* ── server → client ──────────────────────────────────────────────────── */
@@ -122,10 +129,16 @@ export const QueueStatusSchema = z.object({
    *  what lets the client stop performing a search it cannot win, rather than
    *  spinning a radar sweep against an empty queue. */
   alone: z.boolean().default(false),
+  /** Widest the band will ever get (§6.1), so the UI can show progress. */
+  ceiling: z.number().int().positive().default(400),
+  /** ms until the next widening step, or null at the ceiling. */
+  nextStepMs: z.number().int().nonnegative().nullable().default(null),
 });
 
 export const MatchFoundSchema = z.object({
   matchId: z.string(),
+  /** §7: shown as a copyable chip so a player can share the match. */
+  spectatorCode: z.string().default(""),
   you: SideSchema,
   p1: PlayerCardSchema,
   p2: PlayerCardSchema,
@@ -208,6 +221,7 @@ export const MatchEndSchema = z.object({
 /** Sent on reconnect: everything needed to rebuild the screen from scratch. */
 export const MatchResyncSchema = z.object({
   matchId: z.string(),
+  spectatorCode: z.string().default(""),
   state: MatchStateSchema,
   you: SideSchema,
   p1: PlayerCardSchema,
@@ -305,6 +319,18 @@ export const EditorDesyncSchema = z.object({
   got: z.number().int().nonnegative(),
 });
 
+/** Sent when a watch code resolves, so the viewer knows what they are seeing. */
+export const SpectateReadySchema = z.object({
+  matchId: z.string(),
+  code: z.string(),
+  p1: PlayerCardSchema,
+  p2: PlayerCardSchema,
+  problem: z.object({ title: z.string(), rating: z.number().int() }).nullable(),
+  /** §7: ranked matches are delayed. Shown openly as a badge, never hidden. */
+  delayMs: z.number().int().nonnegative(),
+  state: MatchStateSchema,
+});
+
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export interface ServerToClient {
@@ -327,6 +353,7 @@ export interface ServerToClient {
   "editor.delta": (payload: z.infer<typeof EditorDeltaOutSchema>) => void;
   "editor.snapshot": (payload: z.infer<typeof EditorSnapshotOutSchema>) => void;
   "editor.desync": (payload: z.infer<typeof EditorDesyncSchema>) => void;
+  "spectate.ready": (payload: z.infer<typeof SpectateReadySchema>) => void;
   error: (payload: z.infer<typeof ErrorSchema>) => void;
 }
 
@@ -344,6 +371,7 @@ export const LOG_EVENT_TYPES = [
   "submission.verdict",
   "editor.delta",
   "editor.snapshot",
+  "paste.profile",
   "match.ended",
 ] as const;
 export type RatingDelta = z.infer<typeof RatingDeltaSchema>;

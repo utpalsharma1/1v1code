@@ -50,6 +50,8 @@ interface QueueStatus {
   /** Nobody else is in the pool. There is no bot fallback in 2B-4, so the
    *  queue card stops performing a search rather than sweeping over nobody. */
   alone: boolean;
+  ceiling: number;
+  nextStepMs: number | null;
 }
 
 export default function PlayPage() {
@@ -68,6 +70,7 @@ function Play() {
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [match, setMatch] = useState<{
     matchId: string;
+    spectatorCode: string;
     you: Side;
     p1: PlayerCard;
     p2: PlayerCard;
@@ -228,6 +231,7 @@ function Play() {
     socket.on("match.resync", (payload) => {
       setMatch({
         matchId: payload.matchId,
+        spectatorCode: payload.spectatorCode ?? "",
         you: payload.you,
         p1: payload.p1,
         p2: payload.p2,
@@ -474,6 +478,7 @@ function Play() {
     return (
       <MatchScreen
         matchId={match.matchId}
+        spectatorCode={match.spectatorCode}
         you={match.you}
         p1={asPlayer(match.p1)}
         p2={asPlayer(match.p2)}
@@ -557,6 +562,8 @@ function Play() {
               widening: queue.widening,
               inQueue: queue.inQueue,
               alone: queue.alone ?? false,
+              ceiling: queue.ceiling ?? 400,
+              nextStepMs: queue.nextStepMs ?? null,
             }}
           />
         </div>

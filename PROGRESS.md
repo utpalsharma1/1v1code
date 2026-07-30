@@ -2,188 +2,162 @@
 
 ## SESSION STOP — read this first
 
-**Phase 2C-1 is built and verified. The keystroke relay works end to end.** Working tree clean.
+**Phase 4 is deferred in §12. Three of the four items are built. 2C-2 is NOT started — see the split
+note at the end.** Working tree clean.
 
-**Cold start: `cd ~/1v1.code && pnpm stack`.** One command, detached, idempotent. Details below.
+**Cold start: `cd ~/1v1.code && pnpm stack`.**
 
-### The visibility rule, attacked rather than confirmed
+### Scope: Phase 4 deferred in full
 
-`pnpm probe:visibility` does not assert "the opponent received no deltas" — that passes trivially
-if the attacker never tried. It attacks:
+§12 now opens with **"Phase 4 — DEFERRED IN FULL"**, listing every mode and marking them as not
+upcoming work, with the depth-before-breadth reasoning stated: every additional mode multiplies the
+surface to polish, and eight half-finished modes are worth less than one that feels incredible. The
+designs stay; only the scheduling changed. §12 also now carries **the road to launch** — watch link,
+2C-2, challenge links, deployment, nothing else.
 
-- **`onAny`**, so it catches every event the socket can deliver rather than a list of names I
-  happened to think of
-- asks for the opponent's editor directly (`editor.resync` with their side)
-- asks greedily for **both** sides at once
-- tries to **spectate its own live match**, the one-click bypass
-- **forges a snapshot** claiming to be the opponent's editor, to check the gateway attributes by
-  identity rather than by payload
+One note I added rather than assumed: the old "if scope has to be cut, cut elsewhere first" line
+about the hack phase still holds *inside* Phase 4, but it was never an argument for shipping Phase 4
+before ranked 1v1 is excellent. That is now written down so it cannot be misread later.
 
-Then it asserts a secret string the victim typed appears in *nothing* it received.
+### Ghost Races — what it would take (NOT built)
 
-**Positive control performed.** `BREAK_VISIBILITY=1` removes the enforcement, and the probe fails
-with `THE OPPONENT'S SOURCE LEAKED via editor.delta, editor.snapshot` — 22 events across 8 names
-instead of 15 across 7. Restored, it passes. A browser test covers the same ground through the real
-UI: a spectator sees the typed marker, the opponent's window never contains it, and a competitor
-asking to spectate their own match gets `SELF_SPECTATE`.
+**The honest headline: less new code than it looks, but it would be the first thing that ever reads
+the replay log, and that log has never been read.** §10 says "replay playback must be a pure
+function of that log" and nothing has tested that claim. Ghost Races would either validate the
+format while changing it is still cheap, or discover it is wrong — that is the real risk and also
+the real value.
 
-Enforcement lives in `canSee` / `canSpectate` in `apps/gateway/src/relay.ts`, and **both fanout
-paths route through it**. There is no second path and there must never be one.
+What already exists: the JSONL log with `seq`/`offsetMs`/`wallMs`, `editor.delta` and
+`editor.snapshot` records, the relay's authoritative-text applier, the whole match screen and HUD,
+the judge, the problem set, Glicko.
 
-### The pulse line needed retuning, and here are the numbers
+What is missing, in rough order of effort:
 
-**You were right to ask. The smoothing transfers; the scale did not.**
+1. **A replay reader.** Parse the log, order by `seq`, schedule by `offsetMs`. Does not exist —
+   nothing reads the log today. This is the bulk of the work and it is **shared investment** with
+   the Phase 3 replay viewer, so it is not wasted either way.
+2. **A ghost driver.** Play a recorded side's deltas and submissions back at their recorded offsets.
+   Mechanically simple once the reader exists.
+3. **A solo-match lifecycle.** The state machine assumes two live players — accept window, presence,
+   grace, forfeit. A race against a recording needs a variant where p2 is a recording that cannot
+   disconnect. **This is the risky part**, because it touches the machine every real match depends on.
+4. **`Replay` index rows.** The table exists and **nothing writes to it** — the log file is written
+   but never indexed, so there is no way to query "a replay of problem X near rating Y". One insert
+   at match end plus a query.
+5. **A rating decision.** Racing a recording is farmable by definition — the ghost cannot adapt. It
+   should almost certainly be unrated, which needs saying explicitly rather than discovered.
+6. **Labelling.** A `GHOST` chip, by the same argument as the bot's: a player must know before the
+   match, not after.
 
-Rising 0.6 / falling 0.18 was chosen to preserve burst onsets, and against real typing that is not
-merely preserved — it is the mechanism. Real keystrokes at 125ms are a sparse impulse train, mostly
-zeros and ones, so the fast attack is what turns the first keystroke of a burst into a visible onset
-and the slow release is what makes a pause read as a decline. Measured: **onset to 0.3 in ~250ms,
-release from 1.0 to 0.05 in ~2000ms** — an 8:1 asymmetry, intact.
+**One free win worth knowing:** the ghost's pulse line needs no new data. Keystroke counts per 125ms
+are derivable from the `offsetMs` and `inserted` fields already in the delta records — the same
+derivation `pnpm pulse:calibrate` now does.
 
-**What was wrong was `PULSE_FULL_SCALE`, which I first set to 2.5 by reasoning about headroom
-alone.** Simulating an eight-minute match at 8fps against Poisson keystrokes:
+Estimate: **one focused phase, comparable to 2C-1**, with item 3 the part that could go wrong.
 
-| full scale | 5 c/s typist | 9 c/s bursts | slow 3 c/s |
-| --- | --- | --- | --- |
-| 2.5 | mean 0.28 | mean 0.44 | 46% below 0.05 |
-| **1.5** | **mean 0.36, p50 0.40** | **mean 0.55, p95 0.95** | 54% below 0.05 |
-| 1.0 | mean 0.45 | p95 0.999 — pinned | 54% below 0.05 |
+### 1. The shareable spectator link — built
 
-At 2.5 the trace hugs the floor for a normal typist, which inverts §6.4: a flatline is supposed to
-mean *stuck*, not *typing normally*. At 1.0 a merely ordinary typist already pins the graph so a
-burst has nowhere to go. **1.5 is where ordinary typing sits mid-range, a real burst reaches p95 ≈
-0.95 with headroom, and pauses still hit the floor.**
+- **`/watch/<code>`** resolves the 10-character Crockford code to a live match and renders the
+  side-by-side view. `/dev/spectate` stays as the debug tool that takes a match id.
+- **No account required (§7).** `POST /api/watch-ticket` mints an anonymous, single-use ticket. The
+  gateway gives it an identity that can watch and nothing else — `queue.join`, `match.accept`,
+  `code.submit`, `editor.delta`, `editor.snapshot` and `pulse.report` all return `SPECTATOR_ONLY`,
+  enforced server-side because the client is not ours.
+- **A copy-link chip in the editor toolbar**, not a bolted-on Share button: a monospace code in a
+  clipped-corner border that copies the full URL and flashes once. §4's language is monospace and
+  terminals; a labelled share button would be the generic-dashboard move §2 exists to avoid. It
+  falls back to a prompt if the clipboard is refused rather than dying silently.
+- **The gateway resolves the code, not the client.** One enforcement point. `spectate.watch {code}`
+  joins by code; `canSpectate` and the self-spectate ban apply identically.
+- **Stale, wrong and finished codes all give the same answer** — *"No live match"* — deliberately.
+  A distinct message per case is a probing oracle. A match that ends while you are watching keeps
+  the stream and adds a `finished` chip.
+- **The ranked delay is shown openly** as a `45s delay` chip. Hiding it would make a deliberately
+  delayed stream look broken.
 
-**One honest consequence: real typing is 2–3× jaggier tick to tick than the simulator was** — mean
-absolute step ~0.076 against ~0.026. The simulator was smooth because it held a persistent target
-for dozens of ticks and a human does not. **I did not filter that out**, because the texture is the
-actual signal and smoothing it would be tuning the instrument to match the model instead of the
-world. It is the thing to judge by eye; the constants are in `packages/core/src/pulse.ts` with the
-table above.
+**probe:visibility now attacks the watch path**, and this is the important part: a competitor holds
+their own match's code by construction, because it is printed on their screen. Two new attacks —
+the code from the player's own signed-in socket, and the same code from a fresh anonymous ticket.
+Both refused. It also asserts the *positive* half: an anonymous viewer **can** see the source, per
+§7, and **cannot** do anything else. 7 attacks, all pass; positive control via `BREAK_VISIBILITY=1`
+still fails as it should.
 
-### What 2C-1 ships
+### 2. Queue widening progress — built
 
-- **Monaco deltas over the gateway**, batched at 50ms, per-side monotonic `seq`, absolute character
-  offsets so applying is a pure string splice on the far side.
-- **The gateway holds authoritative text per side**, which is what makes snapshots, late joiners and
-  gap recovery free rather than a replay of the stream.
-- **Gap recovery never guesses.** A delta that is not `lastSeq + 1` is refused, and the gateway asks
-  that client for a snapshot (`editor.desync`). Applying to the wrong base yields plausible code
-  nobody wrote, which is worse than a visible hole because nothing downstream can tell.
-- **Snapshots every 30s**, plus a final one per side before the log closes, so a replay always ends
-  holding both complete documents.
-- **Deltas in the JSONL log** under the existing `seq` / `offsetMs` / `wallMs` contract, carrying the
-  paste-detection shape. Verified on disk — a real batch reads
-  `ins=183 removed=0 origin=paste` against `ins=26 origin=type`, so a paste is unmistakable to
-  anything reading the log. No enforcement built, as specified.
-- **The pulse line on real keystrokes**, reported at 125ms (~8fps) rather than the old 500ms, which
-  smeared a burst's leading edge across four samples.
-- **`/dev/spectate`** — both editors side by side, gap-counting, with the match id now exposed on the
-  match screen so you can paste it in.
+"Widening search…" was true and carried no information, and the cost was real: you cancelled three
+times. The card now shows the live band (`Scanning 1170–1230`), a transform-only progress bar of
+current half-width against the ±400 ceiling, and **`Next widen in 7s · up to ±400`**. At the ceiling
+it says so instead. The ceiling and next-step time come from the gateway — the client never
+re-derives §6.1's schedule.
+
+### 3. PULSE_FULL_SCALE re-derived from real deltas — and the tool found its own bug
+
+**`pnpm pulse:calibrate`** reads every replay log and reports what each candidate scale does to real
+typing. The deliverable is the repeatable derivation, not another hand-analysis.
+
+**It caught a bug in my own filter on first run.** I selected sides with ≥200 characters inserted,
+which selects exactly the wrong thing: probes and browser tests paste a whole solution in **one**
+delta, so they cleared the bar instantly and the tool reported **182 chars/sec** while the single
+genuine human session (47 characters, typed) was excluded. The corpus was 100% synthetic and the
+headline number was meaningless. Human typing is identifiable by **shape, not size** — many batches
+at ~1 character each — so the filter is now `≥40 batches` and `≤4 chars/batch`. It excludes 12
+machine-generated sides and keeps 1 human one.
+
+**What the real data says:**
+
+- **Measured typing rate while active: 5.7 chars/sec.** My simulation assumed ~5. **The core
+  assumption is confirmed by real data.**
+- Duty cycle 17%, against the 65% I modelled — but that session inserted 47 characters total, so it
+  was exploration, not a solve. **That figure is not yet meaningful.**
+- At scale 1.0, 7% of ticks pin above 0.95; at 1.5, 1%. **1.0 is confirmed too hot**, as reasoned.
+
+**Verdict: 1.5 stands.** It is no longer purely simulated — the rate underneath it is measured — but
+the corpus is **n=1** and the tool says so out loud and refuses to justify moving the constant below
+10 sides. The number has stopped being a guess and become a measurement that improves.
+
+### 4. Paste diagnostic — built
+
+`packages/core/src/paste-profile.ts` reduces the delta records the relay already logs into per-side
+numbers: total inserted, pasted characters, **largest single insertion**, count of insertions ≥100
+chars, paste events, batches. Written into the log as `paste.profile` at match end and printed to
+the gateway log.
+
+**Counted per CHANGE, not per batch** — a multi-cursor edit emits several changes in one batch, and
+summing them would report one large insertion where there were several small ones, which is the
+exact false positive this must avoid. The file header states plainly what these numbers cannot do:
+they cannot see where text came from, `origin: "paste"` fires for moving code within one document,
+and a player pasting their own boilerplate has cheated at nothing. **Collected, never judged** —
+that is the point, so we learn what normal looks like before deciding what abnormal looks like.
+
+### 2C-2 IS NOT STARTED — and it needs its own session
+
+I stopped rather than starting it, for a reason that is about verification rather than time.
+
+**You asked for a measured saturation number, not an estimate.** That is a load-testing exercise with
+its own apparatus: thousands of synthetic sockets, a way to measure event-loop lag and per-socket
+memory under them, and enough runs to distinguish a real knee from noise on a WSL2 dev box whose
+file-descriptor and memory limits are not production's. Done properly it is most of a session by
+itself, and done badly it produces a number that sounds measured and is not — which is worse than
+the estimate it replaces, because nobody re-checks a number that has a figure next to it.
+
+The late-joiner verification you asked for has the same shape: joining mid-match repeatedly and
+diffing the spectator's view against the gateway's authoritative text is a real harness, not an
+assertion.
+
+**What 2C-2 is:** §7's tiered fanout (200ms spectator batching, 500ms on ranked), room broadcast
+rather than per-socket sends, the late-joiner snapshot path, and the self-spectate ban across a real
+audience. The visibility enforcement it needs already exists and is already attacked; what is new is
+load.
 
 ### Verified this session
 
-`probe:visibility` with a failing positive control · **e2e 14/14 in a real browser**, including
-typing reaching a spectator and never the opponent · core 56/56 (5 new pulse property tests) ·
-`probe:match` · `probe:requeue` · matchmaking 10/10 · sign-in 14/14 · smoke 5/5 · typecheck 7/7 ·
-production build clean.
+`probe:visibility` 7/7 attacks with the positive control still failing correctly · **e2e 14/14** ·
+core 56/56 · smoke 5/5 · typecheck 7/7 · production build clean, including `/watch/[code]` and
+`/api/watch-ticket`.
 
-**Not verified: how the real pulse line looks.** That is the one thing this phase changed that only
-an eye can settle — see the jaggedness note above.
-
-### Two bugs found by running it
-
-- **`@1v1/core`'s index reaches `node:crypto`** via `codes.ts`, so importing the pulse helpers from
-  the package root broke every page with an unbundleable-scheme error — `/register` returned 500.
-  There is now a `@1v1/core/pulse` subpath export and the browser imports the leaf.
-- **`/dev/spectate` tore down its own socket on Watch.** The effect depended on `joined`, so setting
-  it rebuilt the socket and discarded the `spectate.join` that had just been sent. The page
-  connected, joined nothing, and showed two empty editors. It uses a ref now.
-
-### To see it
-
-1. **Window A — `/play`.** Sign in, **PLAY**.
-2. **Window B — `/dev/sparring`.** **Join queue**. Both **Accept**.
-3. **Window C — `/dev/spectate`.** Copy the match id — the gateway logs
-   `[gateway] match <id>: …`, or read `data-match-id` off the match screen — paste it, **Watch**.
-4. Type in A. It appears in C's left editor within ~50ms, and never anywhere in B.
-
-### Bringing the stack back up — ONE COMMAND
-
-```bash
-cd ~/1v1.code && pnpm stack
-```
-
-That is the whole thing. It starts Postgres and Redis, waits for both to report
-healthy, starts the judge worker, the gateway and the dev server **detached**, waits for each to
-report ready, and then prints a status table plus every route's HTTP code. It is **idempotent** —
-run it twice and anything already up is left alone.
-
-| command | what it does |
-| --- | --- |
-| `pnpm stack` | start whatever is not running, then report |
-| `pnpm stack:fresh` | same, plus `db:push` and `db:seed` first |
-| `pnpm stack:down` | stop judge / gateway / web (leaves Postgres and Redis up) |
-| `pnpm stack:status` | what is running and whether the routes answer |
-
-Logs go to `var/log/{judge,gateway,web}.log`. PIDs to `var/run/*.pid`.
-
-**It is `pnpm stack`, not `pnpm up`.** `up` is a built-in pnpm alias for `pnpm update`, so that name
-silently ran a dependency install instead of the script — found by trying it.
-
-**Two things the script gets right that the old seven-command runbook did not:**
-
-- **Detached properly.** Each service starts under `setsid … < /dev/null &`, so it is its own
-  session leader and closing the terminal cannot take it down. Verified: each pid equals its own
-  sid, and all three differ from the shell's.
-- **Self-safe stopping.** No `pkill -f` anywhere — that pattern has matched its own shell
-  repeatedly here, because the pattern appears in the killing command's own argv. `stack:down`
-  works from pid files, confirms the pid's `/proc/*/cmdline` still looks like the service before
-  signalling, and kills the **process group** (`kill -- -$pid`). The group matters: `pnpm --filter
-  @1v1/web dev` is a wrapper around `next dev` around `next-server`, so signalling the wrapper
-  alone orphans a live server still holding port 3000. Verified: after `stack:down`, ports 3000 and
-  4000 are both released.
-
-**The judge worker is the one whose absence looks like a product bug.** With it down every
-submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — so
-a run of voids means check `var/log/judge.log` before suspecting the relay. `pnpm stack` waits for
-its "Judge worker up" line specifically, so a silent failure to start is reported rather than
-discovered later.
-
-**There is no bot.** A single window sits in an empty queue and says so. Use `/dev/sparring`.
-
-### To see the relay and the pulse line
-
-1. **Window A — `/play`.** Sign in, **PLAY**.
-2. **Window B — `/dev/sparring`.** **Join queue**. Then **Accept** in both.
-3. **Window C — `/dev/spectate`.** Paste the match id and press **Watch**. The id is on the match
-   screen as `data-match-id`, and the gateway logs `[gateway] match <id>: …`.
-4. Type in A. It appears in C's left editor within ~50ms, and never anywhere in B.
-5. For the pulse line: type in bursts with real pauses between them, and watch B's side of A's HUD.
-   The trace should sit mid-range while you type, spike on a burst, and fall to the floor within
-   ~2s of stopping. It is 2–3× jaggier than `/dev/hud`'s simulator and that is deliberate — see the
-   pulse note above.
-
-| to see | do |
-| --- | --- |
-| cells resolving one at a time | A: write anything, **Submit** |
-| the §6.7b hold | B: **Time limit** first, then A submits correct |
-| receipt order deciding | B: **Correct (reference)**, then A within ~1s |
-| victory / defeat + delta | A or B: **Correct (reference)** |
-| clutch edge | B: **Correct (reference)** on a 5+ test problem |
-| drop + 45s grace | B: **Drop socket**, then **Reconnect** |
-
-Suites: `pnpm test:smoke` · `pnpm test:e2e` · `pnpm probe:match` · `pnpm probe:requeue` ·
-`pnpm probe:visibility` · `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` ·
-`pnpm db:solutions` · `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
-`node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`
-
-### Next: 2C-2 — the spectator stream
-
-§7's tiered fanout (200ms, 500ms on ranked), room broadcast rather than per-socket sends, the
-late-joiner snapshot path, and the self-spectate ban across a real audience. Everything in it is a
-load optimisation unobservable at one viewer, which is why it was split.
-
+**Not verified: `/watch/<code>` and the copy chip by eye.** The route builds, the probe proves the
+enforcement, and the browser tests cover the relay — but nobody has clicked the chip and pasted the
+link into another browser.
 
 ## What class of check would have caught this — and what is still eye-only
 

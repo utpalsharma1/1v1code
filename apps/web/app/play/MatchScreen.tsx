@@ -51,6 +51,8 @@ export interface MatchPlayer {
 
 export interface MatchScreenProps {
   matchId: string;
+  /** §7: the shareable spectator code. Empty until the gateway sends it. */
+  spectatorCode: string;
   you: Side;
   p1: MatchPlayer;
   p2: MatchPlayer;
@@ -117,6 +119,7 @@ int main() {
 export function MatchScreen(props: MatchScreenProps) {
   const {
     matchId,
+    spectatorCode,
     you,
     p1,
     p2,
@@ -289,7 +292,9 @@ export function MatchScreen(props: MatchScreenProps) {
                   </button>
                 ))}
               </div>
-              <Button
+              <div className="flex items-center gap-2">
+                {spectatorCode && <WatchLink code={spectatorCode} />}
+                <Button
                 variant="solid"
                 tone="player"
                 side={you}
@@ -299,7 +304,8 @@ export function MatchScreen(props: MatchScreenProps) {
                 {/* §6.8b: the in-flight lock IS the cost of a wrong answer, so
                     it has to be legible rather than a silently dead button. */}
                 {submitting ? "Judging…" : "Submit"}
-              </Button>
+                </Button>
+              </div>
             </div>
 
             {/* §5: the editor is a workspace and stays calm. It dims and blurs
@@ -389,6 +395,67 @@ export function MatchScreen(props: MatchScreenProps) {
         )}
       </AnimatePresence>
     </ShakeStage>
+  );
+}
+
+/* ── §7 the shareable watch link ───────────────────────────────────────── */
+
+/**
+ * A monospace code chip that copies its own full URL.
+ *
+ * Designed into the toolbar rather than bolted on: the product's language is
+ * terminals and monospace type (§4), so a 10-character code in `--ff-code` with
+ * a clipped corner reads as native. The alternative — a labelled "Share" button
+ * — would be the generic dashboard move §2 exists to avoid.
+ *
+ * It shows the code, not the URL, because the code is the thing worth reading at
+ * a glance and the URL is long. Clicking copies the whole link.
+ */
+function WatchLink({ code }: { code: string }) {
+  const m = useMotion();
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    const url = `${window.location.origin}/watch/${code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Clipboard can be refused (permissions, insecure context). A selectable
+      // fallback beats a silently dead button.
+      window.prompt("Copy this link", url);
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      title={`Copy the spectator link for ${code}`}
+      className={cn(
+        "focus-ring clip-lean-sm border-line group flex items-center gap-2 border px-2.5 py-1",
+        "transition-colors duration-[160ms] hover:border-[var(--player)]",
+      )}
+    >
+      <span aria-hidden className="text-fg-faint group-hover:text-player text-12 leading-none">
+        ⧉
+      </span>
+      <span className="tabular text-fg-dim group-hover:text-fg text-12 leading-none tracking-wide">
+        {copied ? "copied" : code}
+      </span>
+      {/* One-shot confirmation, not a resting glow (§4). */}
+      {copied && (
+        <motion.span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[var(--flash-soft)]"
+          initial={{ opacity: 0.5 }}
+          animate={{ opacity: 0 }}
+          transition={m.tween(m.dur.decay)}
+        />
+      )}
+    </button>
   );
 }
 

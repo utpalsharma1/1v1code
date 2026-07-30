@@ -13,6 +13,23 @@ import { RankBadge } from "../RankBadge";
  * navigating. The radar sweep is the one piece of ambient looping motion in the
  * entire product — waiting needs a heartbeat.
  */
+/** A thin bar showing how wide the search is against how wide it can get.
+ *  Transform-only (§5): scaleX on a fixed element, never an animated width. */
+function BandProgress({ half, ceiling }: { half: number; ceiling: number }) {
+  const m = useMotion();
+  const fraction = Math.max(0, Math.min(1, half / ceiling));
+  return (
+    <span className="border-line relative mt-2 block h-1 w-full overflow-hidden border">
+      <motion.span
+        className="bg-player absolute inset-0 origin-left"
+        initial={false}
+        animate={{ scaleX: fraction }}
+        transition={m.reduced ? m.t({}) : m.spring.bar}
+      />
+    </span>
+  );
+}
+
 /** How long "you are the only one here" must hold before we say so. Short
  *  enough not to waste the player's time, long enough that a normal pairing
  *  race never trips it. */
@@ -30,7 +47,17 @@ export function QueueCard({
   division?: Division;
   onCancel: () => void;
   /** Real queue state from the gateway. Omitted on /dev/hud, which simulates. */
-  live?: { elapsedMs: number; band: [number, number]; widening: boolean; inQueue: number; alone: boolean };
+  live?: {
+    elapsedMs: number;
+    band: [number, number];
+    widening: boolean;
+    inQueue: number;
+    alone: boolean;
+    /** Ceiling half-width, so the card can show progress toward it. */
+    ceiling?: number;
+    /** ms until the band widens again. Null at the ceiling. */
+    nextStepMs?: number | null;
+  };
 }) {
   const m = useMotion();
   const [simulated, setSimulated] = useState(0);
@@ -61,6 +88,10 @@ export function QueueCard({
   const widening = live ? live.widening : widenings > 0;
   const justWidened = elapsed > 0 && elapsed % 10 < 2;
   const inQueue = live ? live.inQueue : 47 + widenings * 13;
+  const half = live ? Math.round((live.band[1] - live.band[0]) / 2) : simBand;
+  const ceiling = live?.ceiling ?? 400;
+  // Falls back to the 10s cadence §6.1 specifies when the server omits it.
+  const nextStepS = (live?.nextStepMs ?? (10 - (elapsed % 10)) * 1000) / 1000;
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
@@ -110,19 +141,32 @@ export function QueueCard({
               someone joins — there is just no one to find right now.
             </p>
           ) : (
+            /* PROGRESS, NOT REASSURANCE.
+
+               "Widening search…" was true and carried no information, and the
+               cost of that was real: the band widens over more than two
+               minutes, so a player who cannot see it moving concludes nothing
+               is happening and cancels. Show the band, the next step, and how
+               far there is left to go. */
             <>
-              <p className="text-fg-faint mt-2 text-12">
-                Scanning {lo}–{hi} · {inQueue} {inQueue === 1 ? "player" : "players"} in queue
+              <p className="tabular text-fg-dim mt-2 text-12">
+                Scanning <span className="text-fg">{lo}–{hi}</span>
+                <span className="text-fg-faint">
+                  {" · "}
+                  {inQueue} {inQueue === 1 ? "player" : "players"} in queue
+                </span>
               </p>
-              <p
-                className={cn(
-                  "font-display mt-1 text-12 font-bold tracking-[var(--track-hud)] uppercase",
-                  // §6.1: stop saying "widening" at the ceiling. Claiming to
-                  // widen when you are not is a lie the player can feel.
-                  justWidened && widening ? "text-info" : "text-transparent",
+              <BandProgress half={half} ceiling={ceiling} />
+              <p className="tabular text-fg-faint mt-1.5 text-12">
+                {widening ? (
+                  <>
+                    Next widen in{" "}
+                    <span className="text-info">{Math.max(0, Math.ceil(nextStepS))}s</span>
+                    {" · "}up to ±{ceiling}
+                  </>
+                ) : (
+                  <>Widest search reached (±{ceiling}) · still looking</>
                 )}
-              >
-                Widening search…
               </p>
             </>
           )}
