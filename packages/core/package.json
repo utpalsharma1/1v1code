@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./time": "./src/time.ts",
     "./glicko": "./src/glicko.ts",
-    "./pulse": "./src/pulse.ts"
+    "./pulse": "./src/pulse.ts",
+    "./codes": "./src/code-format.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

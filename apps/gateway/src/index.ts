@@ -85,6 +85,18 @@ function emitToSide(match: LiveMatch, side: Side, event: string, payload: unknow
   toUser(match.players[side].userId, event, payload);
 }
 
+/** Everyone watching but not playing. Never carries source text by itself —
+ *  the relay's own fanout is the only path for that, and it checks §10. */
+function toSpectators(match: LiveMatch, event: string, payload: unknown): void {
+  for (const socketId of match.spectators) io.to(socketId).emit(event, payload);
+}
+
+/** Match-wide news: both players AND everyone watching. */
+function toEveryone(match: LiveMatch, event: string, payload: unknown): void {
+  toMatch(match, event, payload);
+  toSpectators(match, event, payload);
+}
+
 /* ── Relay fanout (§10) ───────────────────────────────────────────────────
    The ONLY two places source text leaves a match, and both consult the
    visibility rule per recipient.
@@ -169,23 +181,15 @@ async function runSubmission(
             side,
             total,
           });
-          emitToSide(match, other, "opponent.status", {
-            matchId: match.id,
-            side,
-            status: "submitted",
-            passed: 0,
-            total,
-          });
+          const submitted = { matchId: match.id, side, status: "submitted", passed: 0, total };
+          emitToSide(match, other, "opponent.status", submitted);
+          toSpectators(match, "opponent.status", submitted);
         },
         onStatus: (status) => {
           // §6.5 compile pulse: the opponent feels it, without seeing anything.
-          emitToSide(match, other, "opponent.status", {
-            matchId: match.id,
-            side,
-            status,
-            passed: 0,
-            total: 0,
-          });
+          const pulse = { matchId: match.id, side, status, passed: 0, total: 0 };
+          emitToSide(match, other, "opponent.status", pulse);
+          toSpectators(match, "opponent.status", pulse);
         },
         onTest: (ordinal, verdict, passed, total) => {
           emitToSide(match, side, "test.result", {
@@ -197,20 +201,25 @@ async function runSubmission(
             passed,
             total,
           });
-          // The opponent's bar fills from counts alone (§6.4).
-          emitToSide(match, other, "opponent.status", {
-            matchId: match.id,
-            side,
-            status: "running",
-            passed,
-            total,
-          });
+          // The opponent's bar fills from counts alone (§6.4). A spectator
+          // needs the same counts for BOTH sides to render two test bars.
+          const running = { matchId: match.id, side, status: "running", passed, total };
+          emitToSide(match, other, "opponent.status", running);
+          toSpectators(match, "opponent.status", running);
         },
         onVerdict: (result) => {
           accepted = result.verdict === "ACCEPTED";
           // §6.9: our failure, not theirs. Voids the match, costs nobody rating.
           internalError = result.verdict === "INTERNAL_ERROR";
-          toMatch(match, "submission.verdict", {
+          /* `message` is COMPILER OUTPUT, and compiler diagnostics quote the
+             offending source lines. Sending it to the opposing player would
+             leak fragments of their code through the one channel §10 forgot to
+             check — a real hole, found by asking what a spectator receives.
+
+             So: the submitter gets everything, spectators get everything
+             (they may already see the whole document), and the OPPONENT gets
+             the same verdict with the diagnostic stripped. */
+          const full = {
             matchId: match.id,
             submissionId,
             side,
@@ -219,7 +228,10 @@ async function runSubmission(
             total: result.total,
             failedAt: result.failedAt,
             message: result.message,
-          });
+          };
+          emitToSide(match, side, "submission.verdict", full);
+          toSpectators(match, "submission.verdict", full);
+          emitToSide(match, other, "submission.verdict", { ...full, message: null });
         },
       },
     );
@@ -344,7 +356,7 @@ async function settleMatch(
     }
   }
 
-  toMatch(match, "match.end", {
+  toEveryone(match, "match.end", {
     matchId: match.id,
     outcome,
     ratings,
@@ -381,7 +393,10 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
     problem,
     emitTo: (side, event, payload) => emitToSide(match, side, event, payload),
     emit: (event, payload) => {
-      toMatch(match, event, payload);
+      // Match-wide news reaches spectators as well as players. None of these
+      // carry source text — that only moves through the relay's own fanout,
+      // which checks §10 per recipient.
+      toEveryone(match, event, payload);
       // The bot starts when the match actually goes live, not when it is
       // created — the countdown has to finish first or its clock is wrong.
     },
@@ -842,9 +857,46 @@ io.on("connection", (socket: Socket) => {
     }
     const match = [...matches.values()].find((m) => m.spectatorCode === code);
     if (!match) {
-      // Deliberately the same answer for "never existed", "already finished"
-      // and "mistyped": a different message per case is a probing oracle.
-      socket.emit("error", { code: "NO_LIVE_MATCH", message: "no live match for that code" });
+      /* THE ORACLE ARGUMENT DOES NOT APPLY TO FINISHED MATCHES.
+
+         Refusing access while confirming validity is what leaks — an attacker
+         learns which codes are real without being able to use them. But a
+         finished match's code GRANTS access (to the replay, once Phase 3 ships
+         it), so confirming validity tells the holder nothing they are not
+         already entitled to.
+
+         And the cost of conflating the two is real: a friend who clicks a
+         shared link three minutes late sees something indistinguishable from a
+         broken link, which is the single most likely way this feature gets
+         used. So a valid code for an ended match says so; unknown and
+         malformed codes keep the identical response. */
+      void (async () => {
+        const finished = await prisma.match
+          .findUnique({
+            where: { spectatorCode: code },
+            select: {
+              finishedAt: true,
+              outcomeKind: true,
+              p1: { select: { handle: true } },
+              p2: { select: { handle: true } },
+              problem: { select: { title: true } },
+            },
+          })
+          .catch(() => null);
+
+        if (finished) {
+          socket.emit("spectate.ended", {
+            code,
+            p1: finished.p1.handle,
+            p2: finished.p2.handle,
+            problem: finished.problem.title,
+            outcomeKind: finished.outcomeKind ?? "UNKNOWN",
+            finishedAt: finished.finishedAt?.toISOString() ?? null,
+          });
+        } else {
+          socket.emit("error", { code: "NO_LIVE_MATCH", message: "no live match for that code" });
+        }
+      })();
       return;
     }
     if (refuseSpectate(match)) return;

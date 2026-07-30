@@ -34,6 +34,7 @@ export {
   OpponentStatusSchema,
   PulseReportSchema,
   RatingDeltaSchema,
+  SpectateEndedSchema,
   SpectateReadySchema,
   SpectateWatchSchema,
   SubmissionAckSchema,

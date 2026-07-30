@@ -847,7 +847,9 @@ On **Glicko-2**: it is defined over rating *periods*, not per-game updates. Appl
 **It splits, and the seam is load versus behaviour.**
 
 - **2C-1 — the relay.** Deltas, batching, per-side `seq`, 30s snapshots, gap recovery by snapshot request, delta records in the JSONL log, the gateway-enforced visibility rule, the paste-detection data shape, and the §6.4 pulse line finally driven by real keystrokes instead of the simulator. Plus a dev route showing both editors side by side, which is what makes any of it verifiable by eye. Deliverable: two windows in a live match, each reading the other's real pulse, with a delta log on disk that replay could consume.
-- **2C-2 — the spectator stream.** §7's tiered fanout (200ms, 500ms on ranked), room broadcast rather than per-socket sends, the late-joiner snapshot path, and the self-spectate ban enforced across a real audience.
+- **2C-2 — SPLIT AGAIN, and the load half is DEFERRED.**
+  - **The late-joiner path shipped with the watch link**, because a shared link is opened mid-match *by definition* — that is the normal case for the feature, not an edge case. A viewer arriving at minute four lands from a snapshot, never from replayed deltas. It is a correctness property, it needs no harness, and it is verified by joining repeatedly and diffing the spectator's document against the gateway's authoritative text.
+  - **The load work is deferred until a real match has real viewers.** Tiered fanout (200ms, 500ms on ranked), saturation measurement and capacity instrumentation all target thousands of viewers; the estimate says 500–1000 works with no batching at all, and we will have single digits. A saturation number measured on a WSL2 dev box is not production's number, and a figure that *sounds* measured but is not is worse than an honest estimate, because nobody re-checks a number that has a figure next to it. Revisit with real traffic.
 
 The seam is real rather than convenient: everything in 2C-2 is a *load* optimisation whose behaviour is unobservable at one viewer, and §7 ties it to the spectator feature proper. Shipping it against a dev route with a single consumer would be tuning a ceiling nobody is near, and the batching interacts with the delay badge and the late-joiner path that Phase 3 owns. Splitting keeps 2C-1's deliverable honest — a real pulse line and a complete log — instead of half a fanout tier nothing exercises.
 
@@ -877,10 +879,11 @@ This supersedes the earlier framing of §6.8 as "if scope ever has to be cut, cu
 
 Only these, in order:
 
-1. **The shareable spectator link** — `/watch/<code>`.
-2. **2C-2** — the spectator stream: §7's tiered fanout, room broadcast, late-joiner snapshots.
-3. **Challenge links** (Phase 2D) — the launch feature, because it brings its own audience.
-4. **Deployment** (Phase 2E).
+1. **The shareable spectator link** — `/watch/<code>`, including the late-joiner path.
+2. **Challenge links** (Phase 2D) — the launch feature, because it brings its own audience.
+3. **Deployment** (Phase 2E).
+
+**Deferred out of the road to launch:** 2C-2's tiered fanout and capacity work — see the note in §12 above. Ghost Races stays deferred but is the first thing to reconsider after launch: it would be the first consumer the replay log has ever had, and would therefore test §10's "replay is a pure function of the log" claim while the format is still cheap to change.
 
 Nothing else.
 

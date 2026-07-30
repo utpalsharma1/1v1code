@@ -331,6 +331,17 @@ export const SpectateReadySchema = z.object({
   state: MatchStateSchema,
 });
 
+/** A valid code whose match has already finished. Distinct from an unknown
+ *  code on purpose — see the gateway's note on the oracle argument. */
+export const SpectateEndedSchema = z.object({
+  code: z.string(),
+  p1: z.string(),
+  p2: z.string(),
+  problem: z.string(),
+  outcomeKind: z.string(),
+  finishedAt: z.string().nullable(),
+});
+
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export interface ServerToClient {
@@ -354,6 +365,7 @@ export interface ServerToClient {
   "editor.snapshot": (payload: z.infer<typeof EditorSnapshotOutSchema>) => void;
   "editor.desync": (payload: z.infer<typeof EditorDesyncSchema>) => void;
   "spectate.ready": (payload: z.infer<typeof SpectateReadySchema>) => void;
+  "spectate.ended": (payload: z.infer<typeof SpectateEndedSchema>) => void;
   error: (payload: z.infer<typeof ErrorSchema>) => void;
 }
 

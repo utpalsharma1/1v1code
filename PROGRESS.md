@@ -2,162 +2,130 @@
 
 ## SESSION STOP — read this first
 
-**Phase 4 is deferred in §12. Three of the four items are built. 2C-2 is NOT started — see the split
-note at the end.** Working tree clean.
+**§12 re-scoped. All four /watch fixes shipped, plus the late-joiner path. CHALLENGE LINKS NOT
+STARTED — reasoning at the end.** Working tree clean.
 
 **Cold start: `cd ~/1v1.code && pnpm stack`.**
 
-### Scope: Phase 4 deferred in full
+### Scope changes in §12
 
-§12 now opens with **"Phase 4 — DEFERRED IN FULL"**, listing every mode and marking them as not
-upcoming work, with the depth-before-breadth reasoning stated: every additional mode multiplies the
-surface to polish, and eight half-finished modes are worth less than one that feels incredible. The
-designs stay; only the scheduling changed. §12 also now carries **the road to launch** — watch link,
-2C-2, challenge links, deployment, nothing else.
+- **2C-2's load half is deferred**, with the reasoning recorded: tiered fanout and saturation
+  measurement target thousands of viewers, the estimate says 500–1000 works with no batching, and a
+  number measured on WSL2 is not production's number.
+- **The late-joiner path moved out of 2C-2 and shipped here**, because a shared link is opened
+  mid-match by definition — the normal case, not an edge case.
+- The road to launch is now **watch link → challenge links → deployment**. Ghost Races is noted as
+  the first thing to reconsider after launch, on the argument that it would be the replay log's
+  first consumer and would test §10's purity claim while the format is still cheap to change.
 
-One note I added rather than assumed: the old "if scope has to be cut, cut elsewhere first" line
-about the hack phase still holds *inside* Phase 4, but it was never an argument for shipping Phase 4
-before ranked 1v1 is excellent. That is now written down so it cannot be misread later.
+### The late joiner — verified, six times
 
-### Ghost Races — what it would take (NOT built)
+`pnpm probe:latejoin` runs a live match with a player typing continuously at ~50ms per delta, joins
+as a fresh anonymous spectator **six times at different points including mid-burst**, and after each
+join diffs the spectator's reconstructed document against the gateway's authoritative text.
 
-**The honest headline: less new code than it looks, but it would be the first thing that ever reads
-the replay log, and that log has never been read.** §10 says "replay playback must be a pure
-function of that log" and nothing has tested that claim. Ghost Races would either validate the
-format while changing it is still cheap, or discover it is wrong — that is the real risk and also
-the real value.
+```
+join 1: exact match at  51 chars      join 4: exact match at 132 chars
+join 2: exact match at  81 chars      join 5: exact match at 156 chars
+join 3: exact match at 113 chars      join 6: exact match at 176 chars
+```
 
-What already exists: the JSONL log with `seq`/`offsetMs`/`wallMs`, `editor.delta` and
-`editor.snapshot` records, the relay's authoritative-text applier, the whole match screen and HUD,
-the judge, the problem set, Glicko.
+Character-exact every time. A single-character difference would be a failure, because a spectator
+seeing plausible code that was never written is the silent corruption §10 exists to forbid.
 
-What is missing, in rough order of effort:
+### A real leak, found by asking what a spectator receives
 
-1. **A replay reader.** Parse the log, order by `seq`, schedule by `offsetMs`. Does not exist —
-   nothing reads the log today. This is the bulk of the work and it is **shared investment** with
-   the Phase 3 replay viewer, so it is not wasted either way.
-2. **A ghost driver.** Play a recorded side's deltas and submissions back at their recorded offsets.
-   Mechanically simple once the reader exists.
-3. **A solo-match lifecycle.** The state machine assumes two live players — accept window, presence,
-   grace, forfeit. A race against a recording needs a variant where p2 is a recording that cannot
-   disconnect. **This is the risky part**, because it touches the machine every real match depends on.
-4. **`Replay` index rows.** The table exists and **nothing writes to it** — the log file is written
-   but never indexed, so there is no way to query "a replay of problem X near rating Y". One insert
-   at match end plus a query.
-5. **A rating decision.** Racing a recording is farmable by definition — the ghost cannot adapt. It
-   should almost certainly be unrated, which needs saying explicitly rather than discovered.
-6. **Labelling.** A `GHOST` chip, by the same argument as the bot's: a player must know before the
-   match, not after.
+Chasing "why does the spectator see nothing when the match ends" turned up something worse than the
+missing screen: **`submission.verdict` carries `message`, which on `COMPILE_ERROR` is compiler
+output — and compiler diagnostics quote the offending source lines.** It was going to both players
+via `toMatch`, so a player could read fragments of the opponent's code by waiting for them to make a
+compile error.
 
-**One free win worth knowing:** the ghost's pulse line needs no new data. Keystroke counts per 125ms
-are derivable from the `offsetMs` and `inserted` fields already in the delta records — the same
-derivation `pnpm pulse:calibrate` now does.
+Fixed: the submitter gets the full verdict, spectators get it (they may already see the whole
+document), and **the opponent gets the same verdict with the diagnostic stripped**. §10's visibility
+rule had a hole in a channel nobody had thought to check.
 
-Estimate: **one focused phase, comparable to 2C-1**, with item 3 the part that could go wrong.
+### 1. Code entry point — `/watch`
 
-### 1. The shareable spectator link — built
+`/watch/<code>` is unchanged and still one click. `/watch` with no code is a typed entry point, which
+is what the ten-character length was always for — two spoken groups of five.
 
-- **`/watch/<code>`** resolves the 10-character Crockford code to a live match and renders the
-  side-by-side view. `/dev/spectate` stays as the debug tool that takes a match id.
-- **No account required (§7).** `POST /api/watch-ticket` mints an anonymous, single-use ticket. The
-  gateway gives it an identity that can watch and nothing else — `queue.join`, `match.accept`,
-  `code.submit`, `editor.delta`, `editor.snapshot` and `pulse.report` all return `SPECTATOR_ONLY`,
-  enforced server-side because the client is not ours.
-- **A copy-link chip in the editor toolbar**, not a bolted-on Share button: a monospace code in a
-  clipped-corner border that copies the full URL and flashes once. §4's language is monospace and
-  terminals; a labelled share button would be the generic-dashboard move §2 exists to avoid. It
-  falls back to a prompt if the clipboard is refused rather than dying silently.
-- **The gateway resolves the code, not the client.** One enforcement point. `spectate.watch {code}`
-  joins by code; `canSpectate` and the self-spectate ban apply identically.
-- **Stale, wrong and finished codes all give the same answer** — *"No live match"* — deliberately.
-  A distinct message per case is a probing oracle. A match that ends while you are watching keeps
-  the stream and adds a `finished` chip.
-- **The ranked delay is shown openly** as a `45s delay` chip. Hiding it would make a deliberately
-  delayed stream look broken.
+The input uses `normaliseCode`, which already implemented Crockford's decoding rules: uppercase,
+strip spaces and hyphens, **O → 0, I and L → 1, U → V**. Those characters are excluded from the
+alphabet precisely because people confuse them, so mapping them to what a speaker meant is the point
+of choosing Crockford. The field **echoes the accepted form back** (`Reading as 0HENN-5BPHX`) so the
+forgiveness is visible rather than silent. An invalid code keeps the identical response.
 
-**probe:visibility now attacks the watch path**, and this is the important part: a competitor holds
-their own match's code by construction, because it is printed on their screen. Two new attacks —
-the code from the player's own signed-in socket, and the same code from a fresh anonymous ticket.
-Both refused. It also asserts the *positive* half: an anonymous viewer **can** see the source, per
-§7, and **cannot** do anything else. 7 attacks, all pass; positive control via `BREAK_VISIBILITY=1`
-still fails as it should.
+**One structural fix this needed:** `codes.ts` imports `node:crypto` for `generateCode`, which
+webpack cannot bundle — importing it from a page 500s the route, the same failure that bit the pulse
+helpers. The pure formatting and decoding rules now live in `code-format.ts`, exported as
+`@1v1/core/codes`, and `codes.ts` re-exports them.
 
-### 2. Queue widening progress — built
+### 2. The spectator ending — and the root cause was not a missing screen
 
-"Widening search…" was true and carried no information, and the cost was real: you cancelled three
-times. The card now shows the live band (`Scanning 1170–1230`), a transform-only progress bar of
-current half-width against the ±400 ceiling, and **`Next widen in 7s · up to ±400`**. At the ceiling
-it says so instead. The ceiling and next-step time come from the gateway — the client never
-re-derives §6.1's schedule.
+`match.end` **never reached spectators at all**. `toMatch` sends to p1 and p2 only, so the stream
+simply stopped. There is now `toSpectators` and `toEveryone`, and match-wide news — the ending, the
+judging hold, both sides' test counts — reaches everyone watching.
 
-### 3. PULSE_FULL_SCALE re-derived from real deltas — and the tool found its own bug
+The ending is a §6.7 beat rather than a status line: the winner's plate saturates and keeps its
+player border while the loser's desaturates to greyscale, both nameplates resolve, and it states who
+won and **how** — solved, forfeit, opponent never accepted, draw, canceled, void — with final test
+counts per side and elapsed time. **No rating delta**, because a spectator's §6.7 is the outcome,
+not the consequence.
 
-**`pnpm pulse:calibrate`** reads every replay log and reports what each candidate scale does to real
-typing. The deliverable is the repeatable derivation, not another hand-analysis.
+Every ending has its own sentence. **`VOID` says what happened** — *"a verdict was lost on our side…
+our infrastructure failed, not either player"* — rather than looking like a crash, which is the
+entire reason it is a separate outcome from `CANCELED`.
 
-**It caught a bug in my own filter on first run.** I selected sides with ≥200 characters inserted,
-which selects exactly the wrong thing: probes and browser tests paste a whole solution in **one**
-delta, so they cleared the bar instantly and the tool reported **182 chars/sec** while the single
-genuine human session (47 characters, typed) was excluded. The corpus was 100% synthetic and the
-headline number was meaningless. Human typing is identifiable by **shape, not size** — many batches
-at ~1 character each — so the filter is now `≥40 batches` and `≤4 chars/batch`. It excludes 12
-machine-generated sides and keeps 1 human one.
+Then: **Watch another** → `/watch`, **Stop watching** → home. The dead end is closed.
 
-**What the real data says:**
+### 3. The judging hold, for a spectator
 
-- **Measured typing rate while active: 5.7 chars/sec.** My simulation assumed ~5. **The core
-  assumption is confirmed by real data.**
-- Duty cycle 17%, against the 65% I modelled — but that session inserted 47 characters total, so it
-  was exploration, not a solve. **That figure is not yet meaningful.**
-- At scale 1.0, 7% of ticks pin above 0.95; at 1.5, 1%. **1.0 is confirmed too hot**, as reasoned.
+`match.judging` now reaches spectators, and the watch page renders **AWAITING VERDICT** with who is
+being judged — one name, or "both submissions are being judged". A spectator watching two people
+wait on verdicts is the tensest thing in the product and it no longer looks frozen.
 
-**Verdict: 1.5 stands.** It is no longer purely simulated — the rate underneath it is measured — but
-the corpus is **n=1** and the tool says so out loud and refuses to justify moving the constant below
-10 sides. The number has stopped being a guess and become a measurement that improves.
+### 4. The ended-match case — your reasoning was right
 
-### 4. Paste diagnostic — built
-
-`packages/core/src/paste-profile.ts` reduces the delta records the relay already logs into per-side
-numbers: total inserted, pasted characters, **largest single insertion**, count of insertions ≥100
-chars, paste events, batches. Written into the log as `paste.profile` at match end and printed to
-the gateway log.
-
-**Counted per CHANGE, not per batch** — a multi-cursor edit emits several changes in one batch, and
-summing them would report one large insertion where there were several small ones, which is the
-exact false positive this must avoid. The file header states plainly what these numbers cannot do:
-they cannot see where text came from, `origin: "paste"` fires for moving code within one document,
-and a player pasting their own boilerplate has cheated at nothing. **Collected, never judged** —
-that is the point, so we learn what normal looks like before deciding what abnormal looks like.
-
-### 2C-2 IS NOT STARTED — and it needs its own session
-
-I stopped rather than starting it, for a reason that is about verification rather than time.
-
-**You asked for a measured saturation number, not an estimate.** That is a load-testing exercise with
-its own apparatus: thousands of synthetic sockets, a way to measure event-loop lag and per-socket
-memory under them, and enough runs to distinguish a real knee from noise on a WSL2 dev box whose
-file-descriptor and memory limits are not production's. Done properly it is most of a session by
-itself, and done badly it produces a number that sounds measured and is not — which is worse than
-the estimate it replaces, because nobody re-checks a number that has a figure next to it.
-
-The late-joiner verification you asked for has the same shape: joining mid-match repeatedly and
-diffing the spectator's view against the gateway's authoritative text is a real harness, not an
-assertion.
-
-**What 2C-2 is:** §7's tiered fanout (200ms spectator batching, 500ms on ranked), room broadcast
-rather than per-socket sends, the late-joiner snapshot path, and the self-spectate ban across a real
-audience. The visibility enforcement it needs already exists and is already attacked; what is new is
-load.
+The oracle argument only holds when we **refuse access but confirm validity**. A finished match's
+code grants access to the replay, so confirming it exists leaks nothing. A valid code for an ended
+match now says so — who played, on what, how it ended, and that replay lands in Phase 3 — while
+unknown and malformed codes keep the identical response. A friend clicking a link three minutes late
+gets a real answer instead of something indistinguishable from a broken link.
 
 ### Verified this session
 
-`probe:visibility` 7/7 attacks with the positive control still failing correctly · **e2e 14/14** ·
-core 56/56 · smoke 5/5 · typecheck 7/7 · production build clean, including `/watch/[code]` and
-`/api/watch-ticket`.
+`probe:latejoin` 6/6 character-exact · `probe:visibility` 7/7 with the positive control ·
+`probe:match` · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · production build clean
+including `/watch` and `/watch/[code]`.
 
-**Not verified: `/watch/<code>` and the copy chip by eye.** The route builds, the probe proves the
-enforcement, and the browser tests cover the relay — but nobody has clicked the chip and pasted the
-link into another browser.
+**Not verified by eye:** the spectator ending screen, the hold, and the code entry page. The probes
+prove the events arrive and the documents are exact; nobody has watched a match end from `/watch`.
+
+### CHALLENGE LINKS — NOT STARTED, and why
+
+This is the last feature before deployment and it deserves a session rather than a tail end.
+
+It is not one feature but four, and three of them touch things that are currently load-bearing:
+
+1. **Guest accounts.** A `User` row with `isGuest`, no credentials, a socket identity that can play
+   but not queue or create links, unrated on both sides, a 7-day expiry, and a claim flow that
+   adopts the same row. That is a new *class* of identity, and every rating and lifecycle path has
+   to be checked against it.
+2. **A second match-creation path.** You named the real risk exactly: the state machine assumes
+   matchmaking created the match. Verifying that a challenge-created match walks the identical
+   lifecycle — accept window, countdown, reconnection, the §6.7b hold, abandonment, settlement —
+   is most of the work, and it is verification I would want to do with a probe rather than by eye,
+   because "it looked the same" is how two behaviours diverge quietly.
+3. **Difficulty without a rating band.** Worth deciding rather than defaulting: my recommendation is
+   the host picks a band explicitly (the §7 spec already has `ratingMin`/`ratingMax` on `Challenge`),
+   and where a guest is involved that band is the *only* input — mean−120 has nothing to work from
+   when one side has no rating. For two registered players the existing mean−120 still applies.
+4. Expiry, the stale-link screen, one-click rematch, `UNLISTED` with zero spectator delay.
+
+The `Challenge` model already exists in the schema with `code`, `hostId`, mode, visibility, the
+rating band, `allowGuest`, `expiresAt`, `consumedAt` and `consumedById` — so the data design is
+done and unused, exactly as `spectatorCode` was before this session.
 
 ## What class of check would have caught this — and what is still eye-only
 

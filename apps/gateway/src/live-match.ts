@@ -454,6 +454,9 @@ export class LiveMatch {
   /** Which sides still owe a verdict — drives the §6.7b hold screen. */
   private emitJudging(): void {
     const outstanding = [...this.ctx.outstanding.values()].map((s) => s.side);
+    /* `emit` is match-wide and reaches spectators too. §6.7b's hold is the
+       tensest moment in the product and a spectator watching two people wait
+       on verdicts should read that, not look frozen. */
     this.emit("match.judging", { matchId: this.id, outstanding: [...new Set(outstanding)] });
   }
 
