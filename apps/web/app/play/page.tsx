@@ -31,7 +31,18 @@ import { PULSE_WINDOW, pulseStep } from "@1v1/core/pulse";
 
 const GATEWAY = process.env["NEXT_PUBLIC_GATEWAY_URL"] ?? "http://localhost:4000";
 
-type Phase = "idle" | "queued" | "found" | "countdown" | "live" | "ended";
+/* `challenge` is its own phase, not a flavour of `queued`.
+
+   Arriving from a challenge link used to land in `idle` — the lobby, with a PLAY
+   button — until `challenge.waiting` came back from the gateway. So the one path
+   that cannot afford friction opened on a button that meant something else: PLAY
+   is the matchmaking queue, and there is nothing to queue for when you are
+   already paired with a named person. A stranger clicking a Discord link decides
+   in about four seconds and that press was in the way of all four of them.
+
+   Making it a phase rather than a flag means the lobby is unreachable on this
+   path by construction, so PLAY cannot be pressed and cannot mean two things. */
+type Phase = "idle" | "challenge" | "queued" | "found" | "countdown" | "live" | "ended";
 
 interface PlayerCard {
   userId: string;
@@ -64,15 +75,18 @@ export default function PlayPage() {
 
 function Play() {
   const socketRef = useRef<Socket | null>(null);
+  /* Read the code BEFORE the first paint decides what to render, so a challenge
+     arrival never flashes the lobby. */
+  const initialChallenge =
+    typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("challenge");
+
   /* §7 Phase 2D. `?challenge=<code>` means we arrived from /c/<code> having
      already redeemed it — emit challenge.join once connected. The gateway pairs
      whoever is waiting on that code through the SAME createMatch matchmaking
      uses, which is what probe:lifecycle asserts. */
-  const [challengeCode] = useState(() =>
-    typeof window === "undefined"
-      ? null
-      : new URLSearchParams(window.location.search).get("challenge"),
-  );
+  const [challengeCode, setChallengeCode] = useState<string | null>(initialChallenge);
   const [challengeWait, setChallengeWait] = useState<{ host: string; youAreHost: boolean } | null>(
     null,
   );
@@ -80,7 +94,7 @@ function Play() {
   const [linkError, setLinkError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Phase>(initialChallenge ? "challenge" : "idle");
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [match, setMatch] = useState<{
     matchId: string;
@@ -188,7 +202,7 @@ function Play() {
 
     socket.on("challenge.waiting", (payload: { host: string; youAreHost: boolean }) => {
       setChallengeWait(payload);
-      setPhase("queued");
+      setPhase("challenge");
       note(payload.youAreHost ? "waiting for your opponent" : `waiting for ${payload.host}`);
     });
     socket.on("connect_error", (error) => {
@@ -208,7 +222,9 @@ function Play() {
 
     socket.on("queue.status", (payload: QueueStatus) => {
       setQueue(payload);
-      setPhase("queued");
+      // A challenge waiter is not in the matchmaking queue and must never be
+      // shown the queue card, whatever else arrives.
+      setPhase((prev) => (prev === "challenge" ? prev : "queued"));
     });
     socket.on("queue.left", () => {
       setPhase("idle");
@@ -458,12 +474,12 @@ function Play() {
      yet. Re-ask every couple of seconds until it pairs — the same shape as the
      queue's own attempt loop, and it stops the moment a match is found. */
   useEffect(() => {
-    if (!challengeCode || !connected || phase !== "queued" || !challengeWait) return;
+    if (!challengeCode || !connected || phase !== "challenge") return;
     const id = setInterval(() => {
       socketRef.current?.emit("challenge.join", { code: challengeCode });
     }, 2000);
     return () => clearInterval(id);
-  }, [challengeCode, connected, phase, challengeWait]);
+  }, [challengeCode, connected, phase]);
 
   // Ticks the accept window down for display. Stops the moment the window
   // closes, so nothing loops without live state behind it (§5).
@@ -654,6 +670,15 @@ function Play() {
                           code: body.code,
                           band: [body.ratingMin ?? 800, body.ratingMax ?? 2000],
                         });
+                        /* Register the host on their own challenge immediately.
+                           Otherwise minting a link left them in the lobby, and
+                           when their friend arrived nothing paired until the
+                           host happened to press something — on a screen whose
+                           only button was PLAY, which would have put them into
+                           open matchmaking instead. */
+                        setChallengeCode(body.code);
+                        setPhase("challenge");
+                        socketRef.current?.emit("challenge.join", { code: body.code });
                       })();
                     }}
                   >
@@ -671,13 +696,49 @@ function Play() {
         </div>
       )}
 
-      {phase === "queued" && challengeWait && (
-        <Card title="Challenge accepted" tone="elevated">
+      {phase === "challenge" && (
+        <Card
+          title={
+            challengeWait?.youAreHost === false && challengeWait.host
+              ? `${challengeWait.host} challenged you`
+              : "Challenge ready"
+          }
+          tone="elevated"
+        >
+          {/* Accept is the ONLY action on this screen. §6.2's accept step stays,
+              because it is what stops a match starting against an empty chair —
+              but nothing precedes it. */}
           <p className="text-fg-dim text-13 leading-relaxed">
-            {challengeWait.youAreHost
-              ? "Your opponent has the link open. The match starts as soon as they join."
-              : `Waiting for ${challengeWait.host} to open the match.`}
+            {challengeWait?.youAreHost
+              ? "Your link is live. The moment someone opens it, the accept screen appears here — you do not need to do anything else."
+              : challengeWait
+                ? `Waiting for ${challengeWait.host} to open the match. It will start as soon as they are here.`
+                : "Connecting to the challenge…"}
           </p>
+          {challengeCode && (
+            <div className="mt-4">
+              {challengeWait?.youAreHost ? (
+                <ChallengeLink code={challengeCode} />
+              ) : (
+                <p className="tabular text-fg-faint text-12">challenge {challengeCode}</p>
+              )}
+            </div>
+          )}
+          <p className="text-fg-faint mt-3 text-12 leading-relaxed">
+            This match is unrated — nobody&apos;s rating moves.
+          </p>
+          <div className="mt-5">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setChallengeCode(null);
+                setChallengeWait(null);
+                setPhase("idle");
+              }}
+            >
+              Leave
+            </Button>
+          </div>
         </Card>
       )}
 

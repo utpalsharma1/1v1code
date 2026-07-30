@@ -395,6 +395,8 @@ async function joinChallenge(session: Session, code: string): Promise<void> {
     });
     return;
   }
+  challengeIntent.add(me);
+
   if (!challenge.consumedById) {
     toUser(me, "challenge.waiting", { code, host: challenge.host.handle, youAreHost: isHost });
     return;
@@ -421,6 +423,8 @@ async function joinChallenge(session: Session, code: string): Promise<void> {
 
        §7: no spectator delay on a challenge match. §8: the band REPLACES
        mean − 120 rather than adjusting it. */
+    challengeIntent.delete(challenge.hostId);
+    challengeIntent.delete(challenge.consumedById);
     await createMatch(hostSession.identity, takerSession.identity, {
       band: { min: challenge.ratingMin, max: challenge.ratingMax },
       spectatorDelayMs: 0,
@@ -432,6 +436,10 @@ async function joinChallenge(session: Session, code: string): Promise<void> {
 
 /** In-flight guard only. Not membership — that comes from the row. */
 const challengeStarting = new Set<string>();
+
+/** Who is currently waiting on a challenge, so `queue.join` can refuse them.
+ *  Cleared when the match starts or when they explicitly leave. */
+const challengeIntent = new Set<string>();
 
 /* ── Settlement ───────────────────────────────────────────────────────── */
 
@@ -828,6 +836,19 @@ io.on("connection", (socket: Socket) => {
 
   socket.on("queue.join", (raw) => {
     if (!playerOnly("queue.join")) return;
+    /* Holding a challenge must not also join OPEN matchmaking.
+       Client-side the affordance is gone — a challenge arrival never reaches the
+       lobby — but the affordance is not the control. A player waiting on a named
+       opponent who also lands in the general pool can be paired with a stranger
+       while their friend is still opening the link, and then the challenge can
+       never start. Refused here so it cannot happen however the event arrives. */
+    if (challengeIntent.has(userId)) {
+      socket.emit("error", {
+        code: "IN_CHALLENGE",
+        message: "you are waiting on a challenge — leave it first to use matchmaking",
+      });
+      return;
+    }
     const parsed = QueueJoinSchema.safeParse(raw ?? {});
     if (!parsed.success) {
       socket.emit("error", { code: "BAD_PAYLOAD", message: "queue.join" });
@@ -838,6 +859,7 @@ io.on("connection", (socket: Socket) => {
 
   socket.on("queue.leave", () => {
     if (!playerOnly("queue.leave")) return;
+    challengeIntent.delete(userId);
     void leaveQueue(session);
   });
 

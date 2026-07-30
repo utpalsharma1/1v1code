@@ -2,17 +2,74 @@
 
 ## SESSION STOP — read this first
 
-**CHALLENGE LINKS WORK. You can generate a link, open it in a browser with no account, and play.**
-`db:verify` still fails by design — the problem-format retrofit is next. Cold start: `pnpm stack`.
+**The Play press is gone from the challenge path. Opening a link goes straight to accept.**
+`db:verify` still fails by design. Cold start: `pnpm stack`.
 
-### Try it
+### The extra step, and why it was there
 
-1. `/play`, signed in → **Create a challenge link** → copy the chip.
-2. Paste into a **different browser or a private window** (no account) → **Play as guest**.
-3. Both windows land on `/play?challenge=<code>`. Accept in both. The queue pop shows
-   **`unrated · no rating change`** before the countdown.
-4. The match is the ordinary match screen, with a working spectator chip — a guest match is still
-   shareable at `/watch/<code>`, with **no** 45-second delay.
+`challenge` is now **its own phase**, not a flavour of `queued`. Arriving from a link used to land in
+`idle` — the lobby, with a PLAY button — until `challenge.waiting` came back from the gateway. So the
+one path that cannot afford friction opened on a button that meant something else.
+
+Making it a phase rather than a flag means **the lobby is unreachable on that path by
+construction**: PLAY is not rendered, so it cannot be pressed and cannot mean two things. `queue.status`
+can no longer drag a challenge waiter into the queue view either — it refuses to overwrite the
+`challenge` phase.
+
+**The §6.2 accept step stays.** It is what stops a match starting against an empty chair. What is gone
+is everything before it.
+
+### The Play-while-holding-a-challenge bug — real, and fixed at both levels
+
+**Yes, it was possible**, and it was worse than a copy problem: a player waiting on a named opponent
+who also joined the open pool could be paired with a stranger while their friend was still opening
+the link, and then **the challenge could never start** — the row is consumed, both parties are
+committed, and one of them is in a different match.
+
+Fixed twice, deliberately:
+
+- **The affordance is gone** — a challenge arrival never reaches the lobby.
+- **The gateway refuses it anyway.** `queue.join` is rejected with `IN_CHALLENGE` while the session
+  holds a challenge intent. The affordance is not the control: removing a button stops the honest path
+  and nothing else.
+
+The intent is cleared when the match starts and when the player explicitly leaves.
+
+### What the host sees, and what changes when someone opens the link
+
+The host is **registered on their own challenge the moment they mint it** — `challenge.join` fires
+straight after the POST returns, so they are waiting on that specific challenge rather than sitting in
+the lobby. Before, minting left them in `idle`, and when their friend arrived nothing paired until the
+host pressed something, on a screen whose only button was PLAY.
+
+While waiting they see the copyable link and *"Your link is live. The moment someone opens it, the
+accept screen appears here — you do not need to do anything else."* — plus that the match is unrated,
+and a **Leave** button, which is the only other action.
+
+The moment the guest opens the link and redeems it, the gateway sees both sessions connected and
+creates the match, so **both sides go from waiting to the §6.2 accept screen with no further input**.
+
+### The tests now assert the absence
+
+`e2e/challenge.spec.ts` asserts `getByRole("button", { name: /^play$/i })` has **count 0** on both
+sides, and that the host's waiting copy appears without any press. If either side needed PLAY again,
+these fail — which is the only way a removed step stays removed.
+
+### Verified this session
+
+**e2e 17/17** · `probe:lifecycle` PASS under both pairings · core 56/56 · smoke 5/5 · typecheck 7/7 ·
+build clean · `db:verify` fails by design on the 20 unformatted problems.
+
+### Still not done, and stated rather than implied
+
+- **The guest funnel** — the claim prompt on the result screen. `claimGuest` exists and keeps the same
+  row; nothing calls it, so a guest cannot yet convert.
+- **One-click rematch** — the pairing exists, the button does not.
+- **Two problems retrofitted and rendered**, then the remaining 18.
+
+I stopped after the challenge-path fix rather than starting the funnel, because the funnel and the
+problem rendering are both screen work that wants its own pass — and you asked to be able to click a
+link before anything else lands. That now works with no press before accept.
 
 ### The deliverable, verified two ways
 

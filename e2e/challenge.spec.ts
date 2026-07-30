@@ -50,16 +50,21 @@ test("a link, a browser with no account, and a match that runs like any other", 
   // The offer must be explicit that no account is needed.
   await expect(guest.getByText(/don't need an account|do not need an account/i)).toBeVisible();
 
+  /* NO PLAY PRESS on either side. The host was registered on their own
+     challenge the moment they minted it, and the guest goes straight from the
+     link to the accept screen. If either needed PLAY first, these assertions
+     fail — which is the point, because PLAY is the matchmaking queue and there
+     is nothing to queue for when you are already paired with a named person. */
+  await expect(host.getByText(/your link is live/i)).toBeVisible({ timeout: 20_000 });
+  await expect(host.getByRole("button", { name: /^play$/i })).toHaveCount(0);
+
   await guest.getByRole("button", { name: /play as guest/i }).click();
   await guest.waitForURL(/\/play\?challenge=/, { timeout: 20_000 });
-  await expect(guest.getByText(/^connected$/i)).toBeVisible({ timeout: 20_000 });
+  // The lobby must never appear on this path, not even for a frame.
+  await expect(guest.getByRole("button", { name: /^play$/i })).toHaveCount(0);
 
-  // Host joins the same challenge from their own window.
-  await host.goto(`/play?challenge=${code}`);
-  await expect(host.getByText(/^connected$/i)).toBeVisible({ timeout: 20_000 });
-
-  /* Both accept, through the ordinary §6.2 cinematic — the challenge is a way
-     IN, not a second match UI. */
+  /* Straight to the §6.2 accept step, with no intermediate press. That step
+     stays: it is what stops a match starting against an empty chair. */
   const hostAccept = host.getByRole("button", { name: /^accept$/i });
   await expect(hostAccept).toBeVisible({ timeout: 60_000 });
 
