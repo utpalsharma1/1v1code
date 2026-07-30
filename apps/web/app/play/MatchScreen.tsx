@@ -433,6 +433,10 @@ function WatchLink({ code }: { code: string }) {
     <button
       type="button"
       onClick={() => void copy()}
+      // aria-label, not just title: the visible text is the code, so without
+      // this the accessible name is the code and the control's PURPOSE is
+      // invisible to a screen reader (and to anything matching by role+name).
+      aria-label={`Copy the spectator link for ${code}`}
       title={`Copy the spectator link for ${code}`}
       className={cn(
         "focus-ring clip-lean-sm border-line group flex items-center gap-2 border px-2.5 py-1",
@@ -600,5 +604,47 @@ function NonResult({
         </div>
       </div>
     </motion.div>
+  );
+}
+
+/* ── §7 challenge link, host side ──────────────────────────────────────── */
+
+/**
+ * The generated challenge URL, copyable in one click.
+ *
+ * Same idiom as the spectator chip: a monospace code in a clipped border, in
+ * §4's language rather than a generic Share button. It shows the code because
+ * that is the readable part, and copies the whole URL because that is the
+ * useful part.
+ */
+export function ChallengeLink({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    const url = `${window.location.origin}/c/${code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      window.prompt("Copy this link", url);
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className={cn(
+        "focus-ring clip-lean border-line group flex w-full items-center justify-between gap-3",
+        "border bg-elevated px-4 py-3 transition-colors duration-[160ms] hover:border-[var(--player)]",
+      )}
+    >
+      <span className="tabular text-fg text-16 tracking-[0.14em]">{code}</span>
+      <span className="font-display text-fg-faint group-hover:text-player text-12 font-bold tracking-[var(--track-hud)] uppercase">
+        {copied ? "copied" : "copy link"}
+      </span>
+    </button>
   );
 }

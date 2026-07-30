@@ -125,6 +125,62 @@ export const viaMatchmaking: Pairing = async (a, b) => {
   return { p1, p2 };
 };
 
+/* ── The SECOND pairing path, held to the SAME contract ─────────────────────
+
+   A challenge link. The host creates it over HTTP, the invited side redeems it,
+   both emit `challenge.join`, and the gateway pairs them through the same
+   `createMatch` matchmaking uses.
+
+   `runLifecycle` is unchanged and `assertCanonical` is unchanged: that is the
+   entire point. If a challenge match needed different assertions, it would be a
+   different lifecycle, which is exactly what this exists to prevent. */
+
+export interface ChallengeSetup {
+  code: string;
+  band: [number, number];
+  /** The cookie of whoever redeemed it — a guest's, if they had no account. */
+  guestCookie: string;
+  guestHandle: string;
+  guestIsGuest: boolean;
+}
+
+/** Host creates a challenge with an explicit band (§8). */
+export async function createChallenge(
+  host: Account,
+  band: [number, number],
+): Promise<{ code: string }> {
+  const response = await fetch(`${WEB}/api/challenge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: host.cookie },
+    body: JSON.stringify({ ratingMin: band[0], ratingMax: band[1], allowGuest: true }),
+  });
+  if (!response.ok) throw new Error(`challenge create failed: ${await response.text()}`);
+  return (await response.json()) as { code: string };
+}
+
+/** Redeem with NO account — the gateway mints a guest and signs them in. */
+export async function redeemAsGuest(code: string): Promise<{ cookie: string; guest: boolean }> {
+  const response = await fetch(`${WEB}/api/challenge/${code}`, { method: "POST" });
+  if (!response.ok) throw new Error(`redeem failed: ${await response.text()}`);
+  const body = (await response.json()) as { guest: boolean };
+  const cookie = (response.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
+  if (!cookie) throw new Error("redemption set no session cookie — a guest must get one");
+  return { cookie, guest: body.guest };
+}
+
+/** Pairing strategy: both sides emit challenge.join on the same code. */
+export function viaChallenge(code: string): Pairing {
+  return async (a, b) => {
+    const fa = waitFor<Found>(a, "match.found");
+    const fb = waitFor<Found>(b, "match.found");
+    a.emit("challenge.join", { code });
+    await sleep(400);
+    b.emit("challenge.join", { code });
+    const [p1, p2] = await Promise.all([fa, fb]);
+    return { p1, p2 };
+  };
+}
+
 function readLog(matchId: string): { types: string[]; states: string[] } {
   let text: string;
   try {
@@ -317,14 +373,76 @@ async function main(): Promise<void> {
   // and that difference is the ONLY one the two paths are allowed to have.
   if (!result.ratedFlag) failures.push("matchmaking: two registered players must be rated");
 
+  /* ── The SAME contract, via a challenge link and a GUEST ───────────── */
+
+  log("");
+  log("driving a CHALLENGE match with a guest through the same lifecycle…");
+
+  const host = await register("chh");
+  /* A narrow band well away from any mean − 120 result, so §8's rule is
+     falsifiable: if the guest's stored 1200 leaked into selection at all, the
+     chosen problem would land near 1080 and outside this band. */
+  const band: [number, number] = [1450, 1550];
+  const { code } = await createChallenge(host, band);
+  const redeemed = await redeemAsGuest(code);
+  if (!redeemed.guest) failures.push("challenge: redeeming without an account did not make a guest");
+
+  const guestAccount: Account = {
+    cookie: redeemed.cookie,
+    handle: "guest",
+    email: "",
+    userId: "",
+  };
+
+  const cResult = await runLifecycle({
+    a: host,
+    b: guestAccount,
+    pairing: viaChallenge(code),
+    solutionFor,
+  });
+
+  log(`  states:  ${cResult.states.join(" → ")}`);
+  log(`  log:     ${cResult.logShape.join(", ")}`);
+  log(`  code:    ${cResult.spectatorCode}   rated: ${cResult.ratedFlag}`);
+  log(`  outcome: ${cResult.outcome.kind}${cResult.outcome.winner ? ` (${cResult.outcome.winner})` : ""}`);
+
+  // THE SAME ASSERTIONS. Not similar ones.
+  failures.push(...assertCanonical(cResult, "challenge"));
+
+  // §8: the problem must come from the HOST'S BAND, and the guest's stored
+  // rating must not have influenced it at all.
+  const chosen = await prisma.match.findUnique({
+    where: { id: cResult.matchId },
+    select: { problem: { select: { rating: true, slug: true } } },
+  });
+  const rating = chosen?.problem.rating ?? -1;
+  log(`  problem: ${chosen?.problem.slug} rated ${rating} (band ${band[0]}–${band[1]})`);
+  if (rating < band[0] || rating > band[1]) {
+    failures.push(
+      `challenge: §8 VIOLATED — problem rated ${rating} is outside the host's band ${band[0]}–${band[1]}. ` +
+        "A guest's placeholder rating must not influence selection.",
+    );
+  }
+
+  // A guest on either side makes the match unrated, disclosed before the
+  // countdown rather than discovered from an absent delta.
+  if (cResult.ratedFlag) {
+    failures.push("challenge: a match with a guest must be unrated, and say so before the countdown");
+  }
+
+  // §7: a challenge match has NO spectator delay, and is still shareable.
+  if (!/^[0-9A-HJKMNP-TV-Z]{10}$/.test(cResult.spectatorCode)) {
+    failures.push("challenge: a guest match must still carry a shareable spectator code");
+  }
+
   log("");
   if (failures.length > 0) {
     for (const f of failures) console.error(`FAIL: ${f}`);
     await prisma.$disconnect();
     process.exit(1);
   }
-  log("PASS — matchmaking satisfies the canonical lifecycle.");
-  log("       This is now the contract a challenge-created match must also satisfy.");
+  log("PASS — matchmaking AND a challenge-with-guest satisfy the same canonical lifecycle,");
+  log("       the guest match is unrated, and its problem came from the host's band.");
   await prisma.$disconnect();
 }
 

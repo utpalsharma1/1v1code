@@ -19,6 +19,8 @@ export {
 export {
   AcceptProgressSchema,
   ClockSchema,
+  ChallengeJoinSchema,
+  ChallengeWaitingSchema,
   CodeSubmitSchema,
   EditorChangeSchema,
   EditorDeltaOutSchema,

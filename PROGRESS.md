@@ -2,96 +2,146 @@
 
 ## SESSION STOP — read this first
 
-**`pnpm db:verify` NOW FAILS. That is deliberate — it is the forcing function for the problem
-format, and all 20 problems are incomplete.** Working tree clean, typecheck green, everything else
-passing. Cold start: `pnpm stack`.
+**CHALLENGE LINKS WORK. You can generate a link, open it in a browser with no account, and play.**
+`db:verify` still fails by design — the problem-format retrofit is next. Cold start: `pnpm stack`.
 
-### What landed
+### Try it
 
-**1. The guest band rule is in §8 and cannot be re-derived.** When either side is a guest, the host's
-explicit `ratingMin`/`ratingMax` **replaces** mean − 120 entirely — no blending, no averaging. The
-argument is written down: a guest's `1200` is the schema default, a placeholder written because the
-column is non-null, and feeding it into a mean yields 1080 for a 1200 host — *plausible and wrong*,
-which is worse than absent because nobody re-examines a reasonable-looking number.
+1. `/play`, signed in → **Create a challenge link** → copy the chip.
+2. Paste into a **different browser or a private window** (no account) → **Play as guest**.
+3. Both windows land on `/play?challenge=<code>`. Accept in both. The queue pop shows
+   **`unrated · no rating change`** before the countdown.
+4. The match is the ordinary match screen, with a working spectator chip — a guest match is still
+   shareable at `/watch/<code>`, with **no** 45-second delay.
 
-**2. The problem format is defined and enforced.** `SeedProblem` now carries `inputFormat`,
-`outputFormat` and `note` alongside `statement` and `constraints`, with the Codeforces structure and
-the reasoning in the type. `verify-seed` fails the seed if any problem is missing one, or has fewer
-than two samples, and it **names every offender rather than the first**.
+### The deliverable, verified two ways
 
-**3. Samples were already better modelled than I expected.** `isSample` exists on `SeedTest` and on
-the Prisma `TestCase`, 40 tests are already marked as samples, they are already seeded, and
-`verify-seed` already checks every test byte-for-byte against the reference solution — **so sample
-outputs are already mechanically verified.** The gap was never the data. It is that **samples are
-never shown to the player**, which is a rendering gap, not a schema one.
+**`probe:lifecycle` runs BOTH pairing paths against the same assertions:**
 
-**4. A bug in my own forcing function, caught by running it.** The format check first used
-`process.exitCode = 1`, and the script's final `process.exit(failures === 0 ? 0 : 1)` overwrote it —
-so it printed a wall of twenty real problems and then **reported success**. Same class as a green tick
-on a meaningless result. It is a hard `process.exit(1)` now, verified.
+```
+matchmaking:  MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED   rated: true
+challenge:    MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED   rated: false
+              problem: topological-order rated 1500 (band 1450–1550)
+```
 
-### Why `db:verify` failing is the correct state to hand over
+Identical state sequence, identical log shape, hold announced, reconnect resyncing with the problem,
+a Crockford spectator code on both. `assertCanonical` is called unchanged for both — **if a challenge
+match needed different assertions it would be a different lifecycle, which is the whole thing this
+was written to prevent.**
 
-All 20 problems are missing `inputFormat`, `outputFormat` and `note`. I did **not** retrofit them,
-and I want to be plain about why rather than dress it up: writing twenty correct I/O contracts and
-sample explanations is careful per-problem work, and I did not have the room left to do it well. A
-*wrong* input format is worse than a missing one — a player will trust it, exactly as you said about
-sample outputs — so guessing at twenty of them would have been the damaging choice.
+**§8's guest-band rule is asserted, not assumed.** The band is deliberately `1450–1550`, far from any
+mean − 120 result: if the guest's placeholder 1200 leaked into selection the problem would land near
+1080 and outside the band. It landed at 1500.
 
-What is handed over instead is the machine-checkable definition of "done": `pnpm db:verify` fails
-today, names all twenty, and will pass only when every one is complete. **The check exists before the
-work, which is the order that has now caught four bugs.**
+**Browser: 3 new tests, 17 total.** A link generated, opened in a **separate context with no session**,
+played to a live match with Monaco on both sides; a guest refused when minting a link (403); a stale
+link showing an answer rather than a 404.
 
-The fields are optional in the TypeScript type and required by `verify-seed`, deliberately: making
-them compile errors would stop the repo building rather than stop bad problems shipping, and it would
-report the first offender instead of all twenty.
+### What it is made of
 
-### Per-problem effort under the new format — what you asked for
+- **`POST /api/challenge`** — host picks the band (defaults around their own rating), 24h expiry,
+  `UNLISTED`, `allowGuest`. Refuses if no problems exist in the band, because a link that cannot
+  produce a match is worse than no link.
+- **`GET/POST /api/challenge/<code>`** — redemption. The take is `updateMany` with
+  `consumedAt: null` in the WHERE, so two people opening simultaneously cannot both win.
+- **`/c/<code>`** — the invited side, written for someone who has never heard of us. No registration
+  wall. A stale or taken link shows who challenged whom and offers **send one back**.
+- **`challenge.join` on the gateway** — a second *pairing* path into the **same** `createMatch`. Not a
+  second creation path: lifecycle, log, accept window, countdown, hold and settlement are the code
+  matchmaking already uses.
+- **Guests** — `lib/guest.ts`: credential-less `User` + ordinary session cookie, `guest-7f2a`, the
+  claim that mutates the same row, and `sweepGuests` (24h unplayed / 7d played, deleting only guests
+  with no `Match` rows).
+- **`pickProblem(…, band?)`** — §8's rule in code: a band **replaces** mean − 120 and neither rating is
+  read when one is supplied.
 
-The format roughly **doubles** the non-algorithmic writing per problem. Measured against the existing
-20, which have statement + constraints + tests only:
+### Three bugs found by running it
 
-| piece | 800–1200 | 1200–1700 | 1700–2200 |
-| --- | --- | --- | --- |
-| statement (setup + task) | 10 min | 20 min | 30 min |
-| **input / output format** | **10 min** | **12 min** | **15 min** |
-| constraints, matched to the validator | 5 min | 10 min | 15 min |
-| **2+ samples + the note explaining them** | **15 min** | **25 min** | **35 min** |
-| validator | 10 min | 20 min | 30 min |
-| reference solution | 10 min | 30 min | 90 min |
-| test design (the real work at the top end) | 15 min | 45 min | 120 min |
-| **total** | **~75 min** | **~2.7 h** | **~5.6 h** |
-
-Against the old format's 45–90 min / 1.5–3 h / 3–6 h, the added ~35 minutes is almost entirely the
-**note**: explaining why sample 1 produces its output is the part that teaches the format, and it is
-the part that cannot be generated without actually understanding the problem.
-
-**The split I would recommend.** Drafting with me and verifying mechanically lands at **~30–40 min
-per problem** for 800–1700, because the pipeline already does the expensive checking — `db:verify`
-runs every test and every sample against the reference and refuses disagreement. Above 1700 the
-bottleneck is **test design**, which is judgement, not typing: an anti-heuristic case has to defeat
-the specific wrong approaches a strong player will try, and that does not compress.
-
-So: **draft the 800–1700 band with me** (roughly 30 problems to get past 60, ~15–20 hours), and
-**hand-write the 1700–2200 band yourself**, where a weak test set silently accepts wrong solutions and
-the cost of that is invisible until someone exploits it.
+1. **The waiting slot went stale.** My first pairing kept an in-memory slot per code. React
+   StrictMode double-mounts effects in dev, so the first socket connected, emitted, and was torn
+   down — deleting the session and leaving a slot pointing at an identity that no longer existed. The
+   second arrival found a stale partner, took its place, and both sides waited forever. **Fixed by
+   deriving membership from the `Challenge` row** (`hostId`, `consumedById`) instead of accumulating
+   it: there is no state to go stale.
+2. **The spectator chip had no accessible name for its purpose.** Its visible text is the code, so the
+   accessible name was the code and `title` was ignored. Now an `aria-label` — better for a screen
+   reader, and the reason the test could not find it.
+3. **A bug in my own test:** the guest page was opened with `page.context().newPage()`, which shares
+   cookies, so the "guest" carried the host's session and the refusal never applied. **A test that
+   shares an identity between two roles is testing neither.**
 
 ### Verified this session
 
-typecheck 7/7 · core 56/56 · `probe:lifecycle` PASS · `probe:visibility` 10/10 · `probe:match` ·
-`probe:latejoin` 6/6 · smoke 5/5 · **`db:verify` fails by design, exit 1, naming all 20.**
+`probe:lifecycle` PASS under **both** pairings · **e2e 17/17** · core 56/56 ·
+`probe:visibility` 10/10 · `probe:latejoin` 6/6 · smoke 5/5 · typecheck 7/7 · build clean ·
+`db:verify` fails by design, naming all 20 problems.
 
-### Next session, in order
+### Not done, deliberately
 
-1. **Retrofit the 20 problems** to the new format until `db:verify` passes. This is the launch blocker
-   and it is now measurable.
-2. **Render it** — samples as monospace blocks with a per-input copy button, limits and constraints at
-   the top where a competitive programmer looks. The Prisma fields exist; nothing is plumbed to the
-   match screen yet.
-3. **Challenge links**, unchanged and still fully specified: creation → `probe:lifecycle` under
-   `viaChallenge` with the same assertions → guests → expiry/stale-link/rematch/UNLISTED. The §8 rule
-   above is the one new constraint on it.
-4. **20 new problems**, spread across the band.
+- **Rematch in one click** from the result screen. The pairing already exists, so this is a button that
+  re-runs `challenge.join` — small, but not written, and I would rather say so than imply it.
+- **The claim flow's UI.** `claimGuest` exists and keeps the same row; nothing calls it yet, so a guest
+  currently cannot convert. This is the next thing after the problem format.
+- **`sweepGuests` has no scheduler.** The function is written and correct; nothing runs it. It belongs
+  on a cron in Phase 2E deployment.
+
+### Next, in your order
+
+1. **Two problems retrofitted + rendered**, then stop and show you. Samples in monospace blocks with a
+   copy button per input, limits and constraints at the top. Prisma fields exist and samples are
+   already verified byte-for-byte, so this is rendering work.
+2. **The remaining 18**, until `db:verify` passes.
+3. **New problems**, continuing every session.
+
+### The template for a hand-written problem
+
+Drop this straight into `PROBLEMS` in `packages/db/src/problems.ts`. `pnpm db:verify` checks every
+field and every sample against the reference solution and refuses disagreement.
+
+```ts
+{
+  slug: "kebab-case-unique",
+  title: "Title Case",
+  topic: "MATH" | "DP" | "GRAPHS" | "GREEDY" | "STRINGS",
+  rating: 1700,                 // Glicko scale (§8). Same axis as players.
+  validatorKey: "…",            // a key in packages/db/src/validators.ts
+  statement:  "Setup and task. NOT the I/O contract.",
+  inputFormat:  "Line 1: n (…). Line 2: n integers separated by spaces.",
+  outputFormat: "A single integer. Trailing newline is ignored.",
+  constraints:  "1 <= n <= 2*10^5\n-10^9 <= a_i <= 10^9",
+  note: "In sample 1, … which is why the answer is 7. In sample 2, …",
+  tests: [
+    { input: "3\n1 2 3\n", expected: "6\n", isSample: true },   // >= 2 samples
+    { input: "1\n-5\n",    expected: "-5\n", isSample: true },
+    { input: "…",            expected: "…" },                     // hidden
+  ],
+}
+```
+
+**What I need from you, precisely:**
+
+- **All seven text fields.** `inputFormat` must say whether the first line is a count and how values
+  are separated; `outputFormat` must say whether trailing whitespace matters. A player who has to
+  guess loses a minute of an eight-minute match.
+- **`constraints` must match the validator exactly.** The validator is the source of truth. If they
+  disagree, §6.8's hack phase would police a promise the problem broke — and one of the original 20
+  had test data violating its own stated constraint, caught by running rather than reading.
+- **At least two samples**, and a `note` explaining *each* one. The note is what teaches the format
+  and it is the field most likely to be skipped.
+- **A reference solution** in `packages/db/src/solutions.ts` under the same slug, Python 3.
+
+**What makes an anti-heuristic test good enough** — the part that does not compress, and why the
+1700+ band is yours:
+
+- It must **defeat a specific named wrong approach**, not be merely large. "n = 200000" is a
+  performance test; "the greedy picks the locally cheapest edge and this case makes that globally
+  wrong" is an anti-heuristic test. Write down which approach each one kills.
+- Cover **at least three**: the plausible greedy, the off-by-one at a stated bound, and the overflow
+  that only appears at the constraint's maximum.
+- Include the **boundary itself** — `n` at its minimum and at its maximum — because those are where
+  correct-looking code fails.
+- A wrong solution that passes your tests is invisible until someone exploits it, which is why this is
+  judgement rather than typing.
 
 ## What class of check would have caught this — and what is still eye-only
 

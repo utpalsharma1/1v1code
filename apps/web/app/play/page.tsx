@@ -4,7 +4,7 @@ import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { CURRENT_PHASE } from "@/lib/phase";
-import { MatchScreen, type MatchPlayer } from "./MatchScreen";
+import { ChallengeLink, MatchScreen, type MatchPlayer } from "./MatchScreen";
 import {
   Button,
   Card,
@@ -64,6 +64,20 @@ export default function PlayPage() {
 
 function Play() {
   const socketRef = useRef<Socket | null>(null);
+  /* §7 Phase 2D. `?challenge=<code>` means we arrived from /c/<code> having
+     already redeemed it — emit challenge.join once connected. The gateway pairs
+     whoever is waiting on that code through the SAME createMatch matchmaking
+     uses, which is what probe:lifecycle asserts. */
+  const [challengeCode] = useState(() =>
+    typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("challenge"),
+  );
+  const [challengeWait, setChallengeWait] = useState<{ host: string; youAreHost: boolean } | null>(
+    null,
+  );
+  const [link, setLink] = useState<{ code: string; band: [number, number] } | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -166,6 +180,16 @@ function Play() {
       setConnected(true);
       setAuthError(null);
       note("connected to gateway");
+      if (challengeCode) {
+        socket.emit("challenge.join", { code: challengeCode });
+        note(`joining challenge ${challengeCode}`);
+      }
+    });
+
+    socket.on("challenge.waiting", (payload: { host: string; youAreHost: boolean }) => {
+      setChallengeWait(payload);
+      setPhase("queued");
+      note(payload.youAreHost ? "waiting for your opponent" : `waiting for ${payload.host}`);
     });
     socket.on("connect_error", (error) => {
       setConnected(false);
@@ -405,7 +429,7 @@ function Play() {
       socket?.close();
       socketRef.current = null;
     };
-  }, [note]);
+  }, [note, challengeCode]);
 
   /* A terminal match ALWAYS returns the client to idle.
 
@@ -428,6 +452,18 @@ function Play() {
     setEnding(null);
     note("match ended — back to the lobby");
   }, [phase, canShowEnding, note]);
+
+  /* The gateway derives challenge membership from the row rather than holding a
+     waiting slot, so it answers "waiting" when the other side is not connected
+     yet. Re-ask every couple of seconds until it pairs — the same shape as the
+     queue's own attempt loop, and it stops the moment a match is found. */
+  useEffect(() => {
+    if (!challengeCode || !connected || phase !== "queued" || !challengeWait) return;
+    const id = setInterval(() => {
+      socketRef.current?.emit("challenge.join", { code: challengeCode });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [challengeCode, connected, phase, challengeWait]);
 
   // Ticks the accept window down for display. Stops the moment the window
   // closes, so nothing loops without live state behind it (§5).
@@ -559,15 +595,90 @@ function Play() {
       </header>
 
       {phase === "idle" && (
-        <Button
-          variant="solid"
-          tone="player"
-          size="lg"
-          onClick={() => emit("queue.join", { mode: "RANKED" })}
-          disabled={!connected}
-        >
-          Play
-        </Button>
+        <div className="flex flex-col gap-5">
+          <Button
+            variant="solid"
+            tone="player"
+            size="lg"
+            onClick={() => emit("queue.join", { mode: "RANKED" })}
+            disabled={!connected}
+          >
+            Play
+          </Button>
+
+          {/* §7: the launch feature. A link needs exactly two people who already
+              know each other, so it brings its own audience into an empty
+              product — unlike a queue, which needs a crowd to work at all. */}
+          <Card
+            title="Challenge a friend"
+            aside={<span className="text-fg-faint text-12">no account needed to accept</span>}
+          >
+            {link ? (
+              <div className="flex flex-col gap-3">
+                <p className="text-fg-dim text-13 leading-relaxed">
+                  Send this. The first person to open it joins, it works for 24 hours, and they can
+                  play without registering.
+                </p>
+                <ChallengeLink code={link.code} />
+                <p className="tabular text-fg-faint text-12">
+                  Difficulty {link.band[0]}–{link.band[1]} · unlisted · no spectator delay
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <p className="text-fg-dim text-13 leading-relaxed">
+                  Generates a link you can paste anywhere. Difficulty defaults around your rating.
+                </p>
+                <div>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      void (async () => {
+                        setLinkError(null);
+                        const response = await fetch("/api/challenge", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({}),
+                        });
+                        const body = (await response.json()) as {
+                          code?: string;
+                          ratingMin?: number;
+                          ratingMax?: number;
+                          error?: string;
+                        };
+                        if (!response.ok || !body.code) {
+                          setLinkError(body.error ?? "Could not create a link.");
+                          return;
+                        }
+                        setLink({
+                          code: body.code,
+                          band: [body.ratingMin ?? 800, body.ratingMax ?? 2000],
+                        });
+                      })();
+                    }}
+                  >
+                    Create a challenge link
+                  </Button>
+                </div>
+                {linkError && (
+                  <p className="text-fail text-13" role="alert">
+                    {linkError}
+                  </p>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {phase === "queued" && challengeWait && (
+        <Card title="Challenge accepted" tone="elevated">
+          <p className="text-fg-dim text-13 leading-relaxed">
+            {challengeWait.youAreHost
+              ? "Your opponent has the link open. The match starts as soon as they join."
+              : `Waiting for ${challengeWait.host} to open the match.`}
+          </p>
+        </Card>
       )}
 
       {phase === "queued" && queue && (

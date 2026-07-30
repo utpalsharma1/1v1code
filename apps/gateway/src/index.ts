@@ -11,6 +11,7 @@ import {
   EditorSnapshotSchema,
   MatchAcceptSchema,
   PulseReportSchema,
+  ChallengeJoinSchema,
   QueueJoinSchema,
   SpectateWatchSchema,
   type Language,
@@ -264,7 +265,30 @@ async function runSubmission(
  * is the worst outcome in the product. The offset makes it likely both can
  * land it and the match is decided by speed and nerve.
  */
-async function pickProblem(r1: number, r2: number, spread: number): Promise<MatchProblem | null> {
+async function pickProblem(
+  r1: number,
+  r2: number,
+  spread: number,
+  /* §8: an EXPLICIT band REPLACES mean − 120 entirely. It does not blend,
+     adjust or average with it.
+
+     A guest has no rating — the 1200 on their row is the schema default, written
+     because the column is non-null, and it is not evidence about anything.
+     Feeding it into a mean gives (1200 + host)/2 − 120, which for a 1200 host is
+     1080: a plausible-looking number derived from a value that means nothing,
+     and plausible-and-wrong is worse than absent because nobody re-examines a
+     reasonable number. So when a band is supplied, neither rating is read. */
+  band?: { min: number; max: number },
+): Promise<MatchProblem | null> {
+  if (band) {
+    const inBand = await prisma.problem.findMany({
+      where: { rating: { gte: band.min, lte: band.max } },
+      select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
+    });
+    if (inBand.length === 0) return null;
+    return inBand[Math.floor(Math.random() * inBand.length)]!;
+  }
+
   const target = (r1 + r2) / 2 - 120;
   const lo = target - spread;
   const hi = target + spread;
@@ -316,6 +340,98 @@ async function persistMatch(match: LiveMatch, problemId: string): Promise<void> 
     console.error(`[match ${match.id}] could not create match row:`, error);
   }
 }
+
+/* ── Challenge pairing (§7 Phase 2D) ──────────────────────────────────────
+   Whoever arrives first WAITS; the second arrival pairs them. Held in memory
+   keyed by code, so a challenge behaves like a two-person queue with a fixed
+   membership rather than a new lifecycle. */
+
+/* A challenge has exactly TWO known members — `hostId` and `consumedById` — so
+   pairing needs no waiting slot at all. Whoever emits `challenge.join` triggers
+   a check: are both parties connected right now? If yes, create the match; if
+   no, say who we are waiting for.
+
+   The first version DID keep a slot, and it broke for a reason worth recording:
+   React StrictMode double-mounts effects in dev, so the first socket connects,
+   emits, and is immediately torn down — which deleted the session and left a
+   slot pointing at an identity that no longer existed. The second arrival then
+   found a stale partner and took its place, and both sides waited forever.
+
+   Deriving membership from the row instead of accumulating it in memory removes
+   the state that could go stale. There is nothing to invalidate. */
+
+async function joinChallenge(session: Session, code: string): Promise<void> {
+  if (session.matchId) return;
+  const me = session.identity.userId;
+
+  const challenge = await prisma.challenge.findUnique({
+    where: { code },
+    select: {
+      hostId: true,
+      consumedById: true,
+      expiresAt: true,
+      ratingMin: true,
+      ratingMax: true,
+      host: { select: { handle: true } },
+    },
+  });
+  if (!challenge) {
+    toUser(me, "error", { code: "NO_CHALLENGE", message: "unknown code" });
+    return;
+  }
+  if (challenge.expiresAt.getTime() < Date.now() && !challenge.consumedById) {
+    toUser(me, "error", { code: "EXPIRED", message: "this link has expired" });
+    return;
+  }
+
+  const isHost = me === challenge.hostId;
+  const isTaker = me === challenge.consumedById;
+  if (!isHost && !isTaker) {
+    // Holding the code is not membership; taking it through the redemption
+    // route is. Otherwise a forwarded link would let a third party barge in.
+    toUser(me, "error", {
+      code: "NOT_YOURS",
+      message: "this challenge belongs to two other players",
+    });
+    return;
+  }
+  if (!challenge.consumedById) {
+    toUser(me, "challenge.waiting", { code, host: challenge.host.handle, youAreHost: isHost });
+    return;
+  }
+
+  const hostSession = sessions.get(challenge.hostId);
+  const takerSession = sessions.get(challenge.consumedById);
+
+  // Both connected? Go. Otherwise wait, and name who we are waiting for.
+  if (!hostSession || !takerSession || hostSession.matchId || takerSession.matchId) {
+    toUser(me, "challenge.waiting", { code, host: challenge.host.handle, youAreHost: isHost });
+    return;
+  }
+
+  // Guard against both sides racing the same check.
+  if (challengeStarting.has(code)) return;
+  challengeStarting.add(code);
+  try {
+    stopQueueTimers(hostSession);
+    stopQueueTimers(takerSession);
+    /* The HOST is always p1, so the link's creator keeps the left corner. A
+       presentation choice — the machine is symmetric — but it makes a shared
+       match read the same way for both people.
+
+       §7: no spectator delay on a challenge match. §8: the band REPLACES
+       mean − 120 rather than adjusting it. */
+    await createMatch(hostSession.identity, takerSession.identity, {
+      band: { min: challenge.ratingMin, max: challenge.ratingMax },
+      spectatorDelayMs: 0,
+    });
+  } finally {
+    challengeStarting.delete(code);
+  }
+}
+
+/** In-flight guard only. Not membership — that comes from the row. */
+const challengeStarting = new Set<string>();
 
 /* ── Settlement ───────────────────────────────────────────────────────── */
 
@@ -373,9 +489,14 @@ async function settleMatch(
 
 /* ── Match creation ───────────────────────────────────────────────────── */
 
-async function createMatch(a: Identity, b: Identity): Promise<void> {
+async function createMatch(
+  a: Identity,
+  b: Identity,
+  /** Set by a challenge link. §8: this REPLACES mean − 120, never adjusts it. */
+  opts?: { band?: { min: number; max: number }; spectatorDelayMs?: number },
+): Promise<void> {
   const spread = 150;
-  const problem = await pickProblem(a.rating, b.rating, spread);
+  const problem = await pickProblem(a.rating, b.rating, spread, opts?.band);
   if (!problem) {
     toUser(a.userId, "error", { code: "NO_PROBLEM", message: "No problems seeded." });
     toUser(b.userId, "error", { code: "NO_PROBLEM", message: "No problems seeded." });
@@ -404,6 +525,10 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
     id,
     spectatorCode,
     rated,
+    /* §7: challenge matches have NO spectator delay. Friends watching friends
+       is the entire point of them, and a 45-second delay ruins the experience it
+       exists to enable. Ranked keeps its mandatory 45s. */
+    ...(opts?.spectatorDelayMs !== undefined ? { spectatorDelayMs: opts.spectatorDelayMs } : {}),
     players: { p1: await cardFor(a), p2: await cardFor(b) },
     problem,
     emitTo: (side, event, payload) => emitToSide(match, side, event, payload),
@@ -688,6 +813,19 @@ io.on("connection", (socket: Socket) => {
     return false;
   };
 
+  /* A guest may PLAY but may not INVITE. A credential-less account that can mint
+     invite links is a spam primitive: open a link, become a guest, mint ten
+     more. The HTTP route refuses this too — both, deliberately, because a
+     defence that lives in one place is a defence that moves when code moves. */
+  const registeredOnly = (event: string): boolean => {
+    if (!identity.isGuest) return true;
+    socket.emit("error", {
+      code: "GUEST_FORBIDDEN",
+      message: `${event} needs a registered account`,
+    });
+    return false;
+  };
+
   socket.on("queue.join", (raw) => {
     if (!playerOnly("queue.join")) return;
     const parsed = QueueJoinSchema.safeParse(raw ?? {});
@@ -858,6 +996,27 @@ io.on("connection", (socket: Socket) => {
     });
     return true;
   };
+
+  /* ── Challenge links (§7 Phase 2D) ───────────────────────────────────
+     A SECOND PAIRING PATH INTO THE SAME createMatch. Not a second creation
+     path: the lifecycle, the log, the accept window, the countdown, the hold
+     and settlement are all the code matchmaking already uses, and
+     probe:lifecycle asserts that under `viaChallenge` with the same
+     assertions it uses for matchmaking. */
+  socket.on("challenge.join", (raw) => {
+    if (!playerOnly("challenge.join")) return;
+    const parsed = ChallengeJoinSchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      socket.emit("error", { code: "BAD_CODE", message: "malformed challenge code" });
+      return;
+    }
+    const code = normaliseCode(parsed.data.code);
+    if (!code) {
+      socket.emit("error", { code: "BAD_CODE", message: "not a valid challenge code" });
+      return;
+    }
+    void joinChallenge(session, code);
+  });
 
   socket.on("spectate.watch", (raw) => {
     const parsed = SpectateWatchSchema.safeParse(raw ?? {});

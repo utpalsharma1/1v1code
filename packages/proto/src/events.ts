@@ -113,6 +113,12 @@ export const EditorResyncSchema = z.object({
   side: SideSchema.optional(),
 });
 
+/** §7 Phase 2D: join a challenge by its code. The gateway pairs whoever is
+ *  waiting on it — one creation path, reached two ways. */
+export const ChallengeJoinSchema = z.object({
+  code: z.string().min(4).max(32),
+});
+
 /** §7: `/watch/<code>` resolves by SPECTATOR CODE, never by match id.
  *  The code is the shareable thing; the id is an internal handle. */
 export const SpectateWatchSchema = z.object({
@@ -130,6 +136,7 @@ export interface ClientToServer {
   "editor.resync": (payload: z.infer<typeof EditorResyncSchema>) => void;
   "spectate.join": (payload: z.infer<typeof EditorResyncSchema>) => void;
   "spectate.watch": (payload: z.infer<typeof SpectateWatchSchema>) => void;
+  "challenge.join": (payload: z.infer<typeof ChallengeJoinSchema>) => void;
 }
 
 /* ── server → client ──────────────────────────────────────────────────── */
@@ -372,6 +379,13 @@ export const SpectateEndedSchema = z.object({
   finishedAt: z.string().nullable(),
 });
 
+/** Waiting on the other side of a challenge link. */
+export const ChallengeWaitingSchema = z.object({
+  code: z.string(),
+  host: z.string(),
+  youAreHost: z.boolean(),
+});
+
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export interface ServerToClient {
@@ -397,6 +411,7 @@ export interface ServerToClient {
   "editor.desync": (payload: z.infer<typeof EditorDesyncSchema>) => void;
   "spectate.ready": (payload: z.infer<typeof SpectateReadySchema>) => void;
   "spectate.ended": (payload: z.infer<typeof SpectateEndedSchema>) => void;
+  "challenge.waiting": (payload: z.infer<typeof ChallengeWaitingSchema>) => void;
   error: (payload: z.infer<typeof ErrorSchema>) => void;
 }
 
