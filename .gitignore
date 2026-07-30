@@ -21,3 +21,5 @@ var/
 .next-build/
 test-results/
 playwright-report/
+var/log/
+var/run/

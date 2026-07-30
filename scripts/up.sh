@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Bring the whole stack up, detached, idempotently.
+#
+#   pnpm stack          start everything that is not already running
+#   pnpm stack:fresh    also re-push the schema and re-seed
+#   pnpm stack:down     stop the three node services (leaves Postgres/Redis up)
+#   pnpm stack:status   what is running, and whether the routes answer
+#
+# NOT `pnpm up`: that is a built-in alias for `pnpm update`, so it silently ran
+# a dependency install instead of this script. Namespaced to stay clear of every
+# reserved pnpm verb.
+#
+# WHY THIS EXISTS: the runbook was seven commands that had to be pasted in the
+# right order, and getting it wrong produced symptoms that looked like product
+# bugs — a dead judge worker makes every submission resolve INTERNAL_ERROR and
+# void the match, which is indistinguishable from a relay fault from the UI.
+#
+# SELF-SAFE PROCESS HANDLING. `pkill -f` has matched its own shell repeatedly in
+# this project, because the pattern appears in the killing command's own argv.
+# Everything here works from PID FILES written at start, and every kill checks
+# that the PID is still the process we started before signalling it.
+#
+# DETACHED ON PURPOSE. `setsid … < /dev/null &` puts each service in its own
+# session, so closing the terminal does not take them with it, and a later kill
+# cannot walk back up the process group into this script.
+# =============================================================================
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+ROOT="$PWD"
+RUN="$ROOT/var/run"
+LOG="$ROOT/var/log"
+mkdir -p "$RUN" "$LOG"
+
+# shellcheck disable=SC1091
+set -a; [ -f "$ROOT/.env" ] && . "$ROOT/.env"; set +a
+
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+info() { printf '  · %s\n' "$1"; }
+head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+# --- pid files -----------------------------------------------------------------
+# A pid file alone is not proof: pids are reused. Each check also confirms the
+# process's command line still looks like the service we started.
+running() {           # running <name> <argv-fragment>
+  local pidfile="$RUN/$1.pid" pid
+  [ -f "$pidfile" ] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null)"
+  [ -n "${pid:-}" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q -- "$2" || return 1
+  printf '%s' "$pid"
+}
+
+start() {             # start <name> <argv-fragment> <command...>
+  local name="$1" frag="$2"; shift 2
+  local pid
+  if pid="$(running "$name" "$frag")"; then
+    ok "$name already running (pid $pid)"
+    return 0
+  fi
+  setsid nohup "$@" > "$LOG/$name.log" 2>&1 < /dev/null &
+  echo $! > "$RUN/$name.pid"
+  ok "$name started (pid $(cat "$RUN/$name.pid")) → var/log/$name.log"
+}
+
+stop() {              # stop <name> <argv-fragment>
+  local name="$1" frag="$2" pid
+  if pid="$(running "$name" "$frag")"; then
+    # Kill the whole PROCESS GROUP, not just the pid. `pnpm --filter … dev` is a
+    # wrapper: it spawns `next dev`, which spawns `next-server`, and signalling
+    # only the wrapper orphans a live server still holding port 3000. Because
+    # every service was started with `setsid`, it is its own group leader, so
+    # `kill -- -$pid` reaches exactly its own descendants and nothing else —
+    # this shell is in a different session and cannot be caught by it.
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null
+    ok "$name stopped (pid $pid)"
+  else
+    info "$name not running"
+  fi
+  rm -f "$RUN/$name.pid"
+}
+
+# --- waiting -------------------------------------------------------------------
+wait_http() {         # wait_http <url> <label> <seconds>
+  local url="$1" label="$2" limit="${3:-90}" i=0
+  while [ "$i" -lt "$limit" ]; do
+    if curl -fsS -o /dev/null -m 5 "$url" 2>/dev/null; then ok "$label"; return 0; fi
+    sleep 1; i=$((i + 1))
+  done
+  bad "$label did not answer within ${limit}s"
+  return 1
+}
+
+wait_log() {          # wait_log <name> <pattern> <seconds>
+  local name="$1" pattern="$2" limit="${3:-60}" i=0
+  while [ "$i" -lt "$limit" ]; do
+    grep -q -- "$pattern" "$LOG/$name.log" 2>/dev/null && { ok "$name ready"; return 0; }
+    sleep 1; i=$((i + 1))
+  done
+  bad "$name did not report ready within ${limit}s — see var/log/$name.log"
+  return 1
+}
+
+# --- commands ------------------------------------------------------------------
+NODE=(node --experimental-strip-types)
+
+cmd_up() {
+  local fresh="${1:-}"
+
+  head_ "Postgres + Redis"
+  docker compose up -d >/dev/null 2>&1
+  local i=0
+  while [ "$i" -lt 60 ]; do
+    if [ "$(docker compose ps --format '{{.Health}}' 2>/dev/null | grep -c healthy)" -ge 2 ]; then break; fi
+    sleep 1; i=$((i + 1))
+  done
+  if [ "$(docker compose ps --format '{{.Health}}' 2>/dev/null | grep -c healthy)" -ge 2 ]; then
+    ok "postgres healthy"; ok "redis healthy"
+  else
+    bad "containers not healthy — docker compose ps"; return 1
+  fi
+
+  if [ "$fresh" = "--fresh" ]; then
+    head_ "Schema + seed"
+    pnpm db:push  >/dev/null 2>&1 && ok "schema pushed"  || bad "db:push failed"
+    pnpm db:seed  >/dev/null 2>&1 && ok "problems seeded" || bad "db:seed failed"
+  fi
+
+  head_ "Services"
+  start judge   "judge/src/index.ts"   "${NODE[@]}" apps/judge/src/index.ts
+  start gateway "gateway/src/index.ts" "${NODE[@]}" apps/gateway/src/index.ts
+  start web     "@1v1/web"             pnpm --filter @1v1/web dev
+
+  head_ "Readiness"
+  wait_log  judge   "Judge worker up" 60
+  wait_log  gateway "listening on"    60
+  wait_http "http://localhost:3000/"  "web responding" 120
+
+  cmd_status
+}
+
+cmd_down() {
+  head_ "Stopping services"
+  stop web     "@1v1/web"
+  stop gateway "gateway/src/index.ts"
+  stop judge   "judge/src/index.ts"
+  info "Postgres and Redis left running — 'docker compose down' stops those"
+}
+
+cmd_status() {
+  head_ "Status"
+  docker compose ps --format '  {{.Service}}: {{.Status}}' 2>/dev/null || bad "docker unavailable"
+  for pair in "judge:judge/src/index.ts" "gateway:gateway/src/index.ts" "web:@1v1/web"; do
+    local name="${pair%%:*}" frag="${pair#*:}" pid
+    if pid="$(running "$name" "$frag")"; then ok "$name (pid $pid)"; else bad "$name not running"; fi
+  done
+
+  head_ "Routes"
+  local failed=0
+  for route in / /play /dev/sparring /dev/spectate /dev/hud /dev/judge /dev/kitchen-sink /login /register; do
+    local code
+    code="$(curl -s -o /dev/null -m 30 -w '%{http_code}' "http://localhost:3000$route" 2>/dev/null)"
+    if [ "$code" = "200" ]; then ok "$(printf '%-20s %s' "$route" "$code")"
+    else bad "$(printf '%-20s %s' "$route" "${code:-no response}")"; failed=1; fi
+  done
+  local sio
+  sio="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://localhost:4000/socket.io/?EIO=4&transport=polling" 2>/dev/null)"
+  if [ "$sio" = "200" ]; then ok "$(printf '%-20s %s' "gateway :4000" "$sio")"
+  else bad "$(printf '%-20s %s' "gateway :4000" "${sio:-no response}")"; failed=1; fi
+
+  printf '\n'
+  if [ "$failed" -eq 0 ]; then
+    printf '  \033[32mStack is up.\033[0m Two windows: /play and /dev/sparring. Watch at /dev/spectate.\n\n'
+  else
+    printf '  \033[31mSomething is not answering.\033[0m Logs are in var/log/.\n\n'
+  fi
+  return "$failed"
+}
+
+case "${1:-up}" in
+  up)     cmd_up "${2:-}" ;;
+  down)   cmd_down ;;
+  status) cmd_status ;;
+  *)      echo "usage: $0 [up [--fresh] | down | status]" >&2; exit 2 ;;
+esac

@@ -4,6 +4,8 @@
 
 **Phase 2C-1 is built and verified. The keystroke relay works end to end.** Working tree clean.
 
+**Cold start: `cd ~/1v1.code && pnpm stack`.** One command, detached, idempotent. Details below.
+
 ### The visibility rule, attacked rather than confirmed
 
 `pnpm probe:visibility` does not assert "the opponent received no deltas" — that passes trivially
@@ -106,36 +108,75 @@ an eye can settle — see the jaggedness note above.
    `[gateway] match <id>: …`, or read `data-match-id` off the match screen — paste it, **Watch**.
 4. Type in A. It appears in C's left editor within ~50ms, and never anywhere in B.
 
-### Bringing the stack back up, in order
+### Bringing the stack back up — ONE COMMAND
 
 ```bash
-cd ~/1v1.code
-docker compose up -d
-set -a && . ./.env && set +a
-
-pnpm install                             # only if deps changed
-pnpm db:push && pnpm db:seed
-pnpm judge:images                        # only if runner.py or a Dockerfile changed
-
-setsid nohup node --experimental-strip-types apps/judge/src/index.ts   > /tmp/worker.log  2>&1 < /dev/null &
-setsid nohup node --experimental-strip-types apps/gateway/src/index.ts > /tmp/gateway.log 2>&1 < /dev/null &
-setsid nohup pnpm --filter @1v1/web dev                                > /tmp/web.log     2>&1 < /dev/null &
-
-pnpm test:smoke                          # RUN FIRST — asset integrity, ~10s
+cd ~/1v1.code && pnpm stack
 ```
 
-**The judge worker is easy to forget and its absence looks like a product bug** — every submission
-hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match.
+That is the whole thing. It starts Postgres and Redis, waits for both to report
+healthy, starts the judge worker, the gateway and the dev server **detached**, waits for each to
+report ready, and then prints a status table plus every route's HTTP code. It is **idempotent** —
+run it twice and anything already up is left alone.
+
+| command | what it does |
+| --- | --- |
+| `pnpm stack` | start whatever is not running, then report |
+| `pnpm stack:fresh` | same, plus `db:push` and `db:seed` first |
+| `pnpm stack:down` | stop judge / gateway / web (leaves Postgres and Redis up) |
+| `pnpm stack:status` | what is running and whether the routes answer |
+
+Logs go to `var/log/{judge,gateway,web}.log`. PIDs to `var/run/*.pid`.
+
+**It is `pnpm stack`, not `pnpm up`.** `up` is a built-in pnpm alias for `pnpm update`, so that name
+silently ran a dependency install instead of the script — found by trying it.
+
+**Two things the script gets right that the old seven-command runbook did not:**
+
+- **Detached properly.** Each service starts under `setsid … < /dev/null &`, so it is its own
+  session leader and closing the terminal cannot take it down. Verified: each pid equals its own
+  sid, and all three differ from the shell's.
+- **Self-safe stopping.** No `pkill -f` anywhere — that pattern has matched its own shell
+  repeatedly here, because the pattern appears in the killing command's own argv. `stack:down`
+  works from pid files, confirms the pid's `/proc/*/cmdline` still looks like the service before
+  signalling, and kills the **process group** (`kill -- -$pid`). The group matters: `pnpm --filter
+  @1v1/web dev` is a wrapper around `next dev` around `next-server`, so signalling the wrapper
+  alone orphans a live server still holding port 3000. Verified: after `stack:down`, ports 3000 and
+  4000 are both released.
+
+**The judge worker is the one whose absence looks like a product bug.** With it down every
+submission hits the 90s ceiling and resolves `INTERNAL_ERROR`, which correctly voids the match — so
+a run of voids means check `var/log/judge.log` before suspecting the relay. `pnpm stack` waits for
+its "Judge worker up" line specifically, so a silent failure to start is reported rather than
+discovered later.
 
 **There is no bot.** A single window sits in an empty queue and says so. Use `/dev/sparring`.
+
+### To see the relay and the pulse line
+
+1. **Window A — `/play`.** Sign in, **PLAY**.
+2. **Window B — `/dev/sparring`.** **Join queue**. Then **Accept** in both.
+3. **Window C — `/dev/spectate`.** Paste the match id and press **Watch**. The id is on the match
+   screen as `data-match-id`, and the gateway logs `[gateway] match <id>: …`.
+4. Type in A. It appears in C's left editor within ~50ms, and never anywhere in B.
+5. For the pulse line: type in bursts with real pauses between them, and watch B's side of A's HUD.
+   The trace should sit mid-range while you type, spike on a burst, and fall to the floor within
+   ~2s of stopping. It is 2–3× jaggier than `/dev/hud`'s simulator and that is deliberate — see the
+   pulse note above.
+
+| to see | do |
+| --- | --- |
+| cells resolving one at a time | A: write anything, **Submit** |
+| the §6.7b hold | B: **Time limit** first, then A submits correct |
+| receipt order deciding | B: **Correct (reference)**, then A within ~1s |
+| victory / defeat + delta | A or B: **Correct (reference)** |
+| clutch edge | B: **Correct (reference)** on a 5+ test problem |
+| drop + 45s grace | B: **Drop socket**, then **Reconnect** |
 
 Suites: `pnpm test:smoke` · `pnpm test:e2e` · `pnpm probe:match` · `pnpm probe:requeue` ·
 `pnpm probe:visibility` · `pnpm test:signin` · `pnpm judge:test` (Docker) · `pnpm db:verify` ·
 `pnpm db:solutions` · `node --experimental-strip-types --test packages/core/src/*.test.ts` ·
 `node --experimental-strip-types --test apps/gateway/src/matchmaking.test.ts`
-
-**Shell note:** `pkill -f` has matched its own shell repeatedly here. Kill by PID from
-`ps -eo pid,cmd`, and start long-lived processes with `setsid … < /dev/null & disown`.
 
 ### Next: 2C-2 — the spectator stream
 
