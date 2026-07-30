@@ -17,7 +17,8 @@
     "seed": "node --experimental-strip-types prisma/seed.ts",
     "studio": "prisma studio",
     "seed:users": "node --experimental-strip-types prisma/seed-users.ts",
-    "solutions": "node --experimental-strip-types src/verify-solutions.ts"
+    "solutions": "node --experimental-strip-types src/verify-solutions.ts",
+    "samples": "node --experimental-strip-types src/samples.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

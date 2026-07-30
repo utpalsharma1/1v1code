@@ -2,8 +2,104 @@
 
 ## SESSION STOP — read this first
 
-**The guest funnel is built: claim prompt and one-click rematch on the result screen.**
-`db:verify` still names 18. Cold start: `pnpm stack`.
+**`pnpm db:samples` is built, with both additions. THE NINE RETROFITS ARE NOT DONE — I ran out of
+room and would rather hand over a working tool than nine rushed problems.** `db:verify` still names
+18. Cold start: `pnpm stack`.
+
+### `pnpm db:samples <slug>` — derive, don't type
+
+```
+$ pnpm db:samples connected-components
+Connected Components (connected-components), rated 1300
+validator: graph
+
+  sample 1
+    input:    "5 3\n1 2\n2 3\n4 5\n"
+    expected: "2\n"   <- paste this
+
+  sample 2
+    input:    "4 0\n"
+    expected: "4\n"   <- paste this
+
+2 samples: every input validates, every output derived from the reference.
+```
+
+`--stdin` takes candidate inputs (blank line between cases) and prints paste-ready literals, so a new
+sample's output is **never typed**. An expected output that was never typed cannot be mistyped — the
+same move as the payload constructors: remove the possibility rather than handle the case.
+
+### It validates as well as generates, and both failure modes were proved
+
+**Every input goes through the problem's own validator before anything is generated.** Generating an
+output for an input the problem forbids would produce a *confidently wrong* sample, which is the same
+class as the seeded problem whose test data broke its own stated bound.
+
+**Positive controls run, not assumed:**
+
+```
+$ printf '3 1\n1 99\n' | pnpm db:samples connected-components --stdin
+  sample 1: INPUT REJECTED BY THE VALIDATOR — edge 0 v 99 outside [1, 3]
+    A sample must obey the constraints it demonstrates.        exit 1
+
+$ (with sample 2's expected temporarily set to "7")
+    MISMATCH: the seed currently claims "7\n"                  exit 1
+```
+
+Both restored afterwards. A tool that has only ever passed proves nothing.
+
+### The discriminator is durable and auditable
+
+`SeedProblem.discriminator?: string | null` — a **one-line claim a reviewer can check**, separate from
+`note`, which is prose a player reads. They are not the same job: auditing "do all 20 actually have a
+discriminating sample" via twenty paragraphs means forming an opinion, which is the kind of check that
+never happens.
+
+**`null` is a valid answer and stating it is the point.** Some 800-rated problems are one expression
+with nothing to discriminate; inventing a discriminator to fill the field would be worse than
+admitting there isn't one. `verify-seed` requires the key to be **present**, not truthy — which forces
+the author to decide rather than leave the question unasked.
+
+The two done so far:
+
+- `sum-of-two` → `null`. Two integers and a plus sign; there is no plausible wrong approach.
+- `connected-components` → *"Sample 2 (`4 0`) exposes a solution that only counts vertices appearing
+  in the edge list: it prints 0 where the answer is 4."*
+
+`db:verify` now reports **36 findings across 18 problems** — each missing both its format fields and
+its discriminator.
+
+### The nine retrofits — NOT done
+
+I built the tool and stopped. Being plain about why: nine retrofits is roughly five hours of careful
+prose and sample design at the measured rate, and I did not have the room left to do it and still
+verify. You said you would rather have nine correct than eighteen rushed; the same applies to nine
+rushed, and a wrong `inputFormat` is worse than a missing one because a player trusts it.
+
+What is handed over is a session that starts clean: the tool works, its controls are proven, the
+discriminator field exists and is enforced, and `db:verify` names exactly what is left.
+
+**The per-problem loop is now mechanical:**
+
+1. Rewrite `statement` to the task alone; move the I/O contract into `inputFormat` / `outputFormat`.
+2. Split `constraints` into one bound per array entry.
+3. Choose a sample that exposes a specific wrong approach; write `discriminator` naming it, or `null`.
+4. `pnpm db:samples <slug> --stdin` → paste the derived outputs.
+5. `pnpm db:verify` → it either passes or names the problem.
+
+### Verified this session
+
+typecheck 7/7 · core 56/56 · build clean · `db:samples` green on both retrofitted problems, with both
+failure modes demonstrated · `db:verify` fails by design naming 18.
+
+**Not re-run this session:** the e2e suite and the probes. Nothing in this change touches the gateway,
+the relay or the match path — it is seed tooling and one optional seed field — but I did not run them,
+and I would rather say that than let "verified" cover work I did not check.
+
+### Next session
+
+1. **Nine problems retrofitted** through the loop above.
+2. Then the other nine, until `db:verify` passes.
+3. New problems after that.
 
 ### The claim prompt
 

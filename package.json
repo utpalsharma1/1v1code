@@ -32,7 +32,8 @@
     "stack:status": "bash scripts/up.sh status",
     "pulse:calibrate": "node --experimental-strip-types packages/core/src/calibrate-pulse.ts",
     "probe:latejoin": "node --experimental-strip-types apps/gateway/src/latejoin-probe.ts",
-    "probe:lifecycle": "node --experimental-strip-types apps/gateway/src/lifecycle-probe.ts"
+    "probe:lifecycle": "node --experimental-strip-types apps/gateway/src/lifecycle-probe.ts",
+    "db:samples": "pnpm --filter @1v1/db samples"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

@@ -60,6 +60,20 @@ export interface SeedProblem {
   /** Why each sample produces its output. This is the part that teaches the
    *  format and the part most likely to be skipped. Required by `verify-seed`. */
   note?: string;
+  /** WHICH WRONG APPROACH DOES A SAMPLE EXPOSE? Durable, and auditable.
+   *
+   *  `note` is prose a player reads; this is a one-line claim a reviewer can
+   *  check. The two are not the same job: without this, an audit of "do all 20
+   *  actually have a discriminating sample" means re-reading twenty paragraphs
+   *  and forming an opinion, which is exactly the kind of check that never
+   *  happens.
+   *
+   *  Set it to `null` when a problem genuinely has no plausible wrong approach a
+   *  sample can expose — some 800-rated problems are one expression and there is
+   *  nothing to discriminate. `null` is an ANSWER, and stating it is the point;
+   *  inventing a discriminator to fill the field would be worse than admitting
+   *  there isn't one. `verify-seed` requires the field to be present either way. */
+  discriminator?: string | null;
   /** Samples (`isSample: true`) are PUBLIC — shown in the statement and run as
    *  the first tests, so a player gets fast feedback on whether they understood
    *  the format. Everything else is hidden. At least two samples are required. */
@@ -84,6 +98,7 @@ export const PROBLEMS: SeedProblem[] = [
       "Print one integer: the sum a + b. A trailing newline is fine; trailing " +
       "whitespace is ignored.",
     constraints: ["-10^9 <= a, b <= 10^9"],
+    discriminator: null,
     note:
       "In the first sample, 2 + 3 = 5.\n\n" +
       "The second sample is the reason the bounds are worth reading: both values are " +
@@ -388,6 +403,9 @@ export const PROBLEMS: SeedProblem[] = [
       "0 <= m <= 2 * 10^5",
       "1 <= u, v <= n",
     ],
+    discriminator:
+      "Sample 2 (`4 0`) exposes a solution that only counts vertices appearing " +
+      "in the edge list: it prints 0 where the answer is 4.",
     note:
       "In the first sample n is 5 and the edges are 1-2, 2-3 and 4-5. Vertices " +
       "{1, 2, 3} form one component and {4, 5} form another, so the answer is 2.\n\n" +

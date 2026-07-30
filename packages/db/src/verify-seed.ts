@@ -342,6 +342,15 @@ for (const problem of PROBLEMS) {
   if (samples < 2) {
     formatFailures.push(`${problem.slug}: has ${samples} sample(s), needs at least 2`);
   }
+  /* The discriminator must be PRESENT, and `null` is a valid answer. Requiring
+     presence rather than truthiness is the whole point: it forces the author to
+     decide whether a discriminating sample exists, instead of leaving the
+     question unasked. */
+  if (!("discriminator" in problem)) {
+    formatFailures.push(
+      `${problem.slug}: missing discriminator (a one-line claim, or null if none exists)`,
+    );
+  }
 }
 if (formatFailures.length > 0) {
   console.error("\nPROBLEM FORMAT INCOMPLETE — these are not solvable as presented:");
