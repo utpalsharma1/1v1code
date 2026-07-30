@@ -4,7 +4,12 @@ import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { CURRENT_PHASE } from "@/lib/phase";
-import { ChallengeLink, MatchScreen, type MatchPlayer } from "./MatchScreen";
+import {
+  ChallengeLink,
+  MatchScreen,
+  type MatchPlayer,
+  type MatchScreenProps,
+} from "./MatchScreen";
 import {
   Button,
   Card,
@@ -109,12 +114,7 @@ function Play() {
   const [acceptDeadline, setAcceptDeadline] = useState<number | null>(null);
   const [acceptRemainingMs, setAcceptRemainingMs] = useState<number | undefined>(undefined);
   const [beat, setBeat] = useState<3 | 2 | 1 | 0 | null>(null);
-  const [problem, setProblem] = useState<{
-    title: string;
-    rating: number;
-    statement: string;
-    constraints: string;
-  } | null>(null);
+  const [problem, setProblem] = useState<MatchScreenProps["problem"] | null>(null);
   const [totalTests, setTotalTests] = useState(0);
   const [cells, setCells] = useState<{ p1: CellState[]; p2: CellState[] }>({ p1: [], p2: [] });
   const [statuses, setStatuses] = useState<{ p1: Status; p2: Status }>({
@@ -251,12 +251,7 @@ function Play() {
     socket.on("match.start", (payload) => {
       setBeat(null);
       setPhase("live");
-      setProblem({
-        title: payload.problem.title,
-        rating: payload.problem.rating,
-        statement: payload.problem.statement,
-        constraints: payload.problem.constraints,
-      });
+      setProblem(payload.problem);
       setEnding(null);
       setVerdict(null);
       setHolding([]);
@@ -289,14 +284,9 @@ function Play() {
          through to the lobby layout — which draws nothing at all for a live
          match and offers Play only in `idle`. The match then ended into a
          screen that could not render its own ending. */
-      if (payload.problem) {
-        setProblem({
-          title: payload.problem.title,
-          rating: payload.problem.rating,
-          statement: payload.problem.statement,
-          constraints: payload.problem.constraints,
-        });
-      }
+      // The whole problem, not a hand-picked subset. Copying fields here is how
+      // the resync path drifted from match.start in the first place.
+      if (payload.problem) setProblem(payload.problem);
 
       // JUDGING is still the match, not the lobby: §6.7b's hold is a beat of
       // the match screen and the player must not be thrown out of it.

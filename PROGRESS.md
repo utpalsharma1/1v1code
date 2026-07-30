@@ -2,74 +2,100 @@
 
 ## SESSION STOP — read this first
 
-**The Play press is gone from the challenge path. Opening a link goes straight to accept.**
-`db:verify` still fails by design. Cold start: `pnpm stack`.
+**Two problems retrofitted and rendered. Stop and look at them before I touch the other 18.**
+`db:verify` now names **18**, down from 20. Cold start: `pnpm stack`.
 
-### The extra step, and why it was there
+### Look at this
 
-`challenge` is now **its own phase**, not a flavour of `queued`. Arriving from a link used to land in
-`idle` — the lobby, with a PLAY button — until `challenge.waiting` came back from the gateway. So the
-one path that cannot afford friction opened on a button that meant something else.
+`/play` → **Create a challenge link** → open it in another browser → accept both. Or faster: any
+match that draws **Connected Components (1300)** or **Sum Of Two (800)**.
 
-Making it a phase rather than a flag means **the lobby is unreachable on that path by
-construction**: PLAY is not rendered, so it cannot be pressed and cannot mean two things. `queue.status`
-can no longer drag a challenge waiter into the queue view either — it refuses to overwrite the
-`challenge` phase.
+The left pane now reads in Codeforces order: title, **limits as real values** (`5s per test · 256 MB`
+— the actual judge limits), **Constraints** with one bound per line, Statement, **Input**, **Output**,
+**Samples** with a copy button on each input, then **Note**.
 
-**The §6.2 accept step stays.** It is what stops a match starting against an empty chair. What is gone
-is everything before it.
+Limits and constraints are at the **top** deliberately: deciding whether an O(n²) approach fits is the
+first decision a competitive programmer makes and it happens before reading the task properly.
+Burying them under prose costs time nobody has.
 
-### The Play-while-holding-a-challenge bug — real, and fixed at both levels
+### The audit you asked for: 20 of 20
 
-**Yes, it was possible**, and it was worse than a copy problem: a player waiting on a named opponent
-who also joined the open pool could be paired with a stranger while their friend was still opening
-the link, and then **the challenge could never start** — the row is consumed, both parties are
-committed, and one of them is in a different match.
+**Every problem had `Input:` / `Output:` fragments jammed inside the statement string.** Not some —
+all of them. So the retrofit is not cosmetic: you were right that matches have been decided partly by
+who guessed the format, because there was nothing to read.
 
-Fixed twice, deliberately:
+`statement`, `inputFormat`, `outputFormat` and `note` are now separate fields, and the renderer gives
+each its own heading. A format fragment cannot be buried in prose again because prose has nowhere to
+put a heading.
 
-- **The affordance is gone** — a challenge arrival never reaches the lobby.
-- **The gateway refuses it anyway.** `queue.join` is rejected with `IN_CHALLENGE` while the session
-  holds a challenge intent. The affordance is not the control: removing a button stops the honest path
-  and nothing else.
+### Constraints: structured data, not markup
 
-The intent is cleared when the match starts and when the player explicitly leaves.
+`constraints` is now **`string[]`** — one bound per entry — rather than a string with formatting baked
+in. The reasoning, which is in the type: a single string invites divergence, one author writing
+`1 ≤ n ≤ 10^5` and the next `1 <= n <= 100000`, and the renderer cannot reconcile them because the
+decision was already made. As an array **the author supplies facts and the renderer owns typography**,
+so all 20 look the same by construction rather than by everyone remembering a convention.
 
-### What the host sees, and what changes when someone opens the link
+All 20 were converted mechanically. **The conversion itself had a bug worth recording:** my first pass
+split on commas as well as newlines, which turned `-10^9 <= a, b <= 10^9` — one fact about two
+variables — into two half-truths. Reverted and redone splitting only on newlines.
 
-The host is **registered on their own challenge the moment they mint it** — `challenge.join` fires
-straight after the POST returns, so they are waiting on that specific challenge rather than sitting in
-the lobby. Before, minting left them in `idle`, and when their friend arrived nothing paired until the
-host pressed something, on a screen whose only button was PLAY.
+### Connected Components, before and after
 
-While waiting they see the copyable link and *"Your link is live. The moment someone opens it, the
-accept screen appears here — you do not need to do anything else."* — plus that the match is unrated,
-and a **Leave** button, which is the only other action.
+Before, the whole contract was `"Input: n m, then m edges u v Output: a single integer"`. It never
+said whether `n m` share a line, whether edges are one per line, or what happens when `m` is 0.
 
-The moment the guest opens the link and redeems it, the gateway sees both sessions connected and
-creates the match, so **both sides go from waiting to the §6.2 accept screen with no further input**.
+After, `inputFormat` states all three, plus that edges may repeat and may be self-loops.
+`outputFormat` states that trailing whitespace is ignored. Two samples with a note explaining each,
+and the second sample is `4 0` — no edges at all — because **a solution that only counts vertices it
+saw in the edge list prints 0 there**. That is the case the old statement made unguessable.
 
-### The tests now assert the absence
+### The pipeline caught my own bad test immediately
 
-`e2e/challenge.spec.ts` asserts `getByRole("button", { name: /^play$/i })` has **count 0** on both
-sides, and that the host's waiting copy appears without any press. If either side needed PLAY again,
-these fail — which is the only way a removed step stays removed.
+I hand-wrote a hidden case `n=6` with only `3-4` joined and asserted **4** components. The verifier
+ran the reference solution and said **5** — I had forgotten vertex 6. Fixed to 5.
+
+That is exactly the failure mode you named about samples: a wrong expected output is worse than none,
+because it is trusted. It took one run to catch and would have taken a player a very confusing match.
+**102 test cases now agree with their reference solutions**, up from 101.
+
+### One flaky test, found and fixed before it could lie
+
+The render assertions first passed **by luck**: the host's band defaults around their rating, so which
+problem the match drew was random, and the assertions would pass or fail depending on whether that
+problem had been retrofitted. The test now mints with an explicit band of `1300–1300`, which is
+Connected Components and nothing else. **A test that passes because of a random draw is not a test.**
 
 ### Verified this session
 
-**e2e 17/17** · `probe:lifecycle` PASS under both pairings · core 56/56 · smoke 5/5 · typecheck 7/7 ·
-build clean · `db:verify` fails by design on the 20 unformatted problems.
+**e2e 17/17** (challenge now asserting all five problem sections, the limits, and a copyable sample) ·
+`probe:lifecycle` PASS under both pairings · core 56/56 · smoke 5/5 · typecheck 7/7 · build clean ·
+`db:verify` fails naming **18**.
 
-### Still not done, and stated rather than implied
+### NOT done — the guest funnel
 
-- **The guest funnel** — the claim prompt on the result screen. `claimGuest` exists and keeps the same
-  row; nothing calls it, so a guest cannot yet convert.
-- **One-click rematch** — the pairing exists, the button does not.
-- **Two problems retrofitted and rendered**, then the remaining 18.
+I did not start it, and I want to be plain rather than imply otherwise. You listed it first and it is
+the more important of the two for a real invited player; I chose the problem work because you asked to
+see the two rendered **before** the other 18, and that gate is worth more than a partial funnel.
 
-I stopped after the challenge-path fix rather than starting the funnel, because the funnel and the
-problem rendering are both screen work that wants its own pass — and you asked to be able to click a
-link before anything else lands. That now works with no press before accept.
+What it needs, unchanged and fully specified:
+
+- **Claim prompt** on the result screen, after the §6.7 cinematic lands rather than over it, with the
+  match visible behind. `claimGuest` already keeps the same row. **Not one-shot** — a guest who
+  declines must still be able to claim while the session lives, so it is a persistent affordance on
+  that screen, not a modal that is dismissed forever.
+- **One-click rematch**, both sides. My answers to your two questions: it should **create a new
+  `Challenge` row**, because the existing one is consumed and `consumedAt`/`consumedById` are the
+  record of who took *that* invitation — reusing it would destroy the audit trail and make a second
+  match indistinguishable from the first. And when one side accepts and the other has left, the
+  accepter should see the ordinary challenge waiting screen with the code, so it degrades into exactly
+  the link flow that already works rather than into a special case.
+
+### Next, in order
+
+1. **The guest funnel** — claim prompt and one-click rematch.
+2. **The remaining 18**, until `db:verify` passes.
+3. **New problems**, continuing every session.
 
 ### The deliverable, verified two ways
 

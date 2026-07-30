@@ -66,7 +66,16 @@ export interface MatchProblem {
   title: string;
   rating: number;
   statement: string;
+  inputFormat: string;
+  outputFormat: string;
   constraints: string;
+  note: string;
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  /* PUBLIC samples only. Hidden tests are hidden — that distinction is the
+     whole reason `isSample` exists, and sending the hidden set would hand every
+     player the answer key. */
+  samples: { input: string; expected: string }[];
 }
 
 type Emit = (event: string, payload: unknown) => void;

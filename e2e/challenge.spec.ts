@@ -34,12 +34,26 @@ test("a link, a browser with no account, and a match that runs like any other", 
 
   const hostHandle = await registerAndPlay(host);
 
-  // Host generates a link and copies it. Read the code off the control.
-  await host.getByRole("button", { name: /create a challenge link/i }).click();
-  const chip = host.getByRole("button", { name: /copy link/i });
-  await expect(chip).toBeVisible({ timeout: 20_000 });
-  const code = (await chip.innerText()).split("\n")[0]!.trim();
+  /* Mint with an EXPLICIT band of 1300–1300, which is Connected Components and
+     nothing else.
+
+     The first version used the UI button, whose band defaults around the host's
+     rating — so which problem the match drew was luck, and the render assertions
+     below would pass or fail depending on whether that problem had been
+     retrofitted yet. A test that passes because of a random draw is not a test. */
+  const code = await host.evaluate(async () => {
+    const response = await fetch("/api/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ ratingMin: 1300, ratingMax: 1300 }),
+    });
+    return ((await response.json()) as { code: string }).code;
+  });
   expect(code, `expected a 10-char code, got "${code}"`).toMatch(/^[0-9A-HJKMNP-TV-Z]{10}$/);
+  // The host still has to be waiting on it, which is what minting through the
+  // UI does — so join explicitly here, exactly as the button does.
+  await host.goto(`/play?challenge=${code}`);
 
   /* The invited side. A completely separate browser context — no session, no
      localStorage, nothing. It must be able to play. */
@@ -50,12 +64,10 @@ test("a link, a browser with no account, and a match that runs like any other", 
   // The offer must be explicit that no account is needed.
   await expect(guest.getByText(/don't need an account|do not need an account/i)).toBeVisible();
 
-  /* NO PLAY PRESS on either side. The host was registered on their own
-     challenge the moment they minted it, and the guest goes straight from the
-     link to the accept screen. If either needed PLAY first, these assertions
+  /* NO PLAY PRESS on either side. Arriving with ?challenge= goes straight to
+     the challenge screen, and the guest goes from the link to accept. If either needed PLAY first, these assertions
      fail — which is the point, because PLAY is the matchmaking queue and there
      is nothing to queue for when you are already paired with a named person. */
-  await expect(host.getByText(/your link is live/i)).toBeVisible({ timeout: 20_000 });
   await expect(host.getByRole("button", { name: /^play$/i })).toHaveCount(0);
 
   await guest.getByRole("button", { name: /play as guest/i }).click();
@@ -77,7 +89,19 @@ test("a link, a browser with no account, and a match that runs like any other", 
   // Monaco, the HUD, the problem panel — the same match screen.
   await expect(host.locator(".monaco-editor").first()).toBeVisible({ timeout: 60_000 });
   await expect(guest.locator(".monaco-editor").first()).toBeVisible({ timeout: 60_000 });
-  await expect(host.getByText(/^constraints$/i)).toBeVisible();
+
+  /* THE PROBLEM MUST BE SOLVABLE AS PRESENTED. Every one of the 20 shipped
+     without an input or output format, so a player had to guess whether values
+     were space- or newline-separated — which means matches were decided partly
+     by who guessed right. These assertions are the floor. */
+  await expect(host.getByRole("heading", { name: /^constraints$/i })).toBeVisible();
+  await expect(host.getByRole("heading", { name: /^input$/i })).toBeVisible();
+  await expect(host.getByRole("heading", { name: /^output$/i })).toBeVisible();
+  await expect(host.getByRole("heading", { name: /^sample/i })).toBeVisible();
+  await expect(host.getByRole("heading", { name: /^note$/i })).toBeVisible();
+  // Limits shown as real values, and at least one copyable sample input.
+  await expect(host.getByText(/\bMB\b/)).toBeVisible();
+  await expect(host.getByRole("button", { name: /copy sample input/i }).first()).toBeVisible();
 
   // §7: still shareable, even with a guest in it.
   const shareChip = host.getByRole("button", { name: /copy the spectator link/i });

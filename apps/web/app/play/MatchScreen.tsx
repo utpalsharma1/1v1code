@@ -56,7 +56,18 @@ export interface MatchScreenProps {
   you: Side;
   p1: MatchPlayer;
   p2: MatchPlayer;
-  problem: { title: string; statement: string; constraints: string; rating: number };
+  problem: {
+    title: string;
+    statement: string;
+    inputFormat: string;
+    outputFormat: string;
+    constraints: string;
+    note: string;
+    rating: number;
+    timeLimitMs: number;
+    memoryLimitMb: number;
+    samples: { input: string; expected: string }[];
+  };
   remainingMs: number;
   /** Per-side test cells, owned by the page so a resync can replace them. */
   cells: { p1: CellState[]; p2: CellState[] };
@@ -245,22 +256,8 @@ export function MatchScreen(props: MatchScreenProps) {
         />
 
         <div className="grid flex-1 gap-px lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-          <section className="border-line overflow-y-auto border-r bg-surface p-5 max-lg:border-r-0 max-lg:border-b">
-            <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-              Problem · {problem.rating}
-            </p>
-            <h1 className="font-display text-fg mt-1 text-20 leading-tight font-extrabold tracking-[var(--track-display)] uppercase">
-              {problem.title}
-            </h1>
-            <div className="text-fg-dim mt-4 space-y-3 text-13 leading-relaxed whitespace-pre-wrap">
-              {problem.statement}
-            </div>
-            <p className="font-display text-fg-faint mt-5 mb-1 text-12 font-bold tracking-[var(--track-hud)] uppercase">
-              Constraints
-            </p>
-            <div className="tabular text-fg-dim text-12 leading-relaxed whitespace-pre-wrap">
-              {problem.constraints}
-            </div>
+          <section className="border-line overflow-y-auto border-r bg-surface max-lg:border-r-0 max-lg:border-b">
+            <ProblemPane problem={problem} />
           </section>
 
           <section className="relative flex min-h-[24rem] flex-col" data-side={you}>
@@ -604,6 +601,160 @@ function NonResult({
         </div>
       </div>
     </motion.div>
+  );
+}
+
+/* ── The problem, as a competitive programmer reads it ─────────────────────
+
+   Codeforces order, because that order is what a competitive programmer's eye
+   expects: title and LIMITS first, then the task, then the exact I/O contract,
+   then the bounds, then samples, then the note explaining them.
+
+   Limits and constraints go at the TOP because that is where they are looked
+   for — deciding whether an O(n^2) approach fits is the first decision, and it
+   is made before reading the task properly. Burying them under prose costs a
+   player time they do not have.
+
+   §4's language throughout, and nothing more: monospace for anything that is
+   data, display type only for headings, no decoration. This is a reading surface
+   under time pressure and legibility beats everything.
+   ========================================================================= */
+
+function ProblemPane({ problem }: { problem: MatchScreenProps["problem"] }) {
+  const bounds = problem.constraints.split("\n").filter((line) => line.trim().length > 0);
+
+  return (
+    <div className="flex flex-col gap-5 p-5">
+      <header>
+        <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
+          Problem · {problem.rating}
+        </p>
+        <h1 className="font-display text-fg mt-1 text-20 leading-tight font-extrabold tracking-[var(--track-display)] uppercase">
+          {problem.title}
+        </h1>
+        {/* The real judge limits, as values. Not decoration — these are the
+            numbers a player budgets against. */}
+        <p className="tabular text-fg-dim mt-2 text-12">
+          {(problem.timeLimitMs / 1000).toFixed(problem.timeLimitMs % 1000 === 0 ? 0 : 1)}s
+          <span className="text-fg-faint"> per test · </span>
+          {problem.memoryLimitMb} MB
+        </p>
+      </header>
+
+      {bounds.length > 0 && (
+        <Block label="Constraints">
+          <ul className="flex flex-col gap-1">
+            {bounds.map((bound) => (
+              <li key={bound} className="tabular text-fg text-12 leading-relaxed">
+                {bound}
+              </li>
+            ))}
+          </ul>
+        </Block>
+      )}
+
+      <Prose label="Statement">{problem.statement}</Prose>
+      {problem.inputFormat && <Prose label="Input">{problem.inputFormat}</Prose>}
+      {problem.outputFormat && <Prose label="Output">{problem.outputFormat}</Prose>}
+
+      {problem.samples.length > 0 && (
+        <Block label={problem.samples.length === 1 ? "Sample" : "Samples"}>
+          <div className="flex flex-col gap-4">
+            {problem.samples.map((sample, index) => (
+              <Sample key={index} index={index + 1} {...sample} />
+            ))}
+          </div>
+        </Block>
+      )}
+
+      {problem.note && <Prose label="Note">{problem.note}</Prose>}
+    </div>
+  );
+}
+
+function Block({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h2 className="font-display text-fg-faint mb-2 text-12 font-bold tracking-[var(--track-hud)] uppercase">
+        {label}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function Prose({ label, children }: { label: string; children: string }) {
+  return (
+    <Block label={label}>
+      <div className="text-fg-dim text-13 leading-relaxed whitespace-pre-wrap">{children}</div>
+    </Block>
+  );
+}
+
+/** One sample: input and output side by side, each copyable. Nobody retypes a
+ *  sample by hand, and under a clock nobody should have to. */
+function Sample({
+  index,
+  input,
+  expected,
+}: {
+  index: number;
+  input: string;
+  expected: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
+        {index}
+      </p>
+      <CopyBlock label="input" text={input} copyable />
+      <CopyBlock label="output" text={expected} />
+    </div>
+  );
+}
+
+function CopyBlock({
+  label,
+  text,
+  copyable = false,
+}: {
+  label: string;
+  text: string;
+  copyable?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
+  };
+
+  return (
+    <div className="border-line border bg-elevated">
+      <div className="border-line flex items-center justify-between border-b px-2.5 py-1">
+        <span className="font-display text-fg-faint text-12 tracking-[var(--track-hud)] uppercase">
+          {label}
+        </span>
+        {copyable && (
+          <button
+            type="button"
+            onClick={() => void copy()}
+            aria-label={`Copy sample ${label}`}
+            className="focus-ring font-display text-fg-faint hover:text-player text-12 font-bold tracking-[var(--track-hud)] uppercase transition-colors duration-[160ms]"
+          >
+            {copied ? "copied" : "copy"}
+          </button>
+        )}
+      </div>
+      <pre className="tabular text-fg overflow-x-auto px-2.5 py-2 text-12 leading-relaxed">
+        {text.replace(/\n$/, "")}
+      </pre>
+    </div>
   );
 }
 

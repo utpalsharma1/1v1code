@@ -44,10 +44,19 @@ export interface SeedProblem {
   inputFormat?: string;
   /** Exactly what to print, including formatting and trailing-whitespace rules. */
   outputFormat?: string;
-  /** Every bound, explicitly. MUST agree with the validator, which is the
-   *  source of truth — the statement is not allowed to promise something the
-   *  validator would reject, or §6.8's hack phase would police a broken promise. */
-  constraints: string;
+  /** Every bound, one per entry. STRUCTURED DATA, not markup in a string.
+   *
+   *  A single string invites divergence — one author writes `1 ≤ n ≤ 10^5`, the
+   *  next writes `1 <= n <= 100000`, and the renderer cannot reconcile them
+   *  because the formatting is already baked in. As an array the AUTHOR supplies
+   *  facts and the RENDERER owns typography, so all 20 look the same by
+   *  construction rather than by everyone remembering a convention.
+   *
+   *  MUST agree with the validator, which is the source of truth — the statement
+   *  may not promise something the validator would reject, or §6.8's hack phase
+   *  would police a broken promise. One of the original 20 had test data that
+   *  violated its own stated constraint, caught by running rather than reading. */
+  constraints: string[];
   /** Why each sample produces its output. This is the part that teaches the
    *  format and the part most likely to be skipped. Required by `verify-seed`. */
   note?: string;
@@ -66,14 +75,27 @@ export const PROBLEMS: SeedProblem[] = [
     rating: 800,
     validatorKey: "two-ints",
     statement:
-      "Read two integers a and b on one line and print their sum.\n\nInput: a b\nOutput: a single integer.",
-    constraints: "-10^9 <= a, b <= 10^9",
+      "You are given two integers. Report what they add up to.\n\n" +
+      "This is the smallest problem in the bank and it exists to be a format check: " +
+      "if you can read the input and print the answer, your I/O is wired correctly.",
+    inputFormat:
+      "A single line containing two integers a and b, separated by one space.",
+    outputFormat:
+      "Print one integer: the sum a + b. A trailing newline is fine; trailing " +
+      "whitespace is ignored.",
+    constraints: ["-10^9 <= a, b <= 10^9"],
+    note:
+      "In the first sample, 2 + 3 = 5.\n\n" +
+      "The second sample is the reason the bounds are worth reading: both values are " +
+      "at the negative limit, so the sum is -2000000000. That still fits in a 64-bit " +
+      "integer, but it does not fit in a 32-bit one — in C++, `int` overflows here and " +
+      "`long long` does not.",
     tests: [
-      { input: "2 3\n", expected: "5", isSample: true },
-      { input: "-5 5\n", expected: "0", isSample: true },
-      { input: "1000000000 1000000000\n", expected: "2000000000" },
-      { input: "-1000000000 -1000000000\n", expected: "-2000000000" },
-      { input: "0 0\n", expected: "0" },
+      { input: "2 3\n", expected: "5\n", isSample: true },
+      { input: "-1000000000 -1000000000\n", expected: "-2000000000\n", isSample: true },
+      { input: "0 0\n", expected: "0\n" },
+      { input: "1000000000 1000000000\n", expected: "2000000000\n" },
+      { input: "-5 12\n", expected: "7\n" },
     ],
   },
   {
@@ -84,7 +106,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "gcd-pair",
     statement:
       "Print gcd(a, b).\n\nInput: a b\nOutput: a single integer.",
-    constraints: "1 <= a, b <= 10^9",
+    constraints: ["1 <= a, b <= 10^9"],
     tests: [
       { input: "12 18\n", expected: "6", isSample: true },
       { input: "7 13\n", expected: "1", isSample: true },
@@ -101,7 +123,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "single-n-small",
     statement:
       "Count the integers in [1, n] divisible by 3 or 5.\n\nInput: n\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^6",
+    constraints: ["1 <= n <= 10^6"],
     tests: [
       { input: "15\n", expected: "7", isSample: true },
       { input: "1\n", expected: "0", isSample: true },
@@ -118,7 +140,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "single-n-sieve",
     statement:
       "Count primes less than or equal to n.\n\nInput: n\nOutput: a single integer.\n\nA linear scan of trial divisions will time out at the upper bound.",
-    constraints: "2 <= n <= 10^6",
+    constraints: ["2 <= n <= 10^6"],
     tests: [
       { input: "10\n", expected: "4", isSample: true },
       { input: "2\n", expected: "1", isSample: true },
@@ -135,7 +157,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "modpow-triple",
     statement:
       "Print a^b mod m.\n\nInput: a b m\nOutput: a single integer.\n\nb can be 10^9, so repeated multiplication will time out. Intermediate products exceed 32 bits.",
-    constraints: "0 <= a, b <= 10^9, 1 <= m <= 2*10^9",
+    constraints: ["0 <= a, b <= 10^9, 1 <= m <= 2*10^9"],
     tests: [
       { input: "2 10 1000\n", expected: "24", isSample: true },
       { input: "3 0 7\n", expected: "1", isSample: true },
@@ -155,7 +177,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "word",
     statement:
       "Count the vowels (a, e, i, o, u) in s.\n\nInput: a single lowercase word s\nOutput: a single integer.",
-    constraints: "1 <= |s| <= 10^5, s consists of lowercase letters",
+    constraints: ["1 <= |s| <= 10^5, s consists of lowercase letters"],
     tests: [
       { input: "hello\n", expected: "2", isSample: true },
       { input: "xyz\n", expected: "0", isSample: true },
@@ -172,7 +194,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "word-list",
     statement:
       "Print the length of the longest common prefix of all n words.\n\nInput: n, then n lowercase words, one per line\nOutput: a single integer.",
-    constraints: "1 <= n <= 1000, 1 <= |word| <= 1000",
+    constraints: ["1 <= n <= 1000, 1 <= |word| <= 1000"],
     tests: [
       { input: "3\nflower\nflow\nflight\n", expected: "2", isSample: true },
       { input: "2\ndog\ncat\n", expected: "0", isSample: true },
@@ -189,7 +211,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "two-words",
     statement:
       "Print the minimum number of single-character insertions, deletions or substitutions that turn a into b.\n\nInput: a then b, one per line\nOutput: a single integer.",
-    constraints: "1 <= |a|, |b| <= 2000, lowercase letters",
+    constraints: ["1 <= |a|, |b| <= 2000, lowercase letters"],
     tests: [
       { input: "kitten\nsitting\n", expected: "3", isSample: true },
       { input: "abc\nabc\n", expected: "0", isSample: true },
@@ -208,7 +230,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "int-array",
     statement:
       "Print the largest sum of any non-empty contiguous subarray.\n\nInput: n, then n integers\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, -10^9 <= a[i] <= 10^9",
+    constraints: ["1 <= n <= 10^5, -10^9 <= a[i] <= 10^9"],
     tests: [
       { input: "5\n-2 1 -3 4 -1\n", expected: "4", isSample: true },
       { input: "3\n-5 -2 -8\n", expected: "-2", isSample: true },
@@ -225,7 +247,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "coins-target",
     statement:
       "Using unlimited coins of the given denominations, print the fewest coins summing exactly to target, or -1 if impossible.\n\nInput: n target, then n denominations\nOutput: a single integer.",
-    constraints: "1 <= n <= 100, 1 <= target <= 10^6, 1 <= coin <= 10^6",
+    constraints: ["1 <= n <= 100, 1 <= target <= 10^6, 1 <= coin <= 10^6"],
     tests: [
       { input: "3 11\n1 2 5\n", expected: "3", isSample: true },
       { input: "1 3\n2\n", expected: "-1", isSample: true },
@@ -242,7 +264,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "int-array",
     statement:
       "Print the length of the longest strictly increasing subsequence.\n\nInput: n, then n integers\nOutput: a single integer.\n\nO(n^2) will time out at the upper bound.",
-    constraints: "1 <= n <= 10^5, -10^9 <= a[i] <= 10^9",
+    constraints: ["1 <= n <= 10^5, -10^9 <= a[i] <= 10^9"],
     tests: [
       { input: "6\n10 9 2 5 3 7\n", expected: "3", isSample: true },
       { input: "1\n5\n", expected: "1", isSample: true },
@@ -259,7 +281,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "int-array-k",
     statement:
       "Print the k-th smallest element of the array, 1-indexed.\n\nInput: n k, then n integers\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 1 <= k <= n, 1 <= a[i] <= 10^9",
+    constraints: ["1 <= n <= 10^5, 1 <= k <= n, 1 <= a[i] <= 10^9"],
     tests: [
       { input: "5 2\n7 10 4 3 20\n", expected: "4", isSample: true },
       { input: "1 1\n42\n", expected: "42", isSample: true },
@@ -276,7 +298,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "word",
     statement:
       "Print the minimum number of cuts needed to split s so that every part is a palindrome.\n\nInput: a single lowercase word s\nOutput: a single integer.",
-    constraints: "1 <= |s| <= 2000, lowercase letters",
+    constraints: ["1 <= |s| <= 2000, lowercase letters"],
     tests: [
       { input: "aab\n", expected: "1", isSample: true },
       { input: "a\n", expected: "0", isSample: true },
@@ -295,7 +317,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "intervals",
     statement:
       "Given n intervals, print the maximum number that can be chosen with no two overlapping. Touching endpoints do not overlap.\n\nInput: n, then n pairs start end\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 0 <= start <= end <= 10^9",
+    constraints: ["1 <= n <= 10^5, 0 <= start <= end <= 10^9"],
     tests: [
       { input: "3\n1 2\n2 3\n1 3\n", expected: "2", isSample: true },
       { input: "1\n0 0\n", expected: "1", isSample: true },
@@ -312,7 +334,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "intervals",
     statement:
       "Given n arrival/departure intervals, print the maximum number that overlap at any instant. A train departing at time t and another arriving at t do overlap.\n\nInput: n, then n pairs arrive depart\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 0 <= arrive <= depart <= 10^9",
+    constraints: ["1 <= n <= 10^5, 0 <= arrive <= depart <= 10^9"],
     tests: [
       { input: "3\n1 5\n2 6\n7 8\n", expected: "2", isSample: true },
       { input: "1\n0 100\n", expected: "1", isSample: true },
@@ -329,7 +351,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "knapsack-fractional",
     statement:
       "Items may be taken fractionally. Print the maximum total value, rounded down to an integer.\n\nInput: n capacity, then n pairs value weight\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 0 <= capacity <= 10^9, 1 <= value, weight <= 10^6",
+    constraints: ["1 <= n <= 10^5, 0 <= capacity <= 10^9, 1 <= value, weight <= 10^6"],
     tests: [
       { input: "3 50\n60 10\n100 20\n120 30\n", expected: "240", isSample: true },
       { input: "1 0\n10 5\n", expected: "0", isSample: true },
@@ -347,14 +369,39 @@ export const PROBLEMS: SeedProblem[] = [
     rating: 1300,
     validatorKey: "graph",
     statement:
-      "Print the number of connected components in an undirected graph.\n\nInput: n m, then m edges u v\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 0 <= m <= 2*10^5, 1 <= u, v <= n",
+      "You are given an undirected graph with n vertices, numbered 1 through n, and " +
+      "m edges. Two vertices are in the same component if you can walk from one to " +
+      "the other along edges.\n\n" +
+      "Count the components. A vertex with no edges at all is a component on its own.",
+    inputFormat:
+      "The first line contains two integers n and m, separated by a space: the number " +
+      "of vertices and the number of edges.\n" +
+      "Each of the next m lines contains two integers u and v, separated by a space, " +
+      "describing an undirected edge between u and v.\n" +
+      "When m is 0 there are no further lines.\n" +
+      "Edges may repeat, and an edge may join a vertex to itself.",
+    outputFormat:
+      "Print one integer: the number of connected components. A trailing newline is " +
+      "fine; trailing whitespace is ignored.",
+    constraints: [
+      "1 <= n <= 10^5",
+      "0 <= m <= 2 * 10^5",
+      "1 <= u, v <= n",
+    ],
+    note:
+      "In the first sample n is 5 and the edges are 1-2, 2-3 and 4-5. Vertices " +
+      "{1, 2, 3} form one component and {4, 5} form another, so the answer is 2.\n\n" +
+      "The second sample has n = 4 and m = 0, so there are no edges at all and every " +
+      "vertex is its own component: the answer is 4. That case is worth reading " +
+      "carefully, because a solution that only counts vertices it has seen in the edge " +
+      "list will print 0 here.",
     tests: [
-      { input: "5 2\n1 2\n3 4\n", expected: "3", isSample: true },
-      { input: "1 0\n", expected: "1", isSample: true },
-      { input: "4 4\n1 2\n2 3\n3 4\n4 1\n", expected: "1" },
-      { input: "3 0\n", expected: "3" },
-      { input: "6 3\n1 2\n2 3\n4 5\n", expected: "3" },
+      { input: "5 3\n1 2\n2 3\n4 5\n", expected: "2\n", isSample: true },
+      { input: "4 0\n", expected: "4\n", isSample: true },
+      { input: "1 0\n", expected: "1\n" },
+      { input: "3 3\n1 2\n2 3\n1 3\n", expected: "1\n" },
+      { input: "6 3\n1 1\n2 2\n3 4\n", expected: "5\n" },
+      { input: "4 4\n1 2\n1 2\n1 2\n3 4\n", expected: "2\n" },
     ],
   },
   {
@@ -365,7 +412,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "graph-query",
     statement:
       "Print the fewest edges from source to target in an unweighted undirected graph, or -1 if unreachable.\n\nInput: n m, then m edges u v, then source target\nOutput: a single integer.",
-    constraints: "1 <= n <= 10^5, 0 <= m <= 2*10^5",
+    constraints: ["1 <= n <= 10^5, 0 <= m <= 2*10^5"],
     tests: [
       { input: "4 3\n1 2\n2 3\n3 4\n1 4\n", expected: "3", isSample: true },
       { input: "2 0\n1 2\n", expected: "-1", isSample: true },
@@ -382,7 +429,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "graph",
     statement:
       'Edges are directed from u to v. Print "YES" if a topological order exists, otherwise "NO".\n\nInput: n m, then m edges u v\nOutput: YES or NO.',
-    constraints: "1 <= n <= 10^5, 0 <= m <= 2*10^5",
+    constraints: ["1 <= n <= 10^5, 0 <= m <= 2*10^5"],
     tests: [
       { input: "3 2\n1 2\n2 3\n", expected: "YES", isSample: true },
       { input: "3 3\n1 2\n2 3\n3 1\n", expected: "NO", isSample: true },
@@ -399,7 +446,7 @@ export const PROBLEMS: SeedProblem[] = [
     validatorKey: "graph-weighted",
     statement:
       "Print the minimum total weight from source to target in an undirected weighted graph, or -1 if unreachable.\n\nInput: n m, then m edges u v w, then source target\nOutput: a single integer.\n\nTotal path weight can exceed 32 bits.",
-    constraints: "1 <= n <= 10^5, 0 <= m <= 2*10^5, 1 <= w <= 10^6",
+    constraints: ["1 <= n <= 10^5, 0 <= m <= 2*10^5, 1 <= w <= 10^6"],
     tests: [
       { input: "4 4\n1 2 1\n2 3 1\n1 3 5\n3 4 2\n1 4\n", expected: "4", isSample: true },
       { input: "2 0\n1 2\n", expected: "-1", isSample: true },

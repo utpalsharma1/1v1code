@@ -265,6 +265,15 @@ async function runSubmission(
  * is the worst outcome in the product. The offset makes it likely both can
  * land it and the match is decided by speed and nerve.
  */
+/** Rename `testCases` to `samples`, so nothing downstream can mistake the
+ *  public set for the full one. */
+function shape(row: {
+  testCases: { input: string; expected: string }[];
+} & Omit<MatchProblem, "samples">): MatchProblem {
+  const { testCases, ...rest } = row;
+  return { ...rest, samples: testCases };
+}
+
 async function pickProblem(
   r1: number,
   r2: number,
@@ -283,10 +292,28 @@ async function pickProblem(
   if (band) {
     const inBand = await prisma.problem.findMany({
       where: { rating: { gte: band.min, lte: band.max } },
-      select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        rating: true,
+        statement: true,
+        inputFormat: true,
+        outputFormat: true,
+        constraints: true,
+        note: true,
+        timeLimitMs: true,
+        memoryLimitMb: true,
+        // isSample true ONLY. The hidden set never leaves the judge.
+        testCases: {
+          where: { isSample: true },
+          orderBy: { ordinal: "asc" },
+          select: { input: true, expected: true },
+        },
+      },
     });
     if (inBand.length === 0) return null;
-    return inBand[Math.floor(Math.random() * inBand.length)]!;
+    return shape(inBand[Math.floor(Math.random() * inBand.length)]!);
   }
 
   const target = (r1 + r2) / 2 - 120;
@@ -295,7 +322,25 @@ async function pickProblem(
 
   const inBand = await prisma.problem.findMany({
     where: { rating: { gte: lo, lte: hi } },
-    select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
+    select: {
+        id: true,
+        slug: true,
+        title: true,
+        rating: true,
+        statement: true,
+        inputFormat: true,
+        outputFormat: true,
+        constraints: true,
+        note: true,
+        timeLimitMs: true,
+        memoryLimitMb: true,
+        // isSample true ONLY. The hidden set never leaves the judge.
+        testCases: {
+          where: { isSample: true },
+          orderBy: { ordinal: "asc" },
+          select: { input: true, expected: true },
+        },
+      },
   });
 
   const pool = inBand.length > 0
@@ -303,11 +348,29 @@ async function pickProblem(
     : await prisma.problem.findMany({
         take: 5,
         orderBy: { rating: "asc" },
-        select: { id: true, slug: true, title: true, rating: true, statement: true, constraints: true },
+        select: {
+        id: true,
+        slug: true,
+        title: true,
+        rating: true,
+        statement: true,
+        inputFormat: true,
+        outputFormat: true,
+        constraints: true,
+        note: true,
+        timeLimitMs: true,
+        memoryLimitMb: true,
+        // isSample true ONLY. The hidden set never leaves the judge.
+        testCases: {
+          where: { isSample: true },
+          orderBy: { ordinal: "asc" },
+          select: { input: true, expected: true },
+        },
+      },
       });
 
   if (pool.length === 0) return null;
-  return pool[Math.floor(Math.random() * pool.length)]!;
+  return shape(pool[Math.floor(Math.random() * pool.length)]!);
 }
 
 async function cardFor(identity: Identity): Promise<PlayerCard> {
