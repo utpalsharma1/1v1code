@@ -151,15 +151,44 @@ cmd_down() {
 }
 
 cmd_status() {
+  local failed=0
   head_ "Status"
   docker compose ps --format '  {{.Service}}: {{.Status}}' 2>/dev/null || bad "docker unavailable"
-  for pair in "judge:judge/src/index.ts" "gateway:gateway/src/index.ts" "web:@1v1/web"; do
-    local name="${pair%%:*}" frag="${pair#*:}" pid
-    if pid="$(running "$name" "$frag")"; then ok "$name (pid $pid)"; else bad "$name not running"; fi
+    # A PID FILE IS NOT EVIDENCE. This reported healthy while an orphaned
+  # gateway held :4000 and the pidfile pointed at a newer process that had
+  # failed to bind — so a security probe ran against a build nobody thought
+  # was live, and its result looked real. Check the port, and check who owns
+  # it.
+  for triple in "judge:judge/src/index.ts:" "gateway:gateway/src/index.ts:4000" "web:@1v1/web:3000"; do
+    local name port pid owner
+    name="${triple%%:*}"; port="${triple##*:}"
+    local frag="${triple#*:}"; frag="${frag%:*}"
+
+    if pid="$(running "$name" "$frag")"; then ok "$name (pid $pid)"; else bad "$name not running"; failed=1; fi
+
+    [ -n "$port" ] || continue
+    owner="$(ss -ltnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)"
+    if [ -z "$owner" ]; then
+      bad "  nothing is listening on :$port"
+      failed=1
+    elif [ -n "${pid:-}" ] && [ "$owner" != "$pid" ] && ! pstree -p "$pid" 2>/dev/null | grep -q "($owner)"; then
+      bad "  :$port is held by pid $owner, NOT by $name (pid $pid) — stale process"
+      failed=1
+    fi
+
+      # A flag that disables security enforcement must be loud whenever it is
+  # on. probe:visibility uses it for its positive control and it must never
+  # be left set by accident.
+    if [ "$name" = "gateway" ] && [ -n "$owner" ]; then
+      if tr "\0" "\n" < "/proc/$owner/environ" 2>/dev/null | grep -q "^BREAK_VISIBILITY=1$"; then
+        printf "  \033[31m!! BREAK_VISIBILITY=1 IS SET — the visibility rule is DISABLED\033[0m\n"
+        printf "     Every probe result is meaningless until this gateway is restarted.\n"
+        failed=1
+      fi
+    fi
   done
 
   head_ "Routes"
-  local failed=0
   for route in / /play /dev/sparring /dev/spectate /dev/hud /dev/judge /dev/kitchen-sink /login /register; do
     local code
     code="$(curl -s -o /dev/null -m 30 -w '%{http_code}' "http://localhost:3000$route" 2>/dev/null)"

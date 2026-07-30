@@ -663,6 +663,35 @@ Spectators get the full stream because they are not competing. That asymmetry *i
 
 A denylist would have shipped all four, because each was individually plausible and nobody was looking. So the opponent's view is **constructed, never filtered** — `opponentVerdictView` in `apps/gateway/src/relay.ts` builds a fresh object, and adding a field to the verdict payload therefore cannot leak it. What the opponent legitimately sees is fixed by §6.4 and §6.5: **pass/fail and the test counts.** That is the whole list.
 
+### Every channel, and what it may carry
+
+Five leaks were found one at a time, all in channels nobody had audited. This is the full list, so what remains is known rather than discovered. **Constructed** means a fresh object is built for that audience and a new field cannot leak into it; **inline** means the payload is written at the send site and depends on discipline.
+
+| channel | audience | discloses | shape |
+| --- | --- | --- | --- |
+| `queue.status` | self | **your own** band, an aggregate `inQueue` count, `alone`, the ceiling | inline — **no roster, no other player's rating, no identities** |
+| `queue.left` | self | nothing | inline |
+| `match.found` | each side | opponent handle, rating, tier, and `userId` | inline — `userId` is unnecessary and should go |
+| `match.accept.progress` | both | two booleans | inline |
+| `match.countdown` · `match.clock` | both | shared beat / remaining ms | inline |
+| `match.start` | both | the problem, identical for both | inline |
+| `match.presence` | both | a side dropped, grace remaining | inline — visible **by design** (§6.5) |
+| `match.resync` | self | own state, plus both `PlayerCard`s | inline — **safe only by echoing `match.found`**; it has no constructor of its own |
+| `match.end` | both + spectators | outcome, and **both sides'** rating deltas | inline — defensible in a 1v1 (yours implies theirs) but not argued for |
+| `submission.ack` · `test.result` | **own side only** | own progress | inline |
+| `submission.verdict` | own side + spectators | full verdict incl. compiler diagnostics | inline — never sent to the opponent |
+| `opponent.verdict` | opponent | **pass/fail and counts only** | **constructed** (`opponentVerdictView`) |
+| `match.judging` | both + spectators | which sides owe a verdict | inline — already implied by `opponent.status` |
+| `opponent.pulse` | opponent + spectators | a keystroke **count** | inline — §6.4's whole point |
+| `opponent.status` | opponent + spectators | activity and passed/total | inline — §6.4/§6.5 by design |
+| `editor.delta` · `editor.snapshot` | spectators; opponent **only after the match** | **source text** | gated by `mayView` per recipient |
+| `editor.desync` | own side | expected vs received `seq` | inline |
+| `spectate.ready` · `spectate.ended` | spectators | handles, problem, delay, outcome | inline |
+
+**Three are safe only by accident and should be constructed when next touched:** `match.resync` (it re-sends `match.found`'s player cards with no constructor, so a field added there appears in two places), `match.end`'s `ratings` array (both sides' deltas, never argued for), and `match.found`'s `userId` (an internal identifier the client does not use).
+
+**On privacy in the queue.** Nothing discloses who else is queued, at what rating, or that a named person is online. `inQueue` is a **count**, `ratingBand` is derived from *your own* rating, and there is no presence broadcast outside a match at all. That is a property worth keeping deliberately: a roster or an online-list would be cheap to add now and awkward to retract once anyone relies on it.
+
 **Timing and memory figures are on the same footing** and are currently not on the wire at all. `runtimeMs` and `memoryKb` exist in the judge's own events; forwarding either to an opponent would disclose approach — 2ms against 800ms says whether someone found the intended solution — so they stay behind the allowlist.
 
 **The spectator channel has the mirror problem, and it is clean by construction.** Spectators may see source, so verdict text discloses nothing extra. What they must never see is the *test data*, because a viewer who could read expected outputs could feed answers to a player out of band. They cannot: the judge protocol never puts expected or actual output on the wire. A `test` event carries `ordinal`, `verdict`, `runtimeMs` and `memoryKb`; `done` carries counts and `failedAt`; `message` is populated only from compiler diagnostics. Expected outputs never leave the judge process. **Keep it that way** — adding an "expected vs actual" diff to a verdict would hand spectators the answer key.

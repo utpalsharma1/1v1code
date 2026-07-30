@@ -2,112 +2,89 @@
 
 ## SESSION STOP — read this first
 
-**Verdict channel audited and locked to an allowlist. Nav shipped. CHALLENGE LINKS NOT STARTED —
-the lifecycle-equivalence probe you asked for comes first and that is its own session.**
-Working tree clean. Cold start: `pnpm stack`.
+**All 22 channels enumerated in §10. `stack:status` no longer trusts a pidfile. CHALLENGE LINKS NOT
+STARTED — the ordered plan is below and unchanged.** Working tree clean. Cold start: `pnpm stack`.
 
-### 1. The verdict audit — three more leaks, same shape as the first
+### 1. Every channel, audited — the list is in CLAUDE.md §10
 
-Going field by field through what the opponent's socket receives turned up **three siblings** of the
-compile-error leak, each individually plausible and none of them noticed by anyone:
+22 server-to-client channels, each with one line on what it discloses and whether it is
+**constructed** (a fresh object per audience, so a new field cannot leak into it) or **inline**
+(written at the send site, safe by discipline). The full table is in §10 under *Every channel, and
+what it may carry*.
 
-| field | what it discloses | verdict |
-| --- | --- | --- |
-| `message` | compiler output — diagnostics **quote the source lines** | hidden (was already fixed) |
-| `failedAt` | which test index broke them — intelligence about the **test data**, worse than intelligence about their code because it helps against every future opponent on that problem | **hidden** |
-| `submissionId` | embeds the monotonic receipt stamp, so it discloses exactly when they submitted and by how much they led | **hidden** |
-| verdict kind | *how* they failed. `TIME_LIMIT` says their approach is too slow — a strong hint the intended solution needs better complexity | **collapsed to pass/fail** |
-| `passed` / `total` | test-bar counts — §6.4 by design | allowed |
+**Three are safe only by accident**, and §10 names them so they get constructed when next touched:
 
-**The fix is structural, not four patches.** `opponentVerdictView` in `relay.ts` **constructs** the
-opponent's payload rather than filtering one, so adding a field to the verdict cannot leak it — it
-is simply not copied. §10 now states the rule: **the opponent channel is an allowlist; a new field
-defaults to hidden and has to be argued into visibility.** A denylist would have shipped all four.
+- **`match.resync`** re-sends `match.found`'s player cards with no constructor of its own. A field
+  added to a `PlayerCard` therefore appears in two places, and only one of them has ever been
+  audited. This is the same shape as the compile-error leak: a second path nobody was watching.
+- **`match.end`'s `ratings` array** carries **both** sides' deltas. Defensible in a 1v1 — yours
+  implies theirs — but it was never argued for, and "defensible" is how the other four got in.
+- **`match.found`'s `userId`** is an internal identifier the client never uses.
 
-**Timing and memory are on the same footing and are not on the wire at all today.** `runtimeMs` and
-`memoryKb` exist in the judge's own events; forwarding either would disclose approach — 2ms against
-800ms says whether someone found the intended solution — so they stay behind the allowlist.
+**On the privacy question — nothing leaks the queue.** `inQueue` is a **count**, `ratingBand` is
+derived from *your own* rating, and **there is no presence broadcast outside a match at all**. So
+nothing discloses who else is queued, at what rating, or that a named person is online. §10 now
+records that as a property to keep deliberately rather than a coincidence: a roster or an online
+list would be cheap to add and awkward to retract once anyone relies on it.
 
-`probe:visibility` now runs **10 attacks**, three of them aimed at the verdict channel: the victim
-deliberately compile-fails, runtime-fails with the secret in a traceback, and prints the secret as
-wrong-answer stdout. **Positive control performed and it caught a real difference** — with
-`BREAK_VISIBILITY=1` the probe reports `opponent.verdict carried a disallowed field: verdict` for
-all three failure modes plus the source leak, and passes clean with enforcement restored.
+### 2. `stack:status` checks the port, and shouts about the break flag
 
-### 2. The spectator channel — clean by construction, and worth keeping that way
+It now verifies, per service, that **something is actually listening** and that the listener **is the
+process we started** (or a child of it) — a pidfile pointing at a process that failed to bind used to
+report healthy. And for the gateway it reads `/proc/<pid>/environ` and prints, in red:
 
-Spectators may see source, so verdict text discloses nothing extra. The real risk you named is the
-**test data**: a viewer who could read expected outputs could feed answers to a player out of band.
+```
+!! BREAK_VISIBILITY=1 IS SET — the visibility rule is DISABLED
+   Every probe result is meaningless until this gateway is restarted.
+```
 
-**They cannot, and not by policy — by protocol.** The judge never puts expected or actual output on
-the wire: a `test` event carries `ordinal`, `verdict`, `runtimeMs`, `memoryKb`; `done` carries counts
-and `failedAt`; `message` is populated *only* from compiler diagnostics, so even a `RUNTIME_ERROR`
-arrives with `message: null`. Expected outputs never leave the judge process.
+**Verified both ways:** with an orphaned `BREAK_VISIBILITY=1` gateway holding :4000 it fires and
+reports the gateway as not running; on a clean stack it stays silent. That is exactly the situation
+that cost me a debugging cycle last session, and you were right that it would have cost you more —
+you would have believed the probe result.
 
-§10 now records this along with the thing that would break it: **adding an "expected vs actual" diff
-to a verdict would hand spectators the answer key.**
-
-### 3. Navigation
-
-A thin persistent bar in the root layout: **1v1.code · Play · Spectate · Sign in/out**. Deliberately
-three items — the Hub is Phase 3, and §7 caps its rail at six; adding to this is how it quietly
-becomes the Hub without being designed as one.
-
-**Confirmed: `/watch` navigates.** The code form does `router.push('/watch/<code>')`, so the URL is
-shareable from that point on rather than rendering in place.
+**One bug in my own fix, worth recording:** I first wrote those comments as `/* … */`, which bash
+does not understand — `/*` is a glob that becomes a command. **`bash -n` passed anyway**, because it
+is syntactically a valid command word. Caught by reading rather than by the syntax check, which is
+the same lesson as the containment suite's positive control: a green check on the wrong question.
 
 ### Verified this session
 
-`probe:visibility` 10/10 with a positive control that fails on all three verdict attacks ·
-`probe:latejoin` 6/6 character-exact · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 ·
-build clean.
+`probe:visibility` 10/10 · core 56/56 · smoke 5/5 · typecheck 7/7 · `stack:status` verified in both
+the clean and the broken case.
 
-**One operational note from my own mess:** I orphaned a `BREAK_VISIBILITY=1` gateway on :4000 while
-testing the control, and `pnpm stack` reported healthy because its pidfile pointed at a *newer*
-process that had failed to bind. The probe then failed against a build I thought was clean. If
-results ever contradict the code, check what is actually listening:
-`ss -ltnp | grep :4000` and `tr '\0' '\n' < /proc/<pid>/environ`. `stack:status` trusting a pidfile
-over the port is a gap worth closing.
+### CHALLENGE LINKS — not started; plan unchanged and now with two more answers
 
-### CHALLENGE LINKS — not started, and the order matters
+The order still stands: **`probe:lifecycle` first**, written against matchmaking, so "identical" is
+defined before there is an implementation to rationalise against. Then challenge creation must pass
+that same probe unchanged.
 
-You said the lifecycle equivalence is the work and it gets a probe rather than eyes. I agree, and
-that is exactly why I did not start the feature in the tail of this session: **the probe has to come
-first**, and writing it against a path that does not exist yet is the whole point — it defines what
-"identical" means before there is an implementation to rationalise.
+**Your two additions, answered from the code:**
 
-**The plan, in order:**
+**A guest match is shareable, and the watch path assumes nothing about registration.** The
+spectator code lives on the `LiveMatch` and on the `Match` row, generated in `createMatch` with no
+reference to either player's account state. `spectate.watch` resolves the code, checks `canSpectate`
+by user id, and calls `sendSnapshot` — none of which reads `isGuest`, a rating, or a session. The
+anonymous viewer path added for `/watch` is entirely separate from the guest path, and the two must
+not be conflated: **an anonymous viewer cannot play; a guest can.** So a guest's match is shareable
+today, and the only thing left to confirm by running it is that `spectate.ended`'s Postgres lookup
+returns handles for a guest row, which it will because a guest is a real `User`.
 
-1. **`probe:lifecycle` first, against matchmaking only.** Capture the canonical state sequence
-   (`QUEUED → MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED`), the event-log shape, and
-   behaviour under abandonment, reconnection and the §6.7b hold. Assert a matched match satisfies
-   it. That is the reference.
-2. **Then challenge creation**, and the same probe run against a challenge-created match must pass
-   unchanged. Not "looked the same" — the same assertions.
-3. Guests, expiry, stale-link screen, one-click rematch.
+**A guest reconnecting after closing the browser is the real gap.** A registered player resumes from
+a session cookie; a guest has a `User` row but **no credentials to log back in with**, so if the
+guest's cookie is gone the identity is unreachable and a blip becomes a forfeit. Options, with a
+recommendation:
 
-**Guest identity — the paths I already know it touches**, from reading rather than guessing:
+- **Recommended: give the guest a session cookie exactly like a registered user.** They already get a
+  `User` row, so `createSession` works unchanged, and the whole reconnect path — queue intent,
+  `match.resync`, the 45s grace — then behaves identically with no new code. The account is
+  credential-less, not session-less. That is the smallest change and it removes the special case
+  rather than handling it.
+- Rejected: a guest-specific reconnect token in `localStorage`. It is a second auth mechanism for
+  one identity class, and §10's lesson is that a second path is where behaviour diverges.
 
-- **`isRated`** in `rating.ts` already returns false when either side is a guest, so Glicko is
-  skipped and no `RatingEvent` rows are written. **Already correct.**
-- **The RD > 100 bot gate** is downstream of `isRated`, so it never runs for a guest. Correct by
-  construction, but the bot is held anyway.
-- **`VOID` / `CANCELED`** carry no rating change for anyone, so guests need nothing.
-- **CPU budget and rate limits are keyed on user id**, and a guest has a real `User` row, so they
-  work — but the **per-IP limit matters much more for guests**, because a guest is free to mint. §11
-  already says per-IP applies to accounts under 24 hours old; guests are exactly that population.
-- **Socket tickets** resolve a user id and will work unchanged. The anonymous path added for
-  `/watch` is *separate* and must not be confused with a guest: an anonymous viewer cannot play, a
-  guest can.
-- **The event log** records `p1`/`p2` user ids, so a guest appears normally.
-
-The one that genuinely needs a decision rather than a check: **guests must not be able to create
-challenge links**, or a guest account becomes a spam primitive — that is a gateway refusal keyed on
-`isGuest`, in the same shape as `playerOnly` for anonymous sockets.
-
-**Difficulty:** host picks explicitly using `Challenge.ratingMin`/`ratingMax`, which already exist.
-With a guest involved that band is the *only* input, because mean−120 has no second rating to work
-from. Two registered players keep mean−120 within the host's band.
+That distinction — **credential-less, not session-less** — is the thing to get right, and it is why
+the guest work should follow the lifecycle probe rather than precede it.
 
 ## What class of check would have caught this — and what is still eye-only
 
