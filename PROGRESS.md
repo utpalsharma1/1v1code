@@ -2,130 +2,112 @@
 
 ## SESSION STOP — read this first
 
-**§12 re-scoped. All four /watch fixes shipped, plus the late-joiner path. CHALLENGE LINKS NOT
-STARTED — reasoning at the end.** Working tree clean.
+**Verdict channel audited and locked to an allowlist. Nav shipped. CHALLENGE LINKS NOT STARTED —
+the lifecycle-equivalence probe you asked for comes first and that is its own session.**
+Working tree clean. Cold start: `pnpm stack`.
 
-**Cold start: `cd ~/1v1.code && pnpm stack`.**
+### 1. The verdict audit — three more leaks, same shape as the first
 
-### Scope changes in §12
+Going field by field through what the opponent's socket receives turned up **three siblings** of the
+compile-error leak, each individually plausible and none of them noticed by anyone:
 
-- **2C-2's load half is deferred**, with the reasoning recorded: tiered fanout and saturation
-  measurement target thousands of viewers, the estimate says 500–1000 works with no batching, and a
-  number measured on WSL2 is not production's number.
-- **The late-joiner path moved out of 2C-2 and shipped here**, because a shared link is opened
-  mid-match by definition — the normal case, not an edge case.
-- The road to launch is now **watch link → challenge links → deployment**. Ghost Races is noted as
-  the first thing to reconsider after launch, on the argument that it would be the replay log's
-  first consumer and would test §10's purity claim while the format is still cheap to change.
+| field | what it discloses | verdict |
+| --- | --- | --- |
+| `message` | compiler output — diagnostics **quote the source lines** | hidden (was already fixed) |
+| `failedAt` | which test index broke them — intelligence about the **test data**, worse than intelligence about their code because it helps against every future opponent on that problem | **hidden** |
+| `submissionId` | embeds the monotonic receipt stamp, so it discloses exactly when they submitted and by how much they led | **hidden** |
+| verdict kind | *how* they failed. `TIME_LIMIT` says their approach is too slow — a strong hint the intended solution needs better complexity | **collapsed to pass/fail** |
+| `passed` / `total` | test-bar counts — §6.4 by design | allowed |
 
-### The late joiner — verified, six times
+**The fix is structural, not four patches.** `opponentVerdictView` in `relay.ts` **constructs** the
+opponent's payload rather than filtering one, so adding a field to the verdict cannot leak it — it
+is simply not copied. §10 now states the rule: **the opponent channel is an allowlist; a new field
+defaults to hidden and has to be argued into visibility.** A denylist would have shipped all four.
 
-`pnpm probe:latejoin` runs a live match with a player typing continuously at ~50ms per delta, joins
-as a fresh anonymous spectator **six times at different points including mid-burst**, and after each
-join diffs the spectator's reconstructed document against the gateway's authoritative text.
+**Timing and memory are on the same footing and are not on the wire at all today.** `runtimeMs` and
+`memoryKb` exist in the judge's own events; forwarding either would disclose approach — 2ms against
+800ms says whether someone found the intended solution — so they stay behind the allowlist.
 
-```
-join 1: exact match at  51 chars      join 4: exact match at 132 chars
-join 2: exact match at  81 chars      join 5: exact match at 156 chars
-join 3: exact match at 113 chars      join 6: exact match at 176 chars
-```
+`probe:visibility` now runs **10 attacks**, three of them aimed at the verdict channel: the victim
+deliberately compile-fails, runtime-fails with the secret in a traceback, and prints the secret as
+wrong-answer stdout. **Positive control performed and it caught a real difference** — with
+`BREAK_VISIBILITY=1` the probe reports `opponent.verdict carried a disallowed field: verdict` for
+all three failure modes plus the source leak, and passes clean with enforcement restored.
 
-Character-exact every time. A single-character difference would be a failure, because a spectator
-seeing plausible code that was never written is the silent corruption §10 exists to forbid.
+### 2. The spectator channel — clean by construction, and worth keeping that way
 
-### A real leak, found by asking what a spectator receives
+Spectators may see source, so verdict text discloses nothing extra. The real risk you named is the
+**test data**: a viewer who could read expected outputs could feed answers to a player out of band.
 
-Chasing "why does the spectator see nothing when the match ends" turned up something worse than the
-missing screen: **`submission.verdict` carries `message`, which on `COMPILE_ERROR` is compiler
-output — and compiler diagnostics quote the offending source lines.** It was going to both players
-via `toMatch`, so a player could read fragments of the opponent's code by waiting for them to make a
-compile error.
+**They cannot, and not by policy — by protocol.** The judge never puts expected or actual output on
+the wire: a `test` event carries `ordinal`, `verdict`, `runtimeMs`, `memoryKb`; `done` carries counts
+and `failedAt`; `message` is populated *only* from compiler diagnostics, so even a `RUNTIME_ERROR`
+arrives with `message: null`. Expected outputs never leave the judge process.
 
-Fixed: the submitter gets the full verdict, spectators get it (they may already see the whole
-document), and **the opponent gets the same verdict with the diagnostic stripped**. §10's visibility
-rule had a hole in a channel nobody had thought to check.
+§10 now records this along with the thing that would break it: **adding an "expected vs actual" diff
+to a verdict would hand spectators the answer key.**
 
-### 1. Code entry point — `/watch`
+### 3. Navigation
 
-`/watch/<code>` is unchanged and still one click. `/watch` with no code is a typed entry point, which
-is what the ten-character length was always for — two spoken groups of five.
+A thin persistent bar in the root layout: **1v1.code · Play · Spectate · Sign in/out**. Deliberately
+three items — the Hub is Phase 3, and §7 caps its rail at six; adding to this is how it quietly
+becomes the Hub without being designed as one.
 
-The input uses `normaliseCode`, which already implemented Crockford's decoding rules: uppercase,
-strip spaces and hyphens, **O → 0, I and L → 1, U → V**. Those characters are excluded from the
-alphabet precisely because people confuse them, so mapping them to what a speaker meant is the point
-of choosing Crockford. The field **echoes the accepted form back** (`Reading as 0HENN-5BPHX`) so the
-forgiveness is visible rather than silent. An invalid code keeps the identical response.
-
-**One structural fix this needed:** `codes.ts` imports `node:crypto` for `generateCode`, which
-webpack cannot bundle — importing it from a page 500s the route, the same failure that bit the pulse
-helpers. The pure formatting and decoding rules now live in `code-format.ts`, exported as
-`@1v1/core/codes`, and `codes.ts` re-exports them.
-
-### 2. The spectator ending — and the root cause was not a missing screen
-
-`match.end` **never reached spectators at all**. `toMatch` sends to p1 and p2 only, so the stream
-simply stopped. There is now `toSpectators` and `toEveryone`, and match-wide news — the ending, the
-judging hold, both sides' test counts — reaches everyone watching.
-
-The ending is a §6.7 beat rather than a status line: the winner's plate saturates and keeps its
-player border while the loser's desaturates to greyscale, both nameplates resolve, and it states who
-won and **how** — solved, forfeit, opponent never accepted, draw, canceled, void — with final test
-counts per side and elapsed time. **No rating delta**, because a spectator's §6.7 is the outcome,
-not the consequence.
-
-Every ending has its own sentence. **`VOID` says what happened** — *"a verdict was lost on our side…
-our infrastructure failed, not either player"* — rather than looking like a crash, which is the
-entire reason it is a separate outcome from `CANCELED`.
-
-Then: **Watch another** → `/watch`, **Stop watching** → home. The dead end is closed.
-
-### 3. The judging hold, for a spectator
-
-`match.judging` now reaches spectators, and the watch page renders **AWAITING VERDICT** with who is
-being judged — one name, or "both submissions are being judged". A spectator watching two people
-wait on verdicts is the tensest thing in the product and it no longer looks frozen.
-
-### 4. The ended-match case — your reasoning was right
-
-The oracle argument only holds when we **refuse access but confirm validity**. A finished match's
-code grants access to the replay, so confirming it exists leaks nothing. A valid code for an ended
-match now says so — who played, on what, how it ended, and that replay lands in Phase 3 — while
-unknown and malformed codes keep the identical response. A friend clicking a link three minutes late
-gets a real answer instead of something indistinguishable from a broken link.
+**Confirmed: `/watch` navigates.** The code form does `router.push('/watch/<code>')`, so the URL is
+shareable from that point on rather than rendering in place.
 
 ### Verified this session
 
-`probe:latejoin` 6/6 character-exact · `probe:visibility` 7/7 with the positive control ·
-`probe:match` · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · production build clean
-including `/watch` and `/watch/[code]`.
+`probe:visibility` 10/10 with a positive control that fails on all three verdict attacks ·
+`probe:latejoin` 6/6 character-exact · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 ·
+build clean.
 
-**Not verified by eye:** the spectator ending screen, the hold, and the code entry page. The probes
-prove the events arrive and the documents are exact; nobody has watched a match end from `/watch`.
+**One operational note from my own mess:** I orphaned a `BREAK_VISIBILITY=1` gateway on :4000 while
+testing the control, and `pnpm stack` reported healthy because its pidfile pointed at a *newer*
+process that had failed to bind. The probe then failed against a build I thought was clean. If
+results ever contradict the code, check what is actually listening:
+`ss -ltnp | grep :4000` and `tr '\0' '\n' < /proc/<pid>/environ`. `stack:status` trusting a pidfile
+over the port is a gap worth closing.
 
-### CHALLENGE LINKS — NOT STARTED, and why
+### CHALLENGE LINKS — not started, and the order matters
 
-This is the last feature before deployment and it deserves a session rather than a tail end.
+You said the lifecycle equivalence is the work and it gets a probe rather than eyes. I agree, and
+that is exactly why I did not start the feature in the tail of this session: **the probe has to come
+first**, and writing it against a path that does not exist yet is the whole point — it defines what
+"identical" means before there is an implementation to rationalise.
 
-It is not one feature but four, and three of them touch things that are currently load-bearing:
+**The plan, in order:**
 
-1. **Guest accounts.** A `User` row with `isGuest`, no credentials, a socket identity that can play
-   but not queue or create links, unrated on both sides, a 7-day expiry, and a claim flow that
-   adopts the same row. That is a new *class* of identity, and every rating and lifecycle path has
-   to be checked against it.
-2. **A second match-creation path.** You named the real risk exactly: the state machine assumes
-   matchmaking created the match. Verifying that a challenge-created match walks the identical
-   lifecycle — accept window, countdown, reconnection, the §6.7b hold, abandonment, settlement —
-   is most of the work, and it is verification I would want to do with a probe rather than by eye,
-   because "it looked the same" is how two behaviours diverge quietly.
-3. **Difficulty without a rating band.** Worth deciding rather than defaulting: my recommendation is
-   the host picks a band explicitly (the §7 spec already has `ratingMin`/`ratingMax` on `Challenge`),
-   and where a guest is involved that band is the *only* input — mean−120 has nothing to work from
-   when one side has no rating. For two registered players the existing mean−120 still applies.
-4. Expiry, the stale-link screen, one-click rematch, `UNLISTED` with zero spectator delay.
+1. **`probe:lifecycle` first, against matchmaking only.** Capture the canonical state sequence
+   (`QUEUED → MATCHED → ACCEPTING → COUNTDOWN → LIVE → JUDGING → ENDED`), the event-log shape, and
+   behaviour under abandonment, reconnection and the §6.7b hold. Assert a matched match satisfies
+   it. That is the reference.
+2. **Then challenge creation**, and the same probe run against a challenge-created match must pass
+   unchanged. Not "looked the same" — the same assertions.
+3. Guests, expiry, stale-link screen, one-click rematch.
 
-The `Challenge` model already exists in the schema with `code`, `hostId`, mode, visibility, the
-rating band, `allowGuest`, `expiresAt`, `consumedAt` and `consumedById` — so the data design is
-done and unused, exactly as `spectatorCode` was before this session.
+**Guest identity — the paths I already know it touches**, from reading rather than guessing:
+
+- **`isRated`** in `rating.ts` already returns false when either side is a guest, so Glicko is
+  skipped and no `RatingEvent` rows are written. **Already correct.**
+- **The RD > 100 bot gate** is downstream of `isRated`, so it never runs for a guest. Correct by
+  construction, but the bot is held anyway.
+- **`VOID` / `CANCELED`** carry no rating change for anyone, so guests need nothing.
+- **CPU budget and rate limits are keyed on user id**, and a guest has a real `User` row, so they
+  work — but the **per-IP limit matters much more for guests**, because a guest is free to mint. §11
+  already says per-IP applies to accounts under 24 hours old; guests are exactly that population.
+- **Socket tickets** resolve a user id and will work unchanged. The anonymous path added for
+  `/watch` is *separate* and must not be confused with a guest: an anonymous viewer cannot play, a
+  guest can.
+- **The event log** records `p1`/`p2` user ids, so a guest appears normally.
+
+The one that genuinely needs a decision rather than a check: **guests must not be able to create
+challenge links**, or a guest account becomes a spam primitive — that is a gateway refusal keyed on
+`isGuest`, in the same shape as `playerOnly` for anonymous sockets.
+
+**Difficulty:** host picks explicitly using `Challenge.ratingMin`/`ratingMax`, which already exist.
+With a guest involved that band is the *only* input, because mean−120 has no second rating to work
+from. Two registered players keep mean−120 within the host's band.
 
 ## What class of check would have caught this — and what is still eye-only
 

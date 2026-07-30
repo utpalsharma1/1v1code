@@ -185,3 +185,68 @@ export function canSpectate(opts: {
   const isCompetitor = opts.userId === opts.p1UserId || opts.userId === opts.p2UserId;
   return opts.matchOver || !isCompetitor;
 }
+
+
+/* ── The opponent channel is an ALLOWLIST ────────────────────────────────────
+
+   THE RULE: a field is hidden from the opponent until someone argues it into
+   visibility. Not the reverse.
+
+   Every leak found so far has been a field nobody thought to check, and they
+   were all found by accident rather than by review:
+
+   · `message` on a COMPILE_ERROR is compiler output, and diagnostics QUOTE the
+     offending source lines. Found while asking what a spectator receives.
+   · `failedAt` is which test index broke them — intelligence about the test
+     data, not about their code, which is worse because it helps against every
+     future opponent on the same problem.
+   · `submissionId` embeds the monotonic receipt stamp, so it discloses exactly
+     when they submitted and by how much they led or trailed.
+   · `verdict` discloses HOW they failed. TIME_LIMIT says "their approach is
+     too slow", which is a strong hint that the intended solution needs better
+     complexity. RUNTIME_ERROR says "they crashed". §6.5's near-miss only needs
+     to know that they FAILED.
+
+   A denylist would have shipped all four, because each was individually
+   plausible and nobody was looking. So the opponent's view is CONSTRUCTED,
+   never filtered: adding a field to the verdict payload cannot leak it,
+   because it is simply not copied here.
+
+   What the opponent legitimately sees is fixed by §6.4 and §6.5: the test
+   count, whether the attempt passed, and derived activity signals. That is the
+   whole list. */
+
+export interface OpponentVerdictView {
+  matchId: string;
+  side: Side;
+  /** PASS or FAIL only. Never the specific verdict — see above. */
+  outcome: "pass" | "fail";
+  passed: number;
+  total: number;
+}
+
+export function opponentVerdictView(input: {
+  matchId: string;
+  side: Side;
+  verdict: string;
+  passed: number;
+  total: number;
+  failedAt?: number | null;
+  message?: string | null;
+}): OpponentVerdictView {
+  /* POSITIVE CONTROL. The same flag that removes `canSee` also removes this
+     allowlist, so the verdict attacks in probe:visibility are known to detect
+     a regression rather than merely passing. An allowlist that has never been
+     seen to fail is an assumption, not a control. */
+  if (VISIBILITY_BROKEN) {
+    return { ...input, outcome: "fail" } as unknown as OpponentVerdictView;
+  }
+
+  return {
+    matchId: input.matchId,
+    side: input.side,
+    outcome: input.verdict === "ACCEPTED" ? "pass" : "fail",
+    passed: input.passed,
+    total: input.total,
+  };
+}

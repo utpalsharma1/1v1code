@@ -654,6 +654,19 @@ Spectators get the full stream because they are not competing. That asymmetry *i
 
 **A player in a live match may not spectate that match.** Otherwise the spectator path becomes a trivial bypass of the rule above. §7's mandatory 45-second ranked delay does not fix this — 45-second-old source is still an enormous advantage in an eight-minute match, and on unranked matches the delay is zero. The gateway refuses by identity, and the refusal is not a UI affordance that can be skipped.
 
+**The opponent channel is an ALLOWLIST, not a denylist.** A field is hidden from the opposing player until someone argues it into visibility. This is a rule about defaults, and it exists because every leak found so far was a field nobody thought to check:
+
+- **`message`** on a `COMPILE_ERROR` is compiler output, and diagnostics *quote the offending source lines*. It was going to both players.
+- **`failedAt`** is which test index broke them — intelligence about the *test data*, which is worse than intelligence about their code because it helps against every future opponent on the same problem.
+- **`submissionId`** embeds the monotonic receipt stamp, so it discloses exactly when they submitted and by how much they led.
+- **the verdict kind** discloses *how* they failed. `TIME_LIMIT` says their approach is too slow, which is a strong hint that the intended solution needs better complexity.
+
+A denylist would have shipped all four, because each was individually plausible and nobody was looking. So the opponent's view is **constructed, never filtered** — `opponentVerdictView` in `apps/gateway/src/relay.ts` builds a fresh object, and adding a field to the verdict payload therefore cannot leak it. What the opponent legitimately sees is fixed by §6.4 and §6.5: **pass/fail and the test counts.** That is the whole list.
+
+**Timing and memory figures are on the same footing** and are currently not on the wire at all. `runtimeMs` and `memoryKb` exist in the judge's own events; forwarding either to an opponent would disclose approach — 2ms against 800ms says whether someone found the intended solution — so they stay behind the allowlist.
+
+**The spectator channel has the mirror problem, and it is clean by construction.** Spectators may see source, so verdict text discloses nothing extra. What they must never see is the *test data*, because a viewer who could read expected outputs could feed answers to a player out of band. They cannot: the judge protocol never puts expected or actual output on the wire. A `test` event carries `ordinal`, `verdict`, `runtimeMs` and `memoryKb`; `done` carries counts and `failedAt`; `message` is populated only from compiler diagnostics. Expected outputs never leave the judge process. **Keep it that way** — adding an "expected vs actual" diff to a verdict would hand spectators the answer key.
+
 **Bandwidth is not a constraint here, and the numbers should be stated so nobody optimises against a guess.** A competitive programmer sustains roughly 4–5 characters per second while actively typing, and §6.4's whole premise is that typing is bursty — call it 40% of an eight-minute match, so ~800–1200 change events. At 50ms batching that is ~1 change per non-empty batch:
 
 | stream | batches / match | bytes / player / match |

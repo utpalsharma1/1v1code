@@ -14,6 +14,9 @@
        one-click bypass
      · sends a snapshot claiming to be the opponent's editor, to check the
        gateway attributes by identity rather than by payload
+     · makes the victim fail three different ways — compile error, runtime
+       traceback, wrong-answer stdout — each with a secret embedded, and checks
+       the verdict channel discloses none of it
      · uses its OWN MATCH'S SPECTATOR CODE against the /watch path, which is
        the obvious bypass now that the code is printed on the player's screen —
        a competitor holds it by construction
@@ -204,6 +207,48 @@ async function main(): Promise<void> {
     }
   }
   anon.close();
+
+  /* ── The VERDICT channel, attacked on its own terms ─────────────────
+     The compile-error leak had siblings, and each was a field that looked
+     harmless. So the victim now deliberately fails in three different ways
+     while printing a secret, and we assert none of it reaches the attacker. */
+
+  log("attack 8: victim compile-fails with the secret in the source");
+  const compileFail = `def main(  # ${SECRET}\n    this is not python`;
+  victim.emit("code.submit", { matchId, language: "PYTHON3", source: compileFail });
+  await new Promise((r) => setTimeout(r, 12_000));
+
+  log("attack 9: victim runtime-fails with the secret in the traceback");
+  const runtimeFail = `raise ValueError("${SECRET}")\n`;
+  victim.emit("code.submit", { matchId, language: "PYTHON3", source: runtimeFail });
+  await new Promise((r) => setTimeout(r, 15_000));
+
+  log("attack 10: victim prints the secret as wrong-answer output");
+  const wrongOut = `print("${SECRET}")\n`;
+  victim.emit("code.submit", { matchId, language: "PYTHON3", source: wrongOut });
+  await new Promise((r) => setTimeout(r, 15_000));
+
+  /* The allowlist means the attacker should have received `opponent.verdict`
+     and NOT `submission.verdict` for the victim's side. Assert both halves:
+     the signal §6.5 needs did arrive, and the fields it must not carry did
+     not exist at all. */
+  const oppVerdicts = caught.filter((c) => c.event === "opponent.verdict");
+  if (oppVerdicts.length === 0) {
+    failures.push("the opponent never learned the other side had submitted — §6.5 needs that");
+  }
+  for (const v of oppVerdicts) {
+    for (const banned of ["failedAt", "message", "submissionId", "verdict\"", "runtimeMs", "memoryKb"]) {
+      if (v.payload.includes(banned)) {
+        failures.push(`opponent.verdict carried a disallowed field: ${banned} in ${v.payload}`);
+      }
+    }
+  }
+  const leakedVerdict = caught.find(
+    (c) => c.event === "submission.verdict" && c.payload.includes(`"side":"${victimSide}"`),
+  );
+  if (leakedVerdict) {
+    failures.push("the attacker received the victim's full submission.verdict");
+  }
 
   /* ── The verdict ──────────────────────────────────────────────────── */
 

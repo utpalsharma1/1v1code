@@ -316,6 +316,25 @@ function Play() {
       },
     );
 
+    /* §6.5 near-miss, from the ALLOWLISTED opponent view. It carries pass/fail
+       and counts — never the verdict kind, never which test broke them, never
+       compiler output. See relay.ts. */
+    socket.on(
+      "opponent.verdict",
+      (payload: { side: Side; outcome: "pass" | "fail"; passed: number; total: number }) => {
+        setStatuses((prev) => ({
+          ...prev,
+          [payload.side]:
+            payload.total > 0
+              ? { kind: "result", passed: payload.passed, total: payload.total }
+              : { kind: "failed" },
+        }));
+        if (payload.outcome === "fail") {
+          setShatterKeys((prev) => ({ ...prev, [payload.side]: prev[payload.side] + 1 }));
+        }
+      },
+    );
+
     socket.on("match.judging", (payload: { outstanding: Side[] }) => setHolding(payload.outstanding));
 
     socket.on("editor.desync", (payload: { expected: number; got: number }) => {

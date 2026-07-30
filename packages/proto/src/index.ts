@@ -31,6 +31,7 @@ export {
   JudgingHoldSchema,
   MAX_SOURCE_BYTES,
   OpponentPulseSchema,
+  OpponentVerdictSchema,
   OpponentStatusSchema,
   PulseReportSchema,
   RatingDeltaSchema,

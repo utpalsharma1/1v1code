@@ -20,7 +20,7 @@ import {
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
 import { BAND_CEILING, BAND_INTERVAL_MS, Matchmaker, bandFor } from "./matchmaking.ts";
 import { applyOutcome, snapshot, type RatingSnapshot } from "./rating.ts";
-import { canSpectate, type Viewer } from "./relay.ts";
+import { canSpectate, opponentVerdictView, type Viewer } from "./relay.ts";
 import { SubmissionRunner, isInFlight, receipt } from "./submissions.ts";
 import { anonymousIdentity, identify, identifyById, type Identity } from "./session.ts";
 
@@ -211,14 +211,15 @@ async function runSubmission(
           accepted = result.verdict === "ACCEPTED";
           // §6.9: our failure, not theirs. Voids the match, costs nobody rating.
           internalError = result.verdict === "INTERNAL_ERROR";
-          /* `message` is COMPILER OUTPUT, and compiler diagnostics quote the
-             offending source lines. Sending it to the opposing player would
-             leak fragments of their code through the one channel §10 forgot to
-             check — a real hole, found by asking what a spectator receives.
+          /* THREE AUDIENCES, THREE VIEWS.
 
-             So: the submitter gets everything, spectators get everything
-             (they may already see the whole document), and the OPPONENT gets
-             the same verdict with the diagnostic stripped. */
+             The submitter gets everything. Spectators get everything, because
+             they may already read the whole document — nothing in a verdict
+             tells them more than the source does.
+
+             The OPPONENT gets a constructed view, not a filtered one: see
+             `opponentVerdictView` in relay.ts for the allowlist rule and the
+             four fields that had to be argued out of it. */
           const full = {
             matchId: match.id,
             submissionId,
@@ -231,7 +232,12 @@ async function runSubmission(
           };
           emitToSide(match, side, "submission.verdict", full);
           toSpectators(match, "submission.verdict", full);
-          emitToSide(match, other, "submission.verdict", { ...full, message: null });
+          emitToSide(
+            match,
+            other,
+            "opponent.verdict",
+            opponentVerdictView({ matchId: match.id, side, verdict: result.verdict, passed: result.passed, total: result.total }),
+          );
         },
       },
     );

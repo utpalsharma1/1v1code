@@ -270,6 +270,17 @@ export const SubmissionVerdictSchema = z.object({
   message: z.string().nullable(),
 });
 
+/** What the OPPONENT sees when the other side's submission resolves.
+ *  Constructed, not filtered — §10's allowlist rule. Pass/fail and counts, the
+ *  two things §6.4 and §6.5 actually need, and nothing else. */
+export const OpponentVerdictSchema = z.object({
+  matchId: z.string(),
+  side: SideSchema,
+  outcome: z.enum(["pass", "fail"]),
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
 /** §6.7b: your verdict is in, theirs is not. The hold is a beat, not a spinner. */
 export const JudgingHoldSchema = z.object({
   matchId: z.string(),
@@ -358,6 +369,7 @@ export interface ServerToClient {
   "submission.ack": (payload: z.infer<typeof SubmissionAckSchema>) => void;
   "test.result": (payload: z.infer<typeof TestResultSchema>) => void;
   "submission.verdict": (payload: z.infer<typeof SubmissionVerdictSchema>) => void;
+  "opponent.verdict": (payload: z.infer<typeof OpponentVerdictSchema>) => void;
   "match.judging": (payload: z.infer<typeof JudgingHoldSchema>) => void;
   "opponent.pulse": (payload: z.infer<typeof OpponentPulseSchema>) => void;
   "opponent.status": (payload: z.infer<typeof OpponentStatusSchema>) => void;
