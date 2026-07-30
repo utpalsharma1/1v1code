@@ -313,6 +313,15 @@ model Challenge {
   /// Whether an unregistered guest may accept. Unrated if so.
   allowGuest     Boolean         @default(true)
 
+  /// Set when this challenge is a REMATCH of a finished match.
+  ///
+  /// A rematch creates a NEW row rather than reusing the old one: consumedAt and
+  /// consumedById are the record of who took THAT invitation, and reusing the row
+  /// would destroy the audit trail and make the second match indistinguishable
+  /// from the first. This field is what makes the new row find-or-createable, so
+  /// both players pressing Rematch converge on one challenge instead of two.
+  rematchOfId String? @unique
+
   /// A stale link must show something specific rather than 404 - see S7.
   expiresAt   DateTime
   consumedAt  DateTime?

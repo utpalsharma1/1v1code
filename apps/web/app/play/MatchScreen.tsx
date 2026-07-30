@@ -103,6 +103,9 @@ export interface MatchScreenProps {
   desyncKey: number;
   onRematch: () => void;
   onHub: () => void;
+  /** §7: set when this player has no credentials, so the result screen can
+   *  offer to keep the match. Never one-shot — see GuestClaim. */
+  isGuest: boolean;
 }
 
 const STARTERS: Record<"CPP17" | "PYTHON3", string> = {
@@ -153,6 +156,7 @@ export function MatchScreen(props: MatchScreenProps) {
     desyncKey,
     onRematch,
     onHub,
+    isGuest,
   } = props;
 
   const m = useMotion();
@@ -388,7 +392,15 @@ export function MatchScreen(props: MatchScreenProps) {
       {/* §6.7 — victory or defeat, with the real rating delta. */}
       <AnimatePresence>
         {ending && (
-          <MatchEnding key="end" you={you} ending={ending} onRematch={onRematch} onHub={onHub} />
+          <MatchEnding
+            key="end"
+            you={you}
+            matchId={matchId}
+            ending={ending}
+            onRematch={onRematch}
+            onHub={onHub}
+            isGuest={isGuest}
+          />
         )}
       </AnimatePresence>
     </ShakeStage>
@@ -515,14 +527,20 @@ function JudgingHold({
 
 function MatchEnding({
   you,
+  matchId,
   ending,
   onRematch,
   onHub,
+  isGuest,
 }: {
   you: Side;
+  matchId: string;
   ending: NonNullable<MatchScreenProps["ending"]>;
   onRematch: () => void;
   onHub: () => void;
+  /** §7: set when this player has no credentials, so the result screen can
+   *  offer to keep the match. Never one-shot — see ResultActions. */
+  isGuest: boolean;
 }) {
   const mine = ending.ratings.find((r) => r.side === you);
 
@@ -531,19 +549,188 @@ function MatchEnding({
      with no rating change — dressing it as a loss would be a lie about whose
      fault it was. */
   if (ending.kind !== "WIN") {
-    return <NonResult kind={ending.kind} reason={ending.reason} onRematch={onRematch} onHub={onHub} />;
+    return (
+      <>
+        <NonResult kind={ending.kind} reason={ending.reason} onRematch={onRematch} onHub={onHub} />
+        {/* A draw or a void is still a match a guest just played, so the offer
+            to keep it applies there too. */}
+        <ResultActions matchId={matchId} isGuest={isGuest} />
+      </>
+    );
   }
 
   return (
-    <VictoryOverlay
-      winner={ending.winner === you ? "p1" : "p2"}
-      ratingFrom={mine?.before ?? 0}
-      ratingTo={mine?.after ?? 0}
-      burstKey={1}
-      onRematch={onRematch}
-      onQueue={onRematch}
-      onHub={onHub}
-    />
+    <>
+      <VictoryOverlay
+        winner={ending.winner === you ? "p1" : "p2"}
+        ratingFrom={mine?.before ?? 0}
+        ratingTo={mine?.after ?? 0}
+        burstKey={1}
+        onRematch={onRematch}
+        onQueue={onRematch}
+        onHub={onHub}
+      />
+      <ResultActions matchId={matchId} isGuest={isGuest} />
+    </>
+  );
+}
+
+/* ── The guest funnel, at the emotional peak ────────────────────────────────
+
+   §6.7's cinematic lands FIRST. The prompt fades in after it, below the
+   overlay's own buttons, with the result still visible behind — a friend who
+   just won should see that they won before being asked for an email.
+
+   NOT ONE-SHOT. A guest who declines can still claim while the session lives, so
+   this is a persistent affordance on the result screen rather than a modal that
+   is dismissed forever. Losing an account because you closed a dialog is the
+   kind of small cruelty that costs a user permanently.
+   ========================================================================= */
+
+function ResultActions({ matchId, isGuest }: { matchId: string; isGuest: boolean }) {
+  const m = useMotion();
+  const [rematch, setRematch] = useState<{ code: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [claiming, setClaiming] = useState(false);
+
+  /* One click, both sides. The route is find-or-create keyed on this match, so
+     whoever presses first creates the challenge and whoever presses second finds
+     the same one — no rival challenges, no new socket protocol. If the opponent
+     never presses, this degrades into the ordinary link flow: a real code on the
+     challenge waiting screen. */
+  const askRematch = async () => {
+    setError(null);
+    const response = await fetch("/api/rematch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ matchId }),
+    });
+    const body = (await response.json()) as { code?: string; error?: string };
+    if (!response.ok || !body.code) {
+      setError(body.error ?? "Could not set up a rematch.");
+      return;
+    }
+    setRematch({ code: body.code });
+    window.location.href = `/play?challenge=${body.code}`;
+  };
+
+  return (
+    <motion.div
+      className="pointer-events-auto fixed inset-x-0 bottom-4 z-[60] grid place-items-center px-6"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      // After the cinematic, not over it.
+      transition={m.t({ duration: m.sec(m.dur.base), delay: m.sec(m.dur.victory) })}
+    >
+      <div className="border-line clip-lean flex w-full max-w-xl flex-col gap-3 border bg-elevated p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="solid" tone="player" onClick={() => void askRematch()}>
+            Rematch
+          </Button>
+          <span className="text-fg-faint text-12">
+            {rematch ? `challenge ${rematch.code}` : "same difficulty, one click for both of you"}
+          </span>
+        </div>
+
+        {isGuest && !claiming && (
+          <button
+            type="button"
+            onClick={() => setClaiming(true)}
+            className="focus-ring border-line clip-lean-sm border px-3 py-2 text-left transition-colors duration-[160ms] hover:border-[var(--player)]"
+          >
+            <span className="font-display text-fg block text-13 font-bold tracking-[var(--track-hud)] uppercase">
+              Keep this result — create an account
+            </span>
+            <span className="text-fg-faint text-12">
+              You played as a guest. Registering keeps this match in your history.
+            </span>
+          </button>
+        )}
+
+        {isGuest && claiming && <ClaimForm onCancel={() => setClaiming(false)} />}
+
+        {error && (
+          <p className="text-fail text-12" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+/** Claims the SAME row, so history follows by identity rather than migration. */
+function ClaimForm({ onCancel }: { onCancel: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  return (
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setPending(true);
+        setError(null);
+        const form = new FormData(event.currentTarget);
+        void (async () => {
+          const response = await fetch("/api/auth/claim", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              handle: String(form.get("handle") ?? ""),
+              email: String(form.get("email") ?? ""),
+              password: String(form.get("password") ?? ""),
+            }),
+          });
+          const body = (await response.json()) as { error?: string };
+          if (!response.ok) {
+            setError(body.error ?? "Could not create the account.");
+            setPending(false);
+            return;
+          }
+          window.location.reload();
+        })();
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-3">
+        <input
+          name="handle"
+          placeholder="handle"
+          required
+          className="focus-ring border-line text-fg border bg-surface px-2.5 py-2 text-13"
+        />
+        <input
+          name="email"
+          type="email"
+          placeholder="email"
+          required
+          className="focus-ring border-line text-fg border bg-surface px-2.5 py-2 text-13"
+        />
+        <input
+          name="password"
+          type="password"
+          placeholder="password"
+          required
+          className="focus-ring border-line text-fg border bg-surface px-2.5 py-2 text-13"
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <Button type="submit" variant="solid" tone="player" disabled={pending}>
+          {pending ? "…" : "Keep it"}
+        </Button>
+        {/* Declining is not final: the offer stays while the session lives. */}
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Not now
+        </Button>
+      </div>
+      {error && (
+        <p className="text-fail text-12" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
 

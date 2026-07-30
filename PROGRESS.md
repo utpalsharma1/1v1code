@@ -2,8 +2,103 @@
 
 ## SESSION STOP — read this first
 
-**Two problems retrofitted and rendered. Stop and look at them before I touch the other 18.**
-`db:verify` now names **18**, down from 20. Cold start: `pnpm stack`.
+**The guest funnel is built: claim prompt and one-click rematch on the result screen.**
+`db:verify` still names 18. Cold start: `pnpm stack`.
+
+### The claim prompt
+
+Fades in **after** the §6.7 cinematic — `delay: dur.victory` — as a panel below the overlay's own
+buttons, with the result still visible behind. A friend who just won should see that they won before
+being asked for an email.
+
+**Not one-shot.** Declining sets local state, not a flag: *"Not now"* collapses the form and the offer
+is still there. Losing an account because you closed a dialog is the kind of small cruelty that costs
+a user permanently.
+
+It appears on **every** ending, not just a win — a draw or a void is still a match a guest just
+played. `POST /api/auth/claim` calls `claimGuest`, which mutates the **same row**, so history follows
+by identity rather than migration. A claim after the session has expired is refused with the honest
+sentence: the offer is tied to that browser session, and a normal account is still available, it just
+will not carry that match.
+
+### One-click rematch, both sides
+
+`POST /api/rematch` is **find-or-create keyed on the finished match**. Whoever presses first creates
+the challenge; whoever presses second finds the same one. Both get "one click" with no new socket
+protocol and no rival challenges. A simultaneous press is caught by the unique index and the loser
+takes the winner's row.
+
+**A new `Challenge` row**, as agreed — `consumedAt`/`consumedById` on the original record who took
+*that* invitation, and reusing it would destroy the audit trail. The new row is **pre-consumed by the
+opponent**, so the invitation is for one named person and the gateway's existing membership check
+(`hostId` or `consumedById`) already stops anyone holding the code from barging in.
+
+**Same difficulty** — a ±50 band around the problem just played, so a rematch is a rematch rather than
+a different fight.
+
+**When one side has left it degrades into the link flow**, exactly as agreed: the presser lands on the
+challenge waiting screen holding a real code. Nothing special to maintain, and if the opponent comes
+back it simply works.
+
+### One schema field, and its data-loss warning checked rather than waved through
+
+`Challenge.rematchOfId String? @unique` is what makes find-or-create possible. `db:push` warned about
+data loss; the warning was **only** the new unique constraint on a column that does not exist yet, so
+there was nothing to lose. Checked before accepting rather than after.
+
+### Verified this session
+
+**e2e 17/17** · `probe:lifecycle` PASS under both pairings · core 56/56 · smoke 5/5 · typecheck 7/7 ·
+build clean · `db:verify` names 18.
+
+**Not verified by eye:** the claim prompt and the rematch button. They need a guest match that
+*finishes*, which the browser test does not currently drive to completion — it asserts the match
+starts. Worth your click.
+
+### THE REMAINING 18 — real per-problem time, now that two are done
+
+**Retrofitting is materially cheaper than writing new**, because the algorithm, the validator, the
+reference solution and the hidden tests already exist and are already verified. What is missing is
+prose and samples.
+
+| | retrofit | write new |
+| --- | --- | --- |
+| statement rewrite (task, no I/O) | 5–10 min | 10–30 min |
+| input + output format | 8–12 min | 10–15 min |
+| constraints → array | 2 min | 5–15 min |
+| **samples + note** | **12–20 min** | **15–35 min** |
+| validator | — (exists) | 10–30 min |
+| reference solution | — (exists) | 10–90 min |
+| test design | — (exists) | 15–120 min |
+| **total** | **~30–45 min** | **75 min – 5.6 h** |
+
+**Measured against the two I did:** Sum Of Two took about 20 minutes, Connected Components about 40 —
+the difference is entirely the samples and the note, because Connected Components needed a sample that
+made an unguessable case guessable and I had to think about which wrong approach to expose.
+
+So **18 × ~35 min ≈ 10–11 hours**, which is **two sessions, not one**. I would rather deliver **nine
+correct than eighteen rushed**, as you said — so the plan is nine next session and nine after.
+
+### The two standards, held explicitly
+
+**1. Every problem needs a sample that makes an unguessable case guessable.** `4 0` for Connected
+Components is the model: a solution that only counts vertices seen in the edge list prints 0 there,
+and the old statement made that invisible. For each of the 18 I will name, in the `note`, which wrong
+approach the sample exposes — writing it down is what stops the sample being decorative.
+
+**2. Never hand-write an expected output.** I caught my own `n=6` case only because the verifier ran
+the reference solution; I had written 4 where the answer is 5. So for the 18 I will **derive every
+sample output by running the reference solution** and let `db:verify` confirm rather than discover.
+There is a script gap here worth closing first: the pipeline verifies outputs but has no way to
+*generate* them, so the next session starts by adding `pnpm db:samples <slug>` which prints the
+reference solution's output for a given input. That converts the standard from a discipline into a
+tool.
+
+### Next, in order
+
+1. `pnpm db:samples` so sample outputs are derived, not typed.
+2. **Nine problems retrofitted.** Then nine more.
+3. New problems after `db:verify` passes.
 
 ### Look at this
 

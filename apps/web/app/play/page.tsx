@@ -50,12 +50,14 @@ const GATEWAY = process.env["NEXT_PUBLIC_GATEWAY_URL"] ?? "http://localhost:4000
 type Phase = "idle" | "challenge" | "queued" | "found" | "countdown" | "live" | "ended";
 
 interface PlayerCard {
-  userId: string;
   handle: string;
   rating: number;
   tier: string;
   division: string | null;
   isBot: boolean;
+  /** §7: a credential-less account. Drives the claim offer on the result
+   *  screen and, via isRated, the unrated disclosure before the countdown. */
+  isGuest: boolean;
 }
 
 interface QueueStatus {
@@ -542,6 +544,7 @@ function Play() {
       <MatchScreen
         matchId={match.matchId}
         spectatorCode={match.spectatorCode}
+        isGuest={match[match.you].isGuest ?? false}
         you={match.you}
         p1={asPlayer(match.p1)}
         p2={asPlayer(match.p2)}
