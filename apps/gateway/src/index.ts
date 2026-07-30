@@ -19,7 +19,7 @@ import {
 } from "@1v1/proto";
 import { LiveMatch, type MatchProblem } from "./live-match.ts";
 import { BAND_CEILING, BAND_INTERVAL_MS, Matchmaker, bandFor } from "./matchmaking.ts";
-import { applyOutcome, snapshot, type RatingSnapshot } from "./rating.ts";
+import { applyOutcome, isRated, snapshot, type RatingSnapshot } from "./rating.ts";
 import { canSpectate, opponentVerdictView, type Viewer } from "./relay.ts";
 import { SubmissionRunner, isInFlight, receipt } from "./submissions.ts";
 import { anonymousIdentity, identify, identifyById, type Identity } from "./session.ts";
@@ -294,6 +294,7 @@ async function cardFor(identity: Identity): Promise<PlayerCard> {
     tier: "gold",
     division: "II",
     isBot: identity.isBot,
+    isGuest: identity.isGuest ?? false,
   };
 }
 
@@ -389,12 +390,20 @@ async function createMatch(a: Identity, b: Identity): Promise<void> {
      has two tabs or a rematch fires quickly. */
   const [p1Snapshot, p2Snapshot] = await Promise.all([snapshot(a.userId), snapshot(b.userId)]);
 
+  /* Decided HERE, before anyone sees a nameplate, and sent with match.found.
+     §8 disclosed the bot before the countdown for exactly this reason: players
+     work out that nothing moved either way, and finding out afterwards feels
+     like being tricked in a way that losing never does. A guest on either side
+     makes the match unrated for BOTH. */
+  const rated = p1Snapshot && p2Snapshot ? isRated(p1Snapshot, p2Snapshot) : true;
+
   const id = randomUUID();
   const spectatorCode = generateCode();
   const problemRow = problem;
   const match: LiveMatch = new LiveMatch({
     id,
     spectatorCode,
+    rated,
     players: { p1: await cardFor(a), p2: await cardFor(b) },
     problem,
     emitTo: (side, event, payload) => emitToSide(match, side, event, payload),

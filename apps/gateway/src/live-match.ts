@@ -14,7 +14,13 @@ import {
   type MatchState,
 } from "@1v1/core";
 import type { PlayerCard, Side } from "@1v1/proto";
-import { EditorRelay, SNAPSHOT_INTERVAL_MS, canSee, type Viewer } from "./relay.ts";
+import {
+  EditorRelay,
+  SNAPSHOT_INTERVAL_MS,
+  canSee,
+  playerCardView,
+  type Viewer,
+} from "./relay.ts";
 import { ReplayLog } from "./replay-log.ts";
 
 /* ============================================================================
@@ -72,6 +78,9 @@ export class LiveMatch {
   readonly spectatorCode: string;
   /** §7: 45s on ranked to stop stream-sniping, 0 on challenge matches. */
   readonly spectatorDelayMs: number;
+  /** Whether this match will move ratings. Decided at creation, disclosed
+   *  before the countdown — never discovered from an absent delta. */
+  readonly rated: boolean;
   readonly players: LiveMatchPlayers;
   readonly problem: MatchProblem;
   readonly durationMs: number;
@@ -101,6 +110,7 @@ export class LiveMatch {
     id: string;
     spectatorCode: string;
     spectatorDelayMs?: number;
+    rated?: boolean;
     players: LiveMatchPlayers;
     problem: MatchProblem;
     emit: Emit;
@@ -115,6 +125,7 @@ export class LiveMatch {
     this.id = opts.id;
     this.spectatorCode = opts.spectatorCode;
     this.spectatorDelayMs = opts.spectatorDelayMs ?? 45_000;
+    this.rated = opts.rated ?? true;
     this.players = opts.players;
     this.problem = opts.problem;
     this.emit = opts.emit;
@@ -262,9 +273,14 @@ export class LiveMatch {
     return {
       matchId: this.id,
       spectatorCode: this.spectatorCode,
-      p1: this.players.p1,
-      p2: this.players.p2,
+      p1: playerCardView(this.players.p1),
+      p2: playerCardView(this.players.p2),
       problemRating: this.problem.rating,
+      /* §8's disclosure rule: an unrated pairing is stated BEFORE the
+         countdown. Players work it out either way — from the result screen
+         showing no delta — and finding out afterwards feels like being
+         tricked in a way that losing never does. */
+      rated: this.rated,
       acceptMs: this.acceptDeadline?.remaining() ?? ACCEPT_MS,
       headToHead: "first meeting",
     };
@@ -276,8 +292,9 @@ export class LiveMatch {
       spectatorCode: this.spectatorCode,
       state: this.ctx.state,
       you: side,
-      p1: this.players.p1,
-      p2: this.players.p2,
+      p1: playerCardView(this.players.p1),
+      p2: playerCardView(this.players.p2),
+      rated: this.rated,
       remainingMs: this.remainingMs(),
       accepted: { ...this.ctx.accepted },
       connected: { ...this.ctx.connected },

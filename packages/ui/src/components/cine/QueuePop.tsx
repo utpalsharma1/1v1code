@@ -29,6 +29,7 @@ export function QueuePop({
   you,
   onAccept,
   acceptRemainingMs,
+  rated = true,
 }: {
   p1: QueuePopPlayer;
   p2: QueuePopPlayer;
@@ -39,6 +40,11 @@ export function QueuePop({
   /** Omitted on the /dev/hud playback, where there is nothing to accept. */
   onAccept?: () => void;
   acceptRemainingMs?: number;
+  /** §8's disclosure rule, generalised beyond the bot: an unrated pairing is
+   *  stated BEFORE the countdown, while the accept window is still open.
+   *  Players work it out either way — the victory screen shows no delta — and
+   *  finding out afterwards converts a fair result into a trick. */
+  rated?: boolean;
 }) {
   const m = useMotion();
   // ease.impact, not spring.heavy: the plates should *land*, not settle. An
@@ -138,6 +144,20 @@ export function QueuePop({
           <Meta delay={1} accepted={p2.accepted} side="p2" text={head2head} />
         </motion.div>
       </div>
+
+      {/* Stated on the collision screen, not the result screen. */}
+      {!rated && (
+        <div className="absolute inset-x-0 top-[14%] grid place-items-center">
+          <span
+            className={cn(
+              "clip-lean-sm border-line text-fg-dim border px-3 py-1.5",
+              "font-display text-12 leading-none font-extrabold tracking-[var(--track-hud)] uppercase",
+            )}
+          >
+            unrated · no rating change
+          </span>
+        </div>
+      )}
 
       {onAccept && you && (
         <AcceptControl

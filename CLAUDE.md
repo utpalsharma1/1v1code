@@ -499,6 +499,28 @@ A 20-failed-lookups-per-minute budget per address turns that last row into over 
   - The result screen prompts them to **register and keep the result**, which claims the same row rather than starting them over. Guest rows expire after 7 days if unclaimed.
 - **Rematch is one click from the result screen, with no new link.** The pairing already exists; making two friends re-share a URL between every game is the kind of friction that ends a session early.
 
+### Guests — the lifecycle, decided before it was built
+
+**A guest is credential-less, not session-less.** They get an ordinary `User` row with `isGuest` and an ordinary session cookie, so `createSession`, the socket ticket, queue intent, `match.resync` and the 45-second grace all work unchanged. The alternative — a guest-specific reconnect token — would be a second auth mechanism for one identity class, and §10's repeated lesson is that a second path is where behaviour diverges quietly. **What a guest lacks is a password, not a session.**
+
+That single decision answers the reconnect question: a guest who closes the tab and reopens it resumes exactly like a registered player, because the cookie is the same mechanism. A guest who clears cookies genuinely loses the identity, which is the honest consequence of having no credentials and is stated in the claim prompt.
+
+**Naming.** A guest is displayed as `guest-<4 chars>` — `guest-7f2a` — in the nameplate, the spectator view and the event log. It is obviously a guest, it is stable for the match, and it is not demeaning: nobody is called "Anonymous" or "Player 2". The suffix exists so two guests in the same spectator's history are distinguishable.
+
+**Expiry, and what cleans up.** Guest rows accumulate one per opened challenge link, so they need a sweeper rather than a hope:
+
+- An **unclaimed guest with no finished match** is garbage after **24 hours**. That is long enough to cover a link opened, played, and claimed the next morning, and short enough that link-scanning cannot accumulate rows indefinitely.
+- An **unclaimed guest who has played** is kept **7 days**, because their match history is the thing the claim flow offers them and deleting it early makes the offer worthless.
+- A **claimed** guest is no longer a guest and is never swept.
+
+Deleting a guest must not delete their matches' integrity: a `Match` row references both players, so the sweeper removes only guests with no `Match` rows, and the 7-day cohort is retained by that rule automatically rather than by a second check.
+
+**The claim flow keeps the same row.** Registering from the result screen sets `email`, `passwordHash` and `handle` on the *existing* `User` and clears `isGuest`. Nothing is copied, so match history, submissions and rating events follow by identity rather than by migration — which is the whole reason to claim the row instead of creating a second one.
+
+**Claiming after the session has expired is refused, and says why.** The claim is authorised by holding the guest's session; without it there is no way to prove the claimant is that guest, and allowing an unauthenticated claim by handle would let anyone adopt any guest's history. The prompt therefore says the offer is tied to this browser session, and an expired claim offers ordinary registration instead — a new account, honestly described as such, rather than a silent failure.
+
+**A guest cannot create a challenge link.** Refused at the gateway on `isGuest`, in the same shape as the `playerOnly` check for anonymous sockets, because a credential-less account that can mint invite links is a spam primitive.
+
 ### Clip export (Phase 2D)
 
 Auto-generate a short **vertical** video of the final seconds of a close match, ending on the win animation, offered on the victory screen.
@@ -677,7 +699,7 @@ Five leaks were found one at a time, all in channels nobody had audited. This is
 | `match.start` | both | the problem, identical for both | inline |
 | `match.presence` | both | a side dropped, grace remaining | inline — visible **by design** (§6.5) |
 | `match.resync` | self | own state, plus both `PlayerCard`s | inline — **safe only by echoing `match.found`**; it has no constructor of its own |
-| `match.end` | both + spectators | outcome, and **both sides'** rating deltas | inline — defensible in a 1v1 (yours implies theirs) but not argued for |
+| `match.end` | both + spectators | outcome, and **both sides'** rating deltas | inline — **argued**, see below |
 | `submission.ack` · `test.result` | **own side only** | own progress | inline |
 | `submission.verdict` | own side + spectators | full verdict incl. compiler diagnostics | inline — never sent to the opponent |
 | `opponent.verdict` | opponent | **pass/fail and counts only** | **constructed** (`opponentVerdictView`) |
@@ -688,7 +710,11 @@ Five leaks were found one at a time, all in channels nobody had audited. This is
 | `editor.desync` | own side | expected vs received `seq` | inline |
 | `spectate.ready` · `spectate.ended` | spectators | handles, problem, delay, outcome | inline |
 
-**Three are safe only by accident and should be constructed when next touched:** `match.resync` (it re-sends `match.found`'s player cards with no constructor, so a field added there appears in two places), `match.end`'s `ratings` array (both sides' deltas, never argued for), and `match.found`'s `userId` (an internal identifier the client does not use).
+**`match.found` and `match.resync` now share one constructor** — `playerCardView` in `apps/gateway/src/relay.ts` — and `userId` is gone from the wire. Before that, `match.resync` re-sent `match.found`'s shape with no constructor of its own: one payload reachable through two paths, only one of them ever audited, which is precisely the compile-error leak described in advance. A field added to `PlayerCard` would have appeared in both and been reviewed in neither.
+
+**`match.end` carrying both sides' rating deltas is deliberate, and here is the argument.** In a two-player match your own delta implies your opponent's: the outcome is known, both pre-match ratings are already on screen from §6.2, and Glicko is symmetric, so sending theirs discloses nothing a player could not compute. It is also what §6.7's post-match summary wants — a result reads better as `1442 → 1458` against `1478 → 1462` than as one number in isolation.
+
+**It stops being obviously fine the moment a match has more than two players.** In a team mode or a Battle Royale (both Phase 4, both deferred) "your delta implies theirs" is false — you would be handing every participant everyone else's rating movement, which is a roster leak wearing a scoreboard. **If a mode with more than two participants is ever built, this field must be reconsidered before that mode ships, not after.**
 
 **On privacy in the queue.** Nothing discloses who else is queued, at what rating, or that a named person is online. `inQueue` is a **count**, `ratingBand` is derived from *your own* rating, and there is no presence broadcast outside a match at all. That is a property worth keeping deliberately: a roster or an online-list would be cheap to add now and awkward to retract once anyone relies on it.
 

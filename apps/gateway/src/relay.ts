@@ -250,3 +250,47 @@ export function opponentVerdictView(input: {
     total: input.total,
   };
 }
+
+
+/* ── One constructor for the player cards on the wire ───────────────────────
+
+   `match.found` and `match.resync` both carried the full internal PlayerCard,
+   and `match.resync` had no constructor of its own — it simply re-sent
+   `foundPayload`'s shape. That is the compile-error leak described in advance:
+   ONE shape reachable through TWO paths, with only one of them ever audited. A
+   field added to PlayerCard would have appeared in both and been reviewed in
+   neither.
+
+   So both go through here, and `userId` is dropped. It is an internal
+   identifier the client never reads — the gateway resolves sides by identity
+   server-side via `sideOf` — and an identifier with no client use has no
+   business on the wire. */
+
+export interface PlayerCardView {
+  handle: string;
+  rating: number;
+  tier: string;
+  division: string | null;
+  isBot: boolean;
+  /** §8's disclosure rule, generalised: an unrated pairing is disclosed BEFORE
+   *  the countdown, never after. A guest makes the match unrated for both. */
+  isGuest: boolean;
+}
+
+export function playerCardView(card: {
+  handle: string;
+  rating: number;
+  tier: string;
+  division: string | null;
+  isBot: boolean;
+  isGuest?: boolean;
+}): PlayerCardView {
+  return {
+    handle: card.handle,
+    rating: card.rating,
+    tier: card.tier,
+    division: card.division,
+    isBot: card.isBot,
+    isGuest: card.isGuest ?? false,
+  };
+}

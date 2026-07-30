@@ -2,89 +2,91 @@
 
 ## SESSION STOP — read this first
 
-**All 22 channels enumerated in §10. `stack:status` no longer trusts a pidfile. CHALLENGE LINKS NOT
-STARTED — the ordered plan is below and unchanged.** Working tree clean. Cold start: `pnpm stack`.
+**The three safe-by-accident channels are fixed. Guest lifecycle decided in §7. Unrated is disclosed
+before the countdown. CHALLENGE LINKS NOT STARTED.** Working tree clean. Cold start: `pnpm stack`.
 
-### 1. Every channel, audited — the list is in CLAUDE.md §10
+### 1. The three channels — fixed, not deferred
 
-22 server-to-client channels, each with one line on what it discloses and whether it is
-**constructed** (a fresh object per audience, so a new field cannot leak into it) or **inline**
-(written at the send site, safe by discipline). The full table is in §10 under *Every channel, and
-what it may carry*.
+- **`match.found` and `match.resync` now share one constructor**, `playerCardView` in `relay.ts`.
+  You were right that this was the compile-error leak described in advance: one payload shape
+  reachable through two paths, only one of them ever audited, so a field added to `PlayerCard` would
+  have appeared in both and been reviewed in neither.
+- **`userId` is off the wire.** No client read it — the gateway resolves sides server-side via
+  `sideOf` — and an internal identifier with no client use has no business being sent.
+- **`match.end`'s `ratings` stays, and is now argued in §10** rather than left defensible. The
+  argument: in a two-player match your own delta implies your opponent's, because the outcome is
+  known, both pre-match ratings were already on screen from §6.2, and Glicko is symmetric. §10 also
+  records the limit you named — **it stops being obviously fine above two participants**, where
+  "yours implies theirs" is false and it becomes a roster leak wearing a scoreboard. Flagged to be
+  reconsidered *before* any such mode ships, not after.
 
-**Three are safe only by accident**, and §10 names them so they get constructed when next touched:
+### 2. Guest lifecycle — decided in §7
 
-- **`match.resync`** re-sends `match.found`'s player cards with no constructor of its own. A field
-  added to a `PlayerCard` therefore appears in two places, and only one of them has ever been
-  audited. This is the same shape as the compile-error leak: a second path nobody was watching.
-- **`match.end`'s `ratings` array** carries **both** sides' deltas. Defensible in a 1v1 — yours
-  implies theirs — but it was never argued for, and "defensible" is how the other four got in.
-- **`match.found`'s `userId`** is an internal identifier the client never uses.
+**Naming: `guest-7f2a`.** Obviously a guest, stable for the match, not demeaning — nobody is called
+"Anonymous" or "Player 2". The suffix keeps two guests distinguishable in a spectator's history.
 
-**On the privacy question — nothing leaks the queue.** `inQueue` is a **count**, `ratingBand` is
-derived from *your own* rating, and **there is no presence broadcast outside a match at all**. So
-nothing discloses who else is queued, at what rating, or that a named person is online. §10 now
-records that as a property to keep deliberately rather than a coincidence: a roster or an online
-list would be cheap to add and awkward to retract once anyone relies on it.
+**Cleanup, with a sweeper rather than a hope:**
 
-### 2. `stack:status` checks the port, and shouts about the break flag
+- Unclaimed, **never played** → garbage after **24 hours**. Long enough for a link opened tonight and
+  claimed tomorrow morning; short enough that link-scanning cannot accumulate rows.
+- Unclaimed, **has played** → kept **7 days**, because their match history is exactly what the claim
+  flow offers them and deleting it early makes the offer worthless.
+- **Claimed** → no longer a guest, never swept.
 
-It now verifies, per service, that **something is actually listening** and that the listener **is the
-process we started** (or a child of it) — a pidfile pointing at a process that failed to bind used to
-report healthy. And for the gateway it reads `/proc/<pid>/environ` and prints, in red:
+The sweeper deletes only guests with **no `Match` rows**, which retains the 7-day cohort by that rule
+rather than by a second check that could drift out of step with it.
 
-```
-!! BREAK_VISIBILITY=1 IS SET — the visibility rule is DISABLED
-   Every probe result is meaningless until this gateway is restarted.
-```
+**The claim keeps the same row.** Registering from the result screen sets `email`, `passwordHash` and
+`handle` on the *existing* `User` and clears `isGuest`. Nothing is copied, so history follows by
+identity rather than migration — which is the entire reason to claim the row instead of making a
+second one.
 
-**Verified both ways:** with an orphaned `BREAK_VISIBILITY=1` gateway holding :4000 it fires and
-reports the gateway as not running; on a clean stack it stays silent. That is exactly the situation
-that cost me a debugging cycle last session, and you were right that it would have cost you more —
-you would have believed the probe result.
+**Claiming after the session expires is refused, and says why.** The claim is authorised by holding
+the guest's session; without it there is no way to prove the claimant is that guest, and allowing a
+claim by handle alone would let anyone adopt any guest's history. An expired claim offers ordinary
+registration instead — a new account, described honestly as one.
 
-**One bug in my own fix, worth recording:** I first wrote those comments as `/* … */`, which bash
-does not understand — `/*` is a glob that becomes a command. **`bash -n` passed anyway**, because it
-is syntactically a valid command word. Caught by reading rather than by the syntax check, which is
-the same lesson as the containment suite's positive control: a green check on the wrong question.
+**Guest identity is now on `Identity` and `PlayerCard`**, read from the `User` row, so the paths that
+need it have it. `isRated` already returned false for a guest, so Glicko, the RD gate and the rating
+events were correct before this and remain so.
+
+### 3. Unrated is disclosed BEFORE the countdown
+
+`rated` is decided in `createMatch` using the existing `isRated`, travels on `match.found` and
+`match.resync`, and the queue pop shows **`unrated · no rating change`** while the accept window is
+still open. Same rule §8 applied to the bot, for the same reason: players work it out either way
+from a result screen with no delta, and finding out late converts a fair result into a trick.
 
 ### Verified this session
 
-`probe:visibility` 10/10 · core 56/56 · smoke 5/5 · typecheck 7/7 · `stack:status` verified in both
-the clean and the broken case.
+`probe:visibility` 10/10 · `probe:match` (receipt order, Glicko both directions) · `probe:latejoin`
+6/6 character-exact · **e2e 14/14** · core 56/56 · smoke 5/5 · typecheck 7/7 · build clean.
 
-### CHALLENGE LINKS — not started; plan unchanged and now with two more answers
+**Not verified by eye:** the `unrated` chip on the queue pop. It needs a guest or a bot to appear,
+and neither exists in a normal two-registered-player match — so it will first be visible when
+challenge links land.
 
-The order still stands: **`probe:lifecycle` first**, written against matchmaking, so "identical" is
-defined before there is an implementation to rationalise against. Then challenge creation must pass
-that same probe unchanged.
+### CHALLENGE LINKS — not started; everything blocking them is now decided
 
-**Your two additions, answered from the code:**
+The design debt is gone. What remains is build order, unchanged:
 
-**A guest match is shareable, and the watch path assumes nothing about registration.** The
-spectator code lives on the `LiveMatch` and on the `Match` row, generated in `createMatch` with no
-reference to either player's account state. `spectate.watch` resolves the code, checks `canSpectate`
-by user id, and calls `sendSnapshot` — none of which reads `isGuest`, a rating, or a session. The
-anonymous viewer path added for `/watch` is entirely separate from the guest path, and the two must
-not be conflated: **an anonymous viewer cannot play; a guest can.** So a guest's match is shareable
-today, and the only thing left to confirm by running it is that `spectate.ended`'s Postgres lookup
-returns handles for a guest row, which it will because a guest is a real `User`.
+1. **`probe:lifecycle` against matchmaking first.** Capture the canonical state sequence, the event-log
+   shape, and behaviour under abandonment, reconnection and the §6.7b hold. That defines "identical"
+   before there is a second creation path to rationalise against.
+2. **Challenge creation**, which must pass that same probe unchanged.
+3. Guests end to end: creation with a session cookie, the `guest-xxxx` handle, the gateway refusal on
+   `isGuest` for link creation, the claim flow, the sweeper.
+4. Expiry (24h per §7), the stale-link screen with its "send one back" affordance, one-click rematch,
+   `UNLISTED` with zero spectator delay.
 
-**A guest reconnecting after closing the browser is the real gap.** A registered player resumes from
-a session cookie; a guest has a `User` row but **no credentials to log back in with**, so if the
-guest's cookie is gone the identity is unreachable and a blip becomes a forfeit. Options, with a
-recommendation:
+**Difficulty:** the host picks a band via `Challenge.ratingMin`/`ratingMax`, which already exist. With
+a guest involved that band is the *only* input, because mean−120 has no second rating to work from.
+Two registered players keep mean−120 sampled within the host's band.
 
-- **Recommended: give the guest a session cookie exactly like a registered user.** They already get a
-  `User` row, so `createSession` works unchanged, and the whole reconnect path — queue intent,
-  `match.resync`, the 45s grace — then behaves identically with no new code. The account is
-  credential-less, not session-less. That is the smallest change and it removes the special case
-  rather than handling it.
-- Rejected: a guest-specific reconnect token in `localStorage`. It is a second auth mechanism for
-  one identity class, and §10's lesson is that a second path is where behaviour diverges.
-
-That distinction — **credential-less, not session-less** — is the thing to get right, and it is why
-the guest work should follow the lifecycle probe rather than precede it.
+**Already confirmed from the code:** a guest match is shareable — the spectator code is generated in
+`createMatch` with no reference to account state, and `spectate.watch` → `canSpectate` →
+`sendSnapshot` reads no `isGuest`, no rating and no session. The anonymous `/watch` viewer and a
+guest remain separate paths: **an anonymous viewer cannot play; a guest can.**
 
 ## What class of check would have caught this — and what is still eye-only
 

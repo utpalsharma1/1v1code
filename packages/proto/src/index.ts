@@ -53,6 +53,7 @@ export {
   MatchStateSchema,
   OpponentPresenceSchema,
   PlayerCardSchema,
+  PlayerCardViewSchema,
   QueueJoinSchema,
   QueueLeaveSchema,
   QueueStatusSchema,
@@ -66,6 +67,7 @@ export {
   type RatingDelta,
   type VerdictName,
   type PlayerCard,
+  type PlayerCardView,
   type ServerToClient,
   type Side,
 } from "./events.ts";

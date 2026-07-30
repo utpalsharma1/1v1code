@@ -26,6 +26,8 @@ export const MatchStateSchema = z.enum([
   "ABANDONED",
 ]);
 
+/* The internal card. `userId` never goes on the wire — see PlayerCardViewSchema
+   and the constructor in apps/gateway/src/relay.ts. */
 export const PlayerCardSchema = z.object({
   userId: z.string(),
   handle: z.string(),
@@ -33,8 +35,22 @@ export const PlayerCardSchema = z.object({
   tier: z.string(),
   division: z.string().nullable(),
   isBot: z.boolean().default(false),
+  isGuest: z.boolean().default(false),
 });
 export type PlayerCard = z.infer<typeof PlayerCardSchema>;
+
+/** What a client actually receives. No `userId`: an internal identifier the
+ *  client never reads has no business on the wire. Built by one constructor so
+ *  `match.found` and `match.resync` cannot drift apart. */
+export const PlayerCardViewSchema = z.object({
+  handle: z.string(),
+  rating: z.number().int(),
+  tier: z.string(),
+  division: z.string().nullable(),
+  isBot: z.boolean().default(false),
+  isGuest: z.boolean().default(false),
+});
+export type PlayerCardView = z.infer<typeof PlayerCardViewSchema>;
 
 /* ── client → server ──────────────────────────────────────────────────── */
 
@@ -140,8 +156,10 @@ export const MatchFoundSchema = z.object({
   /** §7: shown as a copyable chip so a player can share the match. */
   spectatorCode: z.string().default(""),
   you: SideSchema,
-  p1: PlayerCardSchema,
-  p2: PlayerCardSchema,
+  p1: PlayerCardViewSchema,
+  p2: PlayerCardViewSchema,
+  /** Disclosed BEFORE the countdown, never after — §8's rule generalised. */
+  rated: z.boolean().default(true),
   problemRating: z.number().int(),
   /** Milliseconds left to accept. */
   acceptMs: z.number().int(),
@@ -224,8 +242,9 @@ export const MatchResyncSchema = z.object({
   spectatorCode: z.string().default(""),
   state: MatchStateSchema,
   you: SideSchema,
-  p1: PlayerCardSchema,
-  p2: PlayerCardSchema,
+  p1: PlayerCardViewSchema,
+  p2: PlayerCardViewSchema,
+  rated: z.boolean().default(true),
   remainingMs: z.number().int().nonnegative(),
   accepted: z.object({ p1: z.boolean(), p2: z.boolean() }),
   connected: z.object({ p1: z.boolean(), p2: z.boolean() }),

@@ -71,6 +71,7 @@ function Play() {
   const [match, setMatch] = useState<{
     matchId: string;
     spectatorCode: string;
+    rated: boolean;
     you: Side;
     p1: PlayerCard;
     p2: PlayerCard;
@@ -232,6 +233,7 @@ function Play() {
       setMatch({
         matchId: payload.matchId,
         spectatorCode: payload.spectatorCode ?? "",
+        rated: payload.rated ?? true,
         you: payload.you,
         p1: payload.p1,
         p2: payload.p2,
@@ -635,6 +637,7 @@ function Play() {
             }}
             head2head={match.p2.isBot ? "vs the bot" : "first meeting"}
             flashKey={1}
+            rated={match.rated}
             you={match.you}
             acceptRemainingMs={acceptRemainingMs}
             onAccept={() => emit("match.accept", { matchId: match.matchId })}

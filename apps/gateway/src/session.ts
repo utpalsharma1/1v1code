@@ -26,6 +26,10 @@ export interface Identity {
   ratingDeviation: number;
   volatility: number;
   isBot: boolean;
+  /** A credential-less account (§7, challenge links). Plays, never rated,
+   *  cannot create challenge links. NOT the same as `isAnonymous`: an
+   *  anonymous socket may only watch, a guest may play. */
+  isGuest?: boolean;
   /** §7: spectating requires no account. An anonymous socket may watch and do
    *  nothing else — no queue, no accept, no submit, no editor writes. The
    *  gateway refuses those by this flag rather than by hoping the client
