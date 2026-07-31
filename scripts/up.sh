@@ -126,7 +126,9 @@ cmd_up() {
   if [ "$fresh" = "--fresh" ]; then
     head_ "Schema + seed"
     pnpm db:push  >/dev/null 2>&1 && ok "schema pushed"  || bad "db:push failed"
-    pnpm db:seed  >/dev/null 2>&1 && ok "problems seeded" || bad "db:seed failed"
+    # db:seed runs the full bank gate first and refuses if it fails. There is no
+    # override — see packages/db/prisma/seed.ts.
+    pnpm db:seed >/dev/null 2>&1 && ok "problems seeded (bank gate green)" || bad "db:seed failed — run pnpm db:verify"
   fi
 
   head_ "Services"

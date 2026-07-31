@@ -1231,3 +1231,646 @@ The HUD, all five cinematics, the bot opponent, and `/dev/hud` are **Phase 1**. 
 empty until there is a socket event to type. Per §13.10, stopping here.
 
 **Repo state:** `git init` run, 32 files staged, **no commit made** — that's yours to make.
+
+---
+
+## Problem retrofit, pass 1 — the 800–1300 band (plus two)
+
+**Nine problems retrofitted to the §12 problem format.** Bank status: **11 of 20 done**, 9 left.
+
+### Baseline first, as asked
+
+Run before anything was touched, so a later regression can only have one source:
+
+`pnpm stack` all routes 200 · **e2e 17/17** · **probes 5/5** (lifecycle, match, requeue,
+visibility, latejoin) · **core 56/56** · smoke 5/5 · typecheck 7/7.
+
+### The band yielded seven, not nine
+
+Ordering by rating rather than by file order, the 800–1300 range contains only **seven** problems
+still needing the retrofit — `sum-of-two` (800) and `connected-components` (1300) were already done
+in the previous session. Rather than silently redraw the band, the two next by rating were added:
+
+| | rating | topic | slug |
+| --- | --- | --- | --- |
+| 1 | 820 | STRINGS | `count-vowels` |
+| 2 | 900 | MATH | `fizzbuzz-count` |
+| 3 | 1000 | DP | `max-subarray-sum` |
+| 4 | 1050 | MATH | `gcd-pair` |
+| 5 | 1100 | STRINGS | `longest-common-prefix` |
+| 6 | 1150 | MATH | `sieve-count` |
+| 7 | 1250 | GREEDY | `activity-selection` |
+| 8 | 1350 | GREEDY | `fractional-knapsack` — first above the band |
+| 9 | 1400 | DP | `coin-change-min` — first above the band |
+
+Remaining nine, for the next pass: `min-platforms` 1400, `shortest-path-bfs` 1450,
+`topological-order` 1500, `kth-smallest-pair` 1540, `longest-increasing-subsequence` 1600,
+`edit-distance` 1650, `palindrome-min-cut` 1850, `dijkstra-shortest` 1900, and `modular-power`.
+
+### The defect list — asked for, and it has exactly one entry
+
+The instruction was to report any problem whose hidden tests do not actually discriminate, rather
+than write a sample for a case the judge does not check. Eight of the nine were fine: the
+discriminating case was already sitting in the hidden tests and only needed **promoting to a
+sample** — `longest-common-prefix` (n = 1), `activity-selection` (sort-by-start), and
+`fractional-knapsack` (0/1 rather than fractional) each gained a third sample that was already
+being judged.
+
+**`coin-change-min` (1400) was a real defect.** Its five test cases used the coin systems
+`{1,2,5}`, `{2}`, `{1,3}`, `{1}` and `{1,5,10,25}` — every one of which is a system on which the
+greedy "take the largest coin that fits" is **optimal**. So the whole test set agreed with the
+wrong algorithm. Measured, not assumed:
+
+```
+greedy [1, 2, 5]      target 11:       got 3,       correct 3        PASS
+greedy [2]            target 3:        got -1,      correct -1       PASS
+greedy [1, 3]         target 6:        got 2,       correct 2        PASS
+greedy [1]            target 1000000:  got 1000000, correct 1000000  PASS
+greedy [1, 5, 10, 25] target 27:       got 3,       correct 3        PASS
+greedy [1, 3, 4]      target 6:        got 3,       correct 2        FAIL  <- added
+```
+
+A greedy submission passed 5 of 5. `{1,3,4}` with target 6 was **added as a test case as well as a
+sample** — the sample is the visible half, the test case is the half with teeth. This is the only
+problem in the nine where the fix changed what the judge checks rather than what the player reads.
+
+`gcd-pair` carries `discriminator: null`, and that is the answer rather than a gap: the wrong
+approach there is trial division to `min(a, b)`, which produces the **right** answer and merely
+takes too long. A sample cannot show elapsed time. The 10^9 hidden tests catch it, as a timeout.
+
+### Two tool bugs, both found by using the tools rather than trusting them
+
+**1. `db:samples` was stricter than the judge, and reported a MISMATCH on all twenty problems.**
+It compared the reference's raw stdout against the seed value; every reference prints a trailing
+newline and no seed value carries one. The only real difference was whitespace the judge already
+ignores. It now uses `normalise` copied from `apps/judge/images/runner.py:334` — strip the text,
+rstrip each line — and prints the literal already normalised.
+
+A checker stricter than the thing it models is not a safer checker. Twenty false alarms is exactly
+how a genuine one gets waved through, and this tool exists so its output can be trusted without
+re-deriving it by hand. Positive-controlled afterwards: an expected value was deliberately
+corrupted to `3`, and the tool reported `MISMATCH: the seed currently claims "3"`.
+
+**2. `db:verify`'s format gate was suppressing its own correctness gate.** The format check ended
+in a hard `process.exit(1)` placed *before* the reference-solution and validator loop. That exit was
+the correct fix for an earlier bug (`process.exitCode` was being overwritten, so real failures
+reported success) and the wrong place for it: one problem missing a `note` took the check that
+catches **wrong expected outputs** offline for all twenty.
+
+Worst during precisely the situation it was met in — a retrofit spanning several sessions, where
+the format gate fails by design on every problem not yet reached, so the stronger check is dark for
+the duration. Both passes now always run and the exit code accounts for both. A gate may fail the
+build; it may not disable another gate.
+
+That change is what allowed the added `coin-change-min` test case to be verified at all — it now
+reports **all 103 test cases agree with their reference solution and pass their validator**, where
+before the run stopped at the format wall.
+
+### Verification
+
+- **No expected output was hand-written.** The new `coin-change-min` case came from
+  `pnpm db:samples coin-change-min --stdin`; the three promoted samples were already
+  reference-verified test cases.
+- **All nine re-checked with `pnpm db:samples`** — every sample input validates against the
+  problem's own validator, every output derives from the reference. `edit-distance`,
+  `min-platforms` and `dijkstra-shortest` run as an untouched control.
+- `pnpm db:verify` — **103/103 test cases** agree with their reference and pass their validator.
+  Exits 1, correctly, on the 18 remaining presentation issues across the 9 untouched problems.
+- Re-seeded (`pnpm db:seed`, idempotent upsert), then: **e2e 17/17**, **probes 5/5**,
+  **core 56/56**, smoke 5/5, typecheck 7/7.
+
+### One piece of pre-existing noise, not from this work
+
+`probe:visibility` and `probe:latejoin` both print `PASS` and then a Prisma
+`Foreign key constraint violated on the constraint: Match_p1Id_fkey` from their own teardown —
+`user.deleteMany()` runs against users that still have `Match` rows. It is after the assertion, so
+neither result is affected, but it should be cleaned up so a real failure is not lost in it.
+
+### Not done, deliberately
+
+The remaining nine problems are the second pass. Per §13.10, stopping here.
+
+---
+
+## The wrong-approach audit — does the test set catch wrong code?
+
+**`pnpm db:audit`, a new permanent tool.** 20 problems, 38 wrong approaches modelled,
+**26 caught, 12 survived.** Every survivor is proven against a counterexample.
+
+`db:verify` proves the reference agrees with every expected output. That is a check on the
+ANSWERS, and it says nothing about whether the tests can tell a correct solution from a plausible
+wrong one. `coin-change-min` was the proof that those are different properties.
+
+### The list
+
+**Defects — the judge accepts wrong code. 11 approaches across 9 problems.**
+
+| rating | problem | wrong approach that passed | proof |
+| --- | --- | --- | --- |
+| 820 | `count-vowels` | distinct vowels, via a set | `banana` → said 1, answer 3 |
+| 1000 | `max-subarray-sum` | 32-bit accumulator | `1e9 1e9 1e9` → said 2000000000, answer 3000000000 |
+| 1250 | `activity-selection` | sort by shortest duration | `[0,10] [9,11] [10,20]` → said 1, answer 2 |
+| 1450 | `shortest-path-bfs` | DFS instead of BFS | 4-cycle with a direct edge → said 3, answer 1 |
+| 1500 | `topological-order` | one visited set, no recursion colouring | diamond → said NO, answer YES |
+| 1500 | `topological-order` | edges treated as undirected | diamond → said NO, answer YES |
+| 1600 | `longest-increasing-subsequence` | non-strict, `<=` | `1 2 2 3 4` → said 5, answer 4 |
+| 1850 | `palindrome-min-cut` | greedy longest palindromic prefix | `aaabaa` → said 2, answer 1 |
+| 1900 | `dijkstra-shortest` | 32-bit distances | 3000×1e6 chain → said -1294967296, answer 3000000000 |
+| 1900 | `dijkstra-shortest` | walk to the nearest unvisited neighbour | said 101, answer 5 |
+| 2000 | `modular-power` | `b == 0` returns 1 without reducing | `5 0 1` → said 1, answer 0 |
+
+**Complexity — right answer, unenforced cost. 1 approach.**
+
+`gcd-pair` (1050), subtractive Euclid. The worst existing test costs **7 steps**; `1000000000 1`
+costs **999,999,999**. Fixed with a bigger test, not a different one. Reported separately because
+calling it a wrong answer would be false.
+
+**Clean — every modelled wrong approach was caught (9 problems):** `fizzbuzz-count`,
+`longest-common-prefix`, `sieve-count`, `connected-components`, `fractional-knapsack`,
+`coin-change-min`, `min-platforms`, `kth-smallest-pair`, `edit-distance`.
+
+**Nothing plausible to get wrong (1):** `sum-of-two`. Its own statement says it exists as an I/O
+format check. Recorded as an audited answer, not an unaudited gap — the same distinction as a
+`discriminator` of `null`.
+
+### Three things the list says
+
+**1. Retrofit status is uncorrelated with test quality, exactly as predicted.** `count-vowels`,
+`max-subarray-sum` and `activity-selection` were all retrofitted last session — statements
+rewritten, samples chosen to expose a specific wrong approach, discriminators written — and all
+three are defective. Being retrofitted says the statement is right. It says nothing about whether
+the tests discriminate, and it was right to audit all twenty rather than the nine.
+
+**2. The defect rate climbs with rating.** 800–1300: 3 of 9 problems. 1400+: 6 of 11. Every
+problem in the bank carries **five test cases**. Five was never going to separate a correct 1900
+from a subtly wrong one — there are simply more ways to be nearly right at 1900, and the same five
+tests are asked to catch all of them.
+
+**3. Two of the defects are things the statements explicitly warn about.**
+`dijkstra-shortest` says *"total path weight can exceed 32 bits"* and its largest test total is
+**18**. `longest-increasing-subsequence` says *strictly* increasing and no test contains a
+duplicate. A problem that documents a trap and never springs it is worse than one that says
+nothing, because it reads as though it were tested.
+
+### The audit had to be audited
+
+The first pass reported **13** survivors. Three were wrong:
+
+- **`sum-of-two`, 32-bit accumulator** — not a defect. The constraints cap `|a + b|` at 2e9 and
+  `int` holds 2.147e9. The approach is CORRECT.
+- **`modular-power`, 64-bit multiply without reducing** — not a defect. `m <= 2e9`, so the product
+  of two reduced operands is under 4e18 against a signed 64-bit ceiling of 9.22e18. Also correct.
+  The statement's warning that *"intermediate products exceed 32 bits"* is exactly right — 32, not
+  64.
+- **`gcd-pair`, subtractive Euclid** — a real defect, reported under the wrong heading. A
+  five-million-step guard tripped and the partial state got printed as though it were the
+  approach's answer, so a complexity problem was presented as a wrong answer with a fabricated
+  number attached.
+
+So the tool now **requires a counterexample for anything it calls a defect**, and checks it rather
+than trusting it: the input goes through the problem's own validator, then through the problem's own
+reference solution, and the claim only stands if the wrong approach disagrees with the reference on
+an input the constraints permit. No expected value is typed anywhere in the tool.
+
+This is the same lesson as `db:samples` being stricter than the judge, and it costs more here: the
+output of this tool is a list of problems somebody is about to go and change, so a false positive
+sends someone to "fix" working code. `sum-of-two` would have been the first stop.
+
+One approach was also **added** during that review rather than removed — `dijkstra-shortest` in 32
+bits — which is now one of the confirmed defects.
+
+### Also fixed
+
+`pnpm audit` is a reserved pnpm command, so `pnpm --filter @1v1/db audit` ran pnpm's vulnerability
+scanner and printed a wall of CVEs instead of the audit. Renamed to `audit-wrong`, exposed as
+`pnpm db:audit`. Same trap as `pnpm up` being an alias for `pnpm update`.
+
+### Verification
+
+`pnpm db:verify` unchanged — **103/103 test cases** agree with their reference and pass their
+validator; still exits 1 on the 18 presentation issues across the 9 un-retrofitted problems.
+typecheck 7/7, core 56/56. **No problem data was changed this session** — the audit reports, it
+does not fix.
+
+### Not done, deliberately
+
+The 12 findings are **not fixed**, per the instruction to produce the list first. Fixing them means
+adding test cases, which changes what the judge checks — the `coin-change-min` shape. Also
+outstanding: the remaining nine retrofits, and the probe teardown noise. Per §13.10, stopping here.
+
+---
+
+## Making the bank sound — 11 defects fixed, two new gates, one measurement
+
+### 1. All 11 wrong-approach defects are fixed
+
+**`pnpm db:audit` now reports 37 of 38 approaches caught**, up from 26. Ten problems gained a
+discriminating test; every expected output came from `pnpm db:samples`, none was typed.
+
+| problem | test added | now catches |
+| --- | --- | --- |
+| `count-vowels` | `banana` | distinct-vowels-via-a-set |
+| `max-subarray-sum` | 3 × 10^9 **(sample)** | 32-bit accumulator |
+| `activity-selection` | `[0,10] [9,11] [10,20]` | shortest-duration-first greedy |
+| `shortest-path-bfs` | 4-cycle with a direct edge | DFS instead of BFS |
+| `topological-order` | the diamond **(sample)** | *both* survivors at once |
+| `longest-increasing-subsequence` | `1 2 2 3 4` **(sample)** | non-strict `<=` |
+| `palindrome-min-cut` | `aaabaa` **(sample)** | greedy longest palindromic prefix |
+| `dijkstra-shortest` | 3000×10^6 chain | 32-bit distances |
+| `dijkstra-shortest` | `1-2-3` detour **(sample)** | nearest-neighbour walk |
+| `modular-power` | `5 0 1` **(sample)** | `b == 0` returning a bare 1 when m = 1 |
+
+Six are samples, because each teaches something a player would otherwise guess wrong: that the
+answer overflows 32 bits, that revisiting a vertex is not a cycle, that *strictly* increasing
+excludes equals, that greedy partitioning fails, that Dijkstra is not a walk, and that m may be 1.
+The four un-retrofitted problems among them get their explaining `note` when the retrofit lands;
+the test is what stops the judge accepting wrong code today.
+
+The dijkstra overflow chain is **generated in `problems.ts`, not written out** — the literal is
+51 KB, and four lines that build a chain are more auditable than a wall of digits.
+
+**Nothing downstream assumes a fixed test count.** `totalTests` flows from the server through
+`match.start` to `TestBar`; the judge derives everything from `job.tests.length`. There is one real
+ceiling: **`MAX_CELLS = 20` in `TestBar`** — above 20 tests §6.4's segmented bar stops being
+readable and degrades to a continuous fill. That is now what caps the policy below.
+
+### The test-count policy — the root cause behind all eleven
+
+Every problem shipped with **five** tests. Five is right for `sum-of-two`, whose own statement says
+it exists as an I/O format check, and hopeless for `dijkstra-shortest`. Difficulty and the number
+of ways to be *nearly* right grow together: a 2000 problem has a wrong greedy, an overflow, a
+degenerate case and a complexity trap all available at once, and one fixed set of five tests cannot
+separate all of them.
+
+**`minTests(rating) = 5 + floor((rating − 800) / 200)`, capped at `MAX_CELLS`.** Now enforced in
+the format gate.
+
+| rating band | min tests | | rating band | min tests |
+| --- | --- | --- | --- | --- |
+| 800–999 | 5 | | 1600–1799 | 9 |
+| 1000–1199 | 6 | | 1800–1999 | 10 |
+| 1200–1399 | 7 | | 2000+ | 11 |
+| 1400–1599 | 8 | | | |
+
+It tops out at 11 against a cap of 20, and that margin is the point rather than a coincidence — a
+hard problem can gain tests without changing how the match screen renders.
+
+**Four problems already comply** (`sum-of-two`, `count-vowels`, `fizzbuzz-count`,
+`max-subarray-sum`). **Sixteen are short by 37 tests in total**, listed by `pnpm db:verify`. Those
+37 largely overlap with the coverage gaps below — a boundary test is a meaningful test, so closing
+coverage closes most of the count shortfall. Filling it with filler would defeat both.
+
+### 2. Constraint coverage — `pnpm db:coverage`
+
+For every numeric bound in `constraints`, require a test that reaches it, or a recorded exemption
+in `coverageExemptions`. Same shape as `discriminator: null`: silence is not an option.
+
+**76 bounds checked. 24 are promised by a statement and never posed by any test.**
+
+**It finds gaps in 5 problems the wrong-approach audit called completely clean** —
+`longest-common-prefix`, `connected-components`, `fractional-knapsack`, `min-platforms` and
+`edit-distance` — plus deeper gaps in problems the audit had already flagged. The audit needs
+somebody to guess the right wrong approach; this needs nobody to guess anything, because the
+evidence was already written down. The two `dijkstra`/`LIS` defects would both have been caught
+here without any knowledge of algorithms at all.
+
+The worst of them, as a flavour: `fractional-knapsack` states `n <= 10^5`, `capacity <= 10^9`,
+`value_i <= 10^6` and `weight_i <= 10^6`, and the largest number anywhere in its tests is **120**.
+
+**The exemption mechanism is positive-controlled**, not assumed: a temporary exemption on
+`palindrome-min-cut`'s `|s| <= 2000` moved the count 24 → 23 and printed its reason, then was
+removed. **No exemption is currently recorded**, because none of the 24 deserves one — they all
+deserve tests.
+
+### 3. `db:verify` is now the bank gate, and the ordering bug cannot recur
+
+`pnpm db:verify` runs three passes: **verify-seed** (format + reference correctness), **audit-wrong**,
+**coverage**. `pnpm db:seed` runs the gate first and **refuses to seed** on failure.
+
+**Each pass runs in its own child process.** Last session's bug was a `process.exit(1)` in the
+format check suppressing the reference check — fixed by reordering, and reordering is a promise the
+next edit can quietly break: any `exit`, early `return` or thrown error in pass 1 puts pass 2 back
+to sleep, and the symptom is a green tick. A child process cannot exit another child process, so
+the guarantee is now structural instead of disciplinary.
+
+**Positive-controlled:** `SIGKILL` was appended to pass 1, and the gate still reported
+`FAIL verify-seed`, ran `audit-wrong` to a pass, and ran `coverage` to a fail. A pass dying does not
+take another pass offline.
+
+`ALLOW_UNSOUND_BANK=1` overrides the seed refusal and exists for one temporary reason: the gate
+fails today on the 24 unreached bounds and 34 presentation issues being worked through in order, and
+refusing to seed would make the app unrunnable for all of it. It is loud, hand-typed, warns on use,
+and `scripts/up.sh` carries a comment saying to delete it when the gate goes green.
+
+### 4. gcd-pair — measured, and it is NOT a defect
+
+**A timing test cannot work here, so none was added.** Timed rather than reasoned about:
+
+| | worst permitted input `(10^9, 1)` |
+| --- | --- |
+| subtractive Euclid, `g++ -O2` | **0.50 s** (≈1.0 s at the sandbox's `--cpus 0.5`) |
+| subtractive Euclid, Python | ≈159 s |
+| Euclidean reference | 0.00 s |
+
+Against a **5000 ms** limit, subtractive Euclid passes in C++ with 5× headroom, and **no test can
+change that**, because `a, b <= 10^9` caps the work at 10^9 iterations. So at these constraints it
+is a correct and fast-enough C++ solution. The Python timeout is ordinary language variance, not a
+broken test set — a test here would fail Python and pass C++, which is worse than adding nothing.
+
+Forcing the Euclidean algorithm means raising the bound to about **10^18**, where subtractive needs
+10^18 steps and is hopeless in every language. That is a real option and a *different problem*: it
+makes 64-bit arithmetic part of the task and needs the validator, the Python reference and the
+TypeScript reference all moved past 2^53. **Not done on the audit's say-so** — it is a design change,
+not a bug fix. The finding is recorded in `audit-wrong.ts` as `notADefect` with the measurement, so
+nobody re-opens it from first principles.
+
+### Verification
+
+`db:verify` — **113/113 test cases** agree with their reference and pass their validator (up from
+103). `db:audit` 37/38 caught, 1 acceptable. `db:coverage` 24 open gaps. typecheck 7/7, core 56/56,
+**probes 5/5**, **e2e 17/17**.
+
+### Not done, deliberately
+
+The **24 coverage gaps** and the **37-test count shortfall** are the next block, and they are mostly
+the same work. Then the remaining nine retrofits, and the probe teardown noise. Per §13.10, stopping
+here.
+
+---
+
+## The bank is sound — 29 coverage gaps closed, 153 tests, two of three gates green
+
+`db:coverage` now reports **every stated bound is reached by a test**, with **no exemptions
+recorded** — none of the 29 deserved one. `db:audit` catches 37 of 38 approaches. `db:verify`'s
+remaining failure is the 18 presentation issues across the nine un-retrofitted problems, which is
+the retrofit work, not a defect.
+
+**103 → 153 test cases.** Every one derived, none typed.
+
+### 1. The cost, measured against the test sets that actually shipped
+
+The premise that 5 → 11 tests roughly doubles judge CPU is **wrong by an order of magnitude**, and
+the reason is that compilation dominates completely. Worst case in the bank is
+`dijkstra-shortest`: 10 tests, 3.08 MB of input, including one 3.1 MB graph at `n = 10^5, m = 2·10^5`.
+
+| | CPU |
+| --- | --- |
+| `g++ -O2` compile (`bits/stdc++.h`) | **2.35 s** |
+| all 10 tests, including the 3.1 MB one | **0.10 s** |
+| the old 5 small tests | 0.00 s |
+| **total, new** | **2.45 s** |
+| **total, old** | 2.03 s |
+
+**+0.42 CPU-seconds, +21%** on this host — and against §11's more conservative 3.5 s compile
+calibration it is **+3%**. A test at the full stated bound costs 0.08 s; a small one costs 0.0015 s.
+Tests are microseconds and the compiler is seconds.
+
+Against the **120 CPU-s / 10 min** per-user budget: §11's fast iterator at 25 submissions goes from
+~100 to **~102.5 CPU-seconds**. The margin is essentially unchanged and **no budget change is
+needed**.
+
+**On "the in-match exemption" — there isn't one, and it is worth being exact.** §11's per-user
+budget is flat; its only carve-out is that the per-IP budget applies solely to accounts younger
+than 24 hours. What actually bounds an in-match player is the §6.8b **in-flight lock**, which is a
+mechanism, not an exemption. It still covers this: one outstanding submission at ~5.7 s per round
+trip caps a player at ~105 submissions per 10 minutes, and the CPU budget binds first at 29.
+
+**Verdict latency: 5.5 s → ~5.7 s**, not 9 s. The extra is 0.10 s of execution plus moving 3.1 MB
+over stdin.
+
+**The §6.6 reveal is the one thing that genuinely changes.** At `dur.reveal` = 165 ms per cell, a
+full pass goes from 825 ms to **1815 ms** on an 11-test problem. That is a longer slot machine on a
+win, which is the case §6.6 wants drawn out. Failures got *shorter*, for the reason below. The HUD
+needs no change: `MAX_CELLS` is 20, so 11 still renders as segmented cells.
+
+### 2. Test ordering — no real conflict, and the tie-break is the runner
+
+**Decided: samples and discriminating cases first, scale tests last.** Implemented; every generated
+scale test is appended at the end of its array under a comment saying why.
+
+The deciding fact is at `apps/judge/images/runner.py:431` — **the runner stops at the first
+failure**. So ordering by discriminating power is not a trade against cost, it *is* the cost saving:
+a wrong solution now fails on a small early test instead of first chewing through 3.1 MB of graph.
+
+On the information-leak concern, which is a fair question and resolves cleanly:
+
+- What the player learns is about **their own solution**, which is what feedback is for. §10's
+  allowlist governs what the **opponent** sees, and the opponent still gets pass/fail and counts —
+  `failedAt` is not on that channel.
+- The tests stay hidden. Failing at index 2 says "you break early", not what test 2 contains.
+- §6.6 already **requires** failure to be fast: sting for about a second and get out of the way. A
+  wrong answer failing on test 9 of 11 is 1.5 s of reveal before the player even learns they lost
+  the exchange. Early discriminators serve the spec rather than fighting it.
+
+The one honest cost: the last cells of a *passing* reveal are now scale tests that almost never
+fail, so the tension front-loads slightly. That is the right trade against making every wrong
+submission pay for the expensive tests.
+
+### 3. Generated test data — the one place derive-never-type does not protect
+
+Correct, and it is now a mechanism. A generated input must assert **the property it exists to
+test**, by independent arithmetic, never by running a solution:
+
+```ts
+generated("dijkstra 32-bit overflow chain", build, {
+  "the true distance exceeds 2^31": () => EDGES * 1_000_000 > 2 ** 31,
+  "it is a simple path, so that distance is forced": (i) => …,
+  "the header agrees with the edges written": (i) => …,
+})
+```
+
+These run at **module load**, so a broken generator fails `db:verify`, `db:seed` and the gateway
+alike rather than quietly producing a weaker test set. Without it, a chain of 2000 edges instead of
+3000 passes the validator (in spec), passes `db:verify` (reference and expected agree) and stops
+testing overflow — everything agreeing while being wrong together.
+
+**Positive-controlled, and then it earned its keep three times on my own mistakes:**
+
+- Changing `EDGES` to 2000 failed at import with *"does not satisfy: the true distance exceeds
+  2^31"*.
+- The `longest-common-prefix` generator emitted `common0`; **the validator refused it** — digits in
+  a letters-only word list.
+- The fix used a two-letter suffix, and 999 / 26 = 38 runs past `z` into control characters. **The
+  generator's own new assertion caught it on the very next run.**
+
+`pnpm db:fill` derives expected outputs for generated inputs — the case `db:samples` cannot cover,
+because nobody typed the input either so nobody can paste it into another tool. It runs the
+reference over the exact `PROBLEMS` object that ships, not a copy.
+
+### 4. `ALLOW_UNSOUND_BANK` — refused in production, not just listed
+
+A checklist entry asks a human to remember. `prisma/seed.ts` now **refuses outright** when the flag
+is set and `NODE_ENV=production`, and says why. Positive-controlled both ways: refused under
+production, still works in development.
+
+The failure mode is what makes this worth a mechanism — with the flag set, seeding **succeeds**, so
+nothing looks wrong. Someone exports it to unblock a staging setup and it is still in the
+environment six months later.
+
+**For the Phase 2E deployment checklist:** `ALLOW_UNSOUND_BANK` must be absent from the production
+environment. The code enforces it; the checklist entry is defence in depth on a control whose
+failure mode is silence.
+
+### Three defects found while doing the work
+
+**The 2 MB validator cap made three problems' constraints unsatisfiable.** `m <= 2*10^5` edges with
+weights is ~2.8 MB of text, so `connected-components`, `topological-order` and `dijkstra-shortest`
+could not carry a test at their own stated bound: `db:coverage` demanded one, `db:fill` generated
+one, and the validator refused it. `n <= 10^5, m <= 2*10^5` is an ordinary competitive-programming
+size, so **the cap was what was wrong** — raised to 8 MB, matching the judge's existing
+`--ulimit fsize=8388608` rather than being a second arbitrary number beside it.
+
+**`db:coverage` was over-crediting, in the dangerous direction.** It asked whether any token was
+*at least* the bound, so adding a test with 10^9 *values* made it consider `n <= 10^5` reached — it
+had no idea which token was `n`. Now it requires an **exact** match, which is what a boundary test
+actually is. That took the gap count from 24 to **29**: five bounds it had been calling covered.
+
+**`Math.max(-Infinity, ...observed)` blew the call stack** the moment a 100 000-element test landed.
+It surfaced as a `RangeError` that the gate correctly reported as a failing pass but that had
+nothing to do with coverage. Replaced with a loop.
+
+### The probe teardown noise is gone
+
+All five probes: **PASS, zero Prisma error lines.** `Match.p1`/`p2` are the only relations to `User`
+without `onDelete: Cascade` — deliberately, since a match is a historical record — so the matches
+have to be deleted first. One shared `deleteProbeUsers` helper in `apps/gateway/src/probe-cleanup.ts`
+does it in dependency order.
+
+**A near-miss worth recording.** The first run after the fix reported `prisma noise: 0` for all five
+probes — and the verdict column was empty, because the dev server had died and every probe was
+failing with `ECONNREFUSED`. "Zero noise" was trivially true of probes that never ran. That is the
+exact failure this project keeps meeting: output that looks like the output you wanted. The verdict
+column is now printed as `NO-VERDICT` rather than blank when a probe produces neither PASS nor FAIL.
+
+### Verification
+
+`db:verify`: **153/153** test cases agree with their reference and pass their validator.
+`db:audit` 37/38 caught, 1 acceptable. `db:coverage` **0 gaps, 0 exemptions**. Test-count policy
+satisfied by all 20 problems. typecheck 7/7, core 56/56, **probes 5/5 clean**, **e2e 17/17**.
+
+### Not done, deliberately
+
+**The nine statement retrofits did not fit** and are the only thing left before the gate goes fully
+green — `db:verify` names all 18 issues. That is the next session. Per §13.10, stopping here.
+
+---
+
+## The bank gate is green
+
+```
+  pass  verify-seed    a problem is unsolvable as presented, or an expected output is wrong
+  pass  audit-wrong    a plausible wrong approach passes the tests — the judge accepts wrong code
+  pass  coverage       a stated bound is never posed by any test, and is not exempted
+
+The bank is sound: presentable, correct, discriminating, and covered.
+```
+
+**20 of 20 problems retrofitted. 153 test cases, all agreeing with their reference and passing
+their validator. 76 of 76 stated bounds reached by a test, no exemptions. 37 of 38 wrong approaches
+caught.**
+
+### The nine statement retrofits
+
+`min-platforms`, `shortest-path-bfs`, `topological-order`, `kth-smallest-pair`,
+`longest-increasing-subsequence`, `edit-distance`, `palindrome-min-cut`, `dijkstra-shortest`,
+`modular-power` — each now carries a statement that is the task alone, an `inputFormat`, an
+`outputFormat`, one bound per `constraints` entry, a `discriminator` naming the wrong approach a
+sample rejects, and a `note` explaining every sample.
+
+**Two samples promoted**, both teaching a rule a player would otherwise guess wrong:
+
+- `min-platforms` — `1 5` and `5 9` answers **2**. The tie-break where a train departs at exactly
+  the moment another arrives was stated in prose and demonstrated nowhere.
+- `shortest-path-bfs` — the 4-cycle with a direct edge answers **1**. This is the DFS-versus-BFS
+  case; it was a hidden test and is the whole point of the problem.
+
+**`kth-smallest-pair` has a wrong slug and it was deliberately left alone.** It says "pair" and the
+problem is a single array — the reference has always been "sort, take the k-th". The slug is the
+primary key in Postgres, appears in seeded rows, match history and any replay log already on disk,
+so renaming it is a migration rather than an edit. The *title* is what a player reads and it is
+correct. Recorded in the source next to the field so nobody re-discovers it as a bug.
+
+### `ALLOW_UNSOUND_BANK` is deleted, not disabled
+
+The gate is green, `pnpm db:seed` runs it with no flag, so the override is **gone from
+`seed.ts` and from `scripts/up.sh`** — not left in place turned off. The only surviving mention is
+the comment saying why it was removed and that reintroducing it should be a deliberate act with the
+same production refusal it had.
+
+The reasoning is the one that motivated the request: a soundness override with no current purpose
+is what gets re-enabled during a deploy problem at 2am, by someone who needs the seed to work and
+will not read why it was refused.
+
+**Positive-controlled both ways after removal:** seeding succeeds on the green bank, and breaking a
+single `discriminator` field makes it print *"The bank gate failed, so nothing was seeded"* and
+refuse — with no way to force it.
+
+### Recorded in the brief: compilation is the whole bill
+
+Added to §11, because it is a standing constraint and not a one-off measurement. A test at the full
+stated bound costs **0.08 CPU-s**; a small one costs **0.0015**; the `g++` compile costs **2.35**.
+Going 5 → 10 tests on the heaviest problem in the bank cost **+21%** on this host and **+3%**
+against §11's own 3.5 s calibration.
+
+The rule that follows: **the minimum test count is set by what it takes to separate a correct
+solution from a plausible wrong one, never by CPU.** The real ceilings on a test set are
+`MAX_CELLS` (20) and the validator's 8 MB input cap.
+
+### Size report
+
+Lines of code, from `git ls-files`, by package and by kind. `probe` is split out from `test`
+because the probes are a distinct thing — long-running gateway scenarios, not unit tests — and
+`tooling` is the bank gate machinery, which is neither application code nor tests.
+
+| package | app | test | probe | tooling | seed-data | total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `apps/web` | 7388 | 218 | | | | **7606** |
+| `apps/gateway` | 2892 | 426 | 1553 | | | **4871** |
+| `packages/ui` | 3505 | | | | | **3505** |
+| `packages/db` | 600 | | | 782 | 1930 | **3312** |
+| `packages/core` | 1326 | 759 | | | | **2085** |
+| `apps/judge` | 1029 | 537 | | | | **1566** |
+| `e2e` | | 743 | | | | **743** |
+| `packages/proto` | 604 | | | | | **604** |
+| `scripts` | 219 | | | | | **219** |
+| **total** | **17563** | **2683** | **1553** | **782** | **1930** | **24511** |
+
+**The generated test data does not distort the count, and it is worth saying why.** The 13
+generated inputs are **14.51 MB at runtime** and cost about **230 lines of source**, because they
+are *built* rather than stored — a chain of 3000 edges is four lines that emit it. A byte count of
+the seed would be dominated by data that does not exist on disk; a line count is honest. This is
+the same reason the generators were written that way in the first place.
+
+**`packages/db/src/problems.ts` is 1381 lines and most of it is not code:**
+
+| | lines |
+| --- | ---: |
+| English prose — statements, notes, input/output formats, discriminators | **572** |
+| design-rationale comments | 175 |
+| code and small test-data literals | 635 |
+
+So of the 1930 "seed-data" lines above, roughly **570 are problem statements written for players**
+rather than anything a compiler reads.
+
+**Tooling is 782 lines** — `audit-wrong` (1037 lines, the largest single file in `packages/db`
+because it carries 38 wrong solutions and their reasoning), `verify-seed`, `coverage`, `gate`,
+`samples`, `fill`. That is roughly one line of bank-verification machinery for every 22 lines of
+application code, which is high and is where the last four sessions went.
+
+**Commits: 36**, from `Phase 0: design system and primitives` to
+`Add pnpm db:samples: derive sample outputs from the reference, and validate the inputs`.
+
+**The last several sessions are uncommitted** — 12 files changed, +1624/−72, plus five untracked
+files (`probe-cleanup.ts`, `audit-wrong.ts`, `coverage.ts`, `fill.ts`, `gate.ts`). That is yours to
+commit; nothing has been committed on your behalf.
+
+### Verification
+
+`pnpm db:verify` — **all three passes green**, 153/153 test cases, 76/76 bounds, 37/38 wrong
+approaches caught. `pnpm db:seed` succeeds with no override. typecheck 7/7, core 56/56, smoke 5/5,
+**probes 5/5 with zero teardown noise**, **e2e 17/17**.
+
+### What is next
+
+The bank is sound and the road to launch (§12) is: the shareable spectator link is done, challenge
+links are done, so **Phase 2E — deployment** is the remaining item. Per §13.10, stopping here.

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "verify": "node --experimental-strip-types src/verify-seed.ts",
+    "verify": "node --experimental-strip-types src/gate.ts",
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "push": "prisma db push",
@@ -18,7 +18,11 @@
     "studio": "prisma studio",
     "seed:users": "node --experimental-strip-types prisma/seed-users.ts",
     "solutions": "node --experimental-strip-types src/verify-solutions.ts",
-    "samples": "node --experimental-strip-types src/samples.ts"
+    "samples": "node --experimental-strip-types src/samples.ts",
+    "audit-wrong": "node --experimental-strip-types src/audit-wrong.ts",
+    "coverage": "node --experimental-strip-types src/coverage.ts",
+    "verify-seed": "node --experimental-strip-types src/verify-seed.ts",
+    "fill": "node --experimental-strip-types src/fill.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

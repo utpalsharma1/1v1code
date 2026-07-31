@@ -40,7 +40,23 @@ class Reader {
     // Reject anything that isn't plain ASCII text up front: a validator that
     // accepts control characters is a validator that can smuggle a payload.
     if (/[^\x09\x0a\x0d\x20-\x7e]/.test(raw)) fail("input contains non-printable characters");
-    if (raw.length > 2_000_000) fail("input exceeds 2 MB");
+    /* 8 MB, matching the judge's own `--ulimit fsize=8388608` (§11) rather than
+       being a second arbitrary number beside it.
+
+       It was 2 MB, and that made three problems' STATED CONSTRAINTS
+       unsatisfiable: `m <= 2*10^5` edges with weights is about 2.8 MB of text,
+       so `connected-components`, `topological-order` and `dijkstra-shortest`
+       could not carry a test at their own upper bound. `db:coverage` demanded
+       one, `db:fill` generated one, and the validator refused it — which is the
+       three gates disagreeing, and the constraint being a promise the platform
+       could not keep.
+
+       n <= 10^5 with m <= 2*10^5 is an ordinary competitive-programming size.
+       The cap is ours, so the cap is what was wrong. Raising it costs a larger
+       maximum hack-phase input (§6.8), which is bounded, CPU-billed (§11) and
+       not yet built; leaving it costs a constraint the judge would enforce and
+       the problem could never demonstrate. */
+    if (raw.length > 8_388_608) fail("input exceeds 8 MB");
     this.tokens = raw.trim().split(/\s+/).filter(Boolean);
   }
 

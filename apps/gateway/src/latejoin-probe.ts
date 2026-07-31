@@ -19,6 +19,7 @@
    ========================================================================= */
 
 import { randomBytes } from "node:crypto";
+import { deleteProbeUsers } from "./probe-cleanup.ts";
 import { io, type Socket } from "socket.io-client";
 import { prisma } from "@1v1/db";
 
@@ -224,9 +225,9 @@ async function main(): Promise<void> {
   if (!ok) for (const f of failures) console.error(`FAIL: ${f}`);
   else log(`PASS — ${JOINS} late joins, each reconstructed the gateway's document exactly.`);
 
-  await prisma.user
-    .deleteMany({ where: { email: { in: [one.email, two.email] } } })
-    .catch(() => undefined);
+  await deleteProbeUsers(prisma, [one.email, two.email]).catch((error: unknown) =>
+    console.error(`teardown failed: ${String(error)}`),
+  );
   await prisma.$disconnect();
   if (!ok) process.exit(1);
 }

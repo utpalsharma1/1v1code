@@ -15,6 +15,7 @@
    ========================================================================= */
 
 import { randomBytes } from "node:crypto";
+import { deleteProbeUsers } from "./probe-cleanup.ts";
 import { io, type Socket } from "socket.io-client";
 import { prisma } from "@1v1/db";
 
@@ -112,9 +113,10 @@ async function main(): Promise<void> {
   s1.close();
   s2.close();
 
-  await prisma.user.deleteMany({
-    where: { email: { in: [`${one.handle}@example.com`, `${two.handle}@example.com`] } },
-  });
+  await deleteProbeUsers(prisma, [
+    `${one.handle}@example.com`,
+    `${two.handle}@example.com`,
+  ]);
 
   log("");
   if (failures.length > 0) {

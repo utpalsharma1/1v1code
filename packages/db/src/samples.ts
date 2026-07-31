@@ -60,6 +60,26 @@ function runReference(source: string, input: string): Promise<{ out: string; err
   });
 }
 
+/* COMPARE THE WAY THE JUDGE COMPARES, or the tool cries wolf.
+
+   This is `normalise` from apps/judge/images/runner.py:334, and the two must
+   stay identical. The first version compared raw stdout against the seed value
+   and therefore reported a MISMATCH on all twenty problems at once — every
+   reference prints a trailing newline and no seed value carries one, so the
+   only real difference was whitespace the judge already ignores.
+
+   A checker that is STRICTER than the thing it models is not a safer checker.
+   Twenty false alarms is how a genuine one gets waved through, and the whole
+   point of this tool is that its output can be trusted without re-deriving it
+   by hand. */
+function normalise(text: string): string {
+  return text
+    .trim()
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""))
+    .join("\n");
+}
+
 /** Escape a string for pasting straight into the seed file. */
 function asLiteral(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
@@ -151,8 +171,11 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const derived = result.out;
-    const drift = testCase.claimed !== undefined && testCase.claimed !== derived;
+    /* Print the literal already normalised, so what gets pasted is what the
+       rest of the seed file looks like and a later run of this tool agrees
+       with it. */
+    const derived = normalise(result.out);
+    const drift = testCase.claimed !== undefined && normalise(testCase.claimed) !== derived;
 
     console.log(`  ${label}`);
     console.log(`    input:    ${asLiteral(testCase.input)}`);

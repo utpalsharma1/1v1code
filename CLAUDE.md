@@ -875,6 +875,23 @@ The lone-surrogate case found a live exploit the first time it ran: source arriv
 
 **Compilation is an amplification attack.** Five lines of preprocessor macros buy ten seconds of CPU. A request-counting rate limiter cannot see that: it counts one request while the attacker spends ten CPU-seconds, so the limiter and the resource being consumed are in different units.
 
+**Compilation is the entire bill; test count is nearly free. Do not constrain test-set design on judge CPU.**
+
+Measured against the real bank, on the heaviest problem in it (`dijkstra-shortest`: 10 tests, 3.08 MB of input, one graph at the full `n = 10^5, m = 2*10^5` bound):
+
+| | CPU |
+| --- | --- |
+| `g++ -O2` compile with `bits/stdc++.h` | **2.35 s** |
+| all 10 tests, including the 3.1 MB one | **0.10 s** |
+| one test at the full stated bound | 0.08 s |
+| one small test | 0.0015 s |
+
+Going from 5 tests to 10 cost **+0.42 CPU-seconds, about +21%** — and against the 3.5 s compile figure this section calibrates on, **+3%**. A test is microseconds and the compiler is seconds, so the intuition that doubling the test count doubles the bill is wrong by an order of magnitude.
+
+The consequence is a standing rule: **the minimum test count (§12) is set by what it takes to separate a correct solution from a plausible wrong one, never by CPU.** The binding constraints on a test set are `MAX_CELLS` (20, above which §6.4's segmented bar degrades) and the validator's 8 MB input cap — not this budget. If a problem needs twelve tests to discriminate, the judge does not care.
+
+This also means the abuse analysis above is unchanged by test counts: an attacker's cheapest lever is still the 10 s compile budget, and adding tests to a problem does not move it.
+
 **Bill CPU-seconds, not requests.** The runner measures actual CPU via `getrusage(RUSAGE_CHILDREN)` for both the compile step and every test, and reports `cpuMs` per phase and a total. Wall time is not a substitute: a process sleeping for five seconds costs nothing, and one spinning for five seconds costs a core.
 
 Rolling ten-minute budgets:

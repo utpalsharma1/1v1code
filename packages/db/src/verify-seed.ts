@@ -315,7 +315,7 @@ const SOLVERS: Record<string, Solver> = {
   },
 };
 
-function verify(): number {
+function verify(): { failures: number; formatFailures: string[] } {
   assertSeedIntegrity(VALIDATOR_KEYS);
 
   let failures = 0;
@@ -342,6 +342,35 @@ for (const problem of PROBLEMS) {
   if (samples < 2) {
     formatFailures.push(`${problem.slug}: has ${samples} sample(s), needs at least 2`);
   }
+  /* MINIMUM TEST COUNT SCALES WITH RATING.
+
+     Every problem in the bank shipped with five tests, and five was the root
+     cause behind all eleven wrong-approach defects. Five is genuinely fine for
+     `sum-of-two`, whose own statement says it exists as an I/O format check.
+     Five is hopeless for `dijkstra-shortest`, where a correct solution and a
+     subtly wrong one differ only on inputs nobody wrote down.
+
+     The reason it has to scale is that difficulty and the number of ways to be
+     NEARLY right grow together. A 2000 problem has a wrong greedy, an overflow,
+     an unhandled degenerate case and a complexity trap all available at once,
+     and asking one fixed set of five tests to separate all of them is asking
+     the wrong question.
+
+     5 at 800, one more per 200 rating points, so 11 at 2000.
+
+     CAPPED AT MAX_CELLS (20), which is not arbitrary: above 20 tests §6.4's
+     segmented test bar stops being readable and TestBar degrades to a
+     continuous fill. The HUD is the product, so the test count stays inside
+     what it can render as cells. The formula tops out at 11 and never
+     approaches the cap, which is the intended margin rather than a coincidence
+     — it leaves room to add tests to a hard problem without changing how the
+     match screen looks. */
+  const minTests = Math.min(20, 5 + Math.floor((problem.rating - 800) / 200));
+  if (problem.tests.length < minTests) {
+    formatFailures.push(
+      `${problem.slug}: has ${problem.tests.length} test(s); rated ${problem.rating} needs ${minTests}`,
+    );
+  }
   /* The discriminator must be PRESENT, and `null` is a valid answer. Requiring
      presence rather than truthiness is the whole point: it forces the author to
      decide whether a discriminating sample exists, instead of leaving the
@@ -360,12 +389,21 @@ if (formatFailures.length > 0) {
       "an output format, constraints, a note explaining the samples, and >= 2 samples.\n" +
       "Samples are also verified byte-for-byte against the reference solution below.\n",
   );
-  /* A HARD exit, not `exitCode`. The final `process.exit(failures === 0 …)`
-     below overwrote it, which made this check advisory — it printed a wall of
-     real problems and then reported success. An incomplete problem set must
-     stop the seed, and reporting it while exiting 0 is the same class of bug as
-     a green tick on a meaningless result. */
-  process.exit(1);
+  /* DO NOT EXIT HERE — record it and let the correctness pass below run.
+
+     This used to be a hard `process.exit(1)`, which was the right fix for the
+     previous bug (`exitCode` was being overwritten, so a wall of real problems
+     reported success) and the wrong place for it. Exiting here makes the WEAKER
+     gate suppress the STRONGER one: a single problem missing a `note` took the
+     reference-solution and validator check for all twenty offline.
+
+     That is worst during exactly the situation it was met in — a retrofit
+     spanning several sessions, where the format gate is failing by design on
+     every problem not yet reached, so the check that would catch a wrong
+     expected output is dark for the whole of it.
+
+     Both passes now always run and the exit code below accounts for both. A
+     gate may fail the build; it may not disable another gate. */
 }
 
 for (const problem of PROBLEMS as SeedProblem[]) {
@@ -408,14 +446,21 @@ for (const problem of PROBLEMS as SeedProblem[]) {
     );
   }
 
-  return failures;
+  return { failures, formatFailures };
 }
 
 console.log(`Verifying ${PROBLEMS.length} seeded problems\n`);
-const failures = verify();
+const { failures, formatFailures } = verify();
 console.log(
   failures === 0
     ? `\nAll ${PROBLEMS.reduce((n, p) => n + p.tests.length, 0)} test cases agree with their reference solution and pass their validator.`
     : `\n${failures} problem(s) failed.`,
 );
-process.exit(failures === 0 ? 0 : 1);
+if (formatFailures.length > 0) {
+  console.error(
+    `${formatFailures.length} presentation issue(s) across ` +
+      `${new Set(formatFailures.map((f) => f.split(":")[0])).size} problem(s), listed above. ` +
+      "The bank is correct but not yet solvable as presented.",
+  );
+}
+process.exit(failures === 0 && formatFailures.length === 0 ? 0 : 1);

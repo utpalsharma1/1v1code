@@ -33,7 +33,11 @@
     "pulse:calibrate": "node --experimental-strip-types packages/core/src/calibrate-pulse.ts",
     "probe:latejoin": "node --experimental-strip-types apps/gateway/src/latejoin-probe.ts",
     "probe:lifecycle": "node --experimental-strip-types apps/gateway/src/lifecycle-probe.ts",
-    "db:samples": "pnpm --filter @1v1/db samples"
+    "db:samples": "pnpm --filter @1v1/db samples",
+    "db:audit": "pnpm --filter @1v1/db audit-wrong",
+    "db:coverage": "pnpm --filter @1v1/db coverage",
+    "db:verify:seed": "pnpm --filter @1v1/db verify-seed",
+    "db:fill": "pnpm --filter @1v1/db fill"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

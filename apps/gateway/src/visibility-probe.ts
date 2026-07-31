@@ -34,6 +34,7 @@
    ========================================================================= */
 
 import { randomBytes } from "node:crypto";
+import { deleteProbeUsers } from "./probe-cleanup.ts";
 import { io, type Socket } from "socket.io-client";
 import { prisma, solutionFor } from "@1v1/db";
 
@@ -285,9 +286,9 @@ async function main(): Promise<void> {
   if (!verdict) for (const f of failures) console.error(`FAIL: ${f}`);
   else log("\nPASS — the opponent's source was unobtainable through every route tried.");
 
-  await prisma.user
-    .deleteMany({ where: { email: { in: [victimAccount.email, attackerAccount.email] } } })
-    .catch(() => undefined);
+  await deleteProbeUsers(prisma, [victimAccount.email, attackerAccount.email]).catch(
+    (error: unknown) => console.error(`teardown failed: ${String(error)}`),
+  );
   await prisma.$disconnect();
   if (!verdict) process.exit(1);
 }
