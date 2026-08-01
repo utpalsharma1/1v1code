@@ -950,7 +950,18 @@ The reasoning for the move: **ranked matchmaking needs a population we will not 
 
 Scope: TLS termination, environment separation (a real staging database, never a shared one), automated Postgres backups with a restore that has actually been tested, log retention, and **the Socket.IO Redis adapter** — not because we need a second gateway on day one, but because §7's spectator fanout ceiling is a single process and retrofitting the adapter after state has spread across handlers is exactly the kind of change that goes wrong. Per-IP rate limiting (§11) lands here too.
 
-**Phase 3 — Alive.** Spectator mode, replay from the event log, the Hub, profiles with topic radar, XP/quests/streaks, draft pick-ban, **league color on handles (§4)**.
+**Phase 3 — Alive. THIS IS THE PRIORITY, ahead of everything else including the per-language time-limit multiplier.**
+
+The match itself reads well — countdown, HUD, test resolution, clutch and victory all land. Everything *around* it has been deferred since Phase 0, and the first outside player to see it said the site looked unfinished. He was right: after login there was a Play button, a challenge link, and a socket event log built for debugging. §2 says design is a functional requirement and not polish, and a product whose only designed screen is the one you reach after two undesigned ones has failed that test.
+
+**The lesson is that the shell is not the part you do last.** A deferred shell does not read as "coming soon", it reads as abandoned, and it discredits the match screen that it wraps.
+
+It splits, and the seam is the shell versus what fills it.
+
+- **Phase 3A — the shell.** Strip every dev artefact from the player path. The Hub (§7): giant PLAY with the mode selector attached, rank badge and progress beside it, recent matches, challenge-link control. **The rank ladder from §8** — Iron through Legend with divisions, badges, progress to next tier, placement handling — because Glicko has been producing numbers nobody can read since 2B and a tier is the single biggest emotional gap in the product. The §6.7 rank-up cinematic exists in `/dev/hud` and has never fired on a real match; wire it. **League colour on handles (§4)**, aura at Master and above only, suppressed inside a live HUD. The persistent left rail (§7), capped at six items.
+- **Phase 3B — what fills it.** Profile with match history and the per-topic radar, leaderboard, replay viewer from the event log, the live match panel, XP/quests/streaks, draft pick-ban.
+
+**3A ships and is looked at before 3B starts.** Getting the shell wrong and then filling it with four more screens is the expensive mistake, and it is the one this phase exists to avoid.
 
 ## Phase 4 — DEFERRED IN FULL
 
@@ -961,6 +972,16 @@ Deferred: **Bo3 · Blitz · Debug Duel · Optimization Duel · Code Golf · Blin
 **The reasoning is depth before breadth.** Make ranked 1v1 excellent, then add modes one at a time. Every additional mode multiplies the surface that has to be polished — its own HUD states, its own cinematics, its own edge cases in the state machine, its own balance questions — and **eight half-finished modes are worth less than one that feels incredible.** §2 says the product exists because a match should feel like a match; that is a claim about quality, and breadth is the fastest way to stop being able to make it.
 
 This supersedes the earlier framing of §6.8 as "if scope ever has to be cut, cut elsewhere first". That sentence was about cutting the hack phase *relative to other Phase 4 modes*, and it still holds inside Phase 4 — the hack phase is the best of them. It was never an argument for shipping Phase 4 before ranked 1v1 is excellent.
+
+### The problem bank — a standing workstream, not a phase
+
+**3–5 new problems at the end of every session, alongside whatever the main work is, until the bank is past 60.** Through the full pipeline every time: statement in the current format, constraints one bound per entry, a validator, a known-correct reference solution, discriminating samples with a written `discriminator`, and then `db:audit`, `db:coverage` and `db:timing` all green. Original problems only — the §12 sourcing rules hold without exception.
+
+**It runs in parallel because it is the only thing on the critical path that more engineering does not shorten.** Twenty problems will not survive a weekend of two friends playing: §8 selects at mean − 120 with an adaptive spread, and a thin band means the same problem twice in an evening, which is the fastest way to make a competitive product feel small. Every session that ships a feature and no problems moves the launch date by exactly as much as a session that ships nothing.
+
+**Spread them across the range** so §8's selection has real choice at every rating — every 100-point bucket from 800 to 2000 wants at least three. Check the current distribution before writing, and fill the thinnest bucket rather than the most interesting one.
+
+The failure mode this exists to prevent is a wall at the end: forty problems written in a fortnight, all by one person in one mood, is a worse bank than forty accumulated three at a time against real gaps.
 
 ### The road to launch
 
@@ -1031,9 +1052,31 @@ Sixty problems at a ~2 hour average is roughly **120 hours of authoring** — a 
    In its place, `/dev/sparring` drives a second player **on command**. It is deliberately not a bot: no solve model, no rating integrity rules, no labelling, no human-like typing. It takes one identity per tab, mints its socket ticket through a route that 404s in production, and gives you queue / accept / submit-correct / submit-wrong / submit-timeout / drop-socket. The reference-solution button pulls the same reviewed source `pnpm db:solutions` verifies, so a sparring win is a real win.
 
    **It is what makes the §6.7b hold reproducible.** That screen needs two submissions outstanding with verdicts returning in a different order to their receipts, which is close to impossible to stage by hand: submit *Time limit* from the sparring tab first and a correct solution from your own window second, and the first receipt gets the last verdict.
-7. **Screenshot your work and critique it against §2 before telling me a screen is done.** If it looks like a generic dark dashboard with neon accents, it has failed the brief — say so and fix it.
-8. Test at 1280px and at mobile widths. Mobile is spectate-and-browse only; the editor is desktop-only and should say so gracefully rather than degrade.
-9. Keyboard focus must be visible everywhere. `prefers-reduced-motion` must be honored in every animation you write, in the same commit that writes it.
-10. When a phase is done, write what changed to `PROGRESS.md` and stop. Do not roll into the next phase.
+7. **A CHECK THAT CANNOT FAIL IS NOT A CHECK. This has now happened sixteen times and it is the most expensive recurring bug in the project.**
+
+   Every instance is a check that reported success, or reported the wrong failure, while the thing it watched was broken or fine. A sample:
+
+   - `0 assets missing` on a page that came back **empty** — nothing iterated, so nothing failed.
+   - `prisma noise: 0` across five probes that were all failing with `ECONNREFUSED`.
+   - A containment suite green because the canary never executed (§11 now requires a positive control for exactly this).
+   - **`/dev/sparring is PUBLIC (000)`** — a *transport failure* announced as a *security exposure*, on the run where it was correctly blocked.
+   - A readiness check satisfied by a **stale server from a previous run**.
+   - A security test whose verdict flipped with an ambient environment variable.
+
+   Two of the sixteen are in the pre-flight written to catch the other fourteen, which is the proof that **a rule you have to remember is not the fix.** The recurring shapes have functions now — `require_env`, `http_probe`/`expect_status` and `require_checked` in `scripts/lib/check.sh`, and `requireEnv` in `@1v1/core/env`. Use them rather than hand-rolling the same three mistakes.
+
+   The four rules they encode:
+
+   - **Zero iterations is a failure.** Any loop reporting "all N passed" asserts N first.
+   - **"Could not ask" is never "asked and got a bad answer".** `curl` writes `000` for a failed connection and it looks exactly like a status code. Keep them distinct in *both* directions — one conflation refused a working URL, the other announced an exposure that did not exist.
+   - **"Something answered" is not "the thing I started answered".** Verify identity — a build ID, a PID, a port owner — not liveness.
+   - **A check must be shown to fail.** Break the thing deliberately and watch the check go red, in the same session you write it. `BREAK_VISIBILITY=1` and `BREAK_TRUSTED_PROXY=1` exist for this.
+
+8. **Run it the way it is actually run.** The sharpest instance of the above was not a wrong configuration but a wrong *invocation*: `pnpm tunnel` was only ever tested from a shell that had already sourced `.env`, so it passed for me and failed for the user, and the production web server started with no `DATABASE_URL`. Entry points are verified with `env -i` and nothing but `HOME`, `PATH` and `TERM`. Every entry point that starts a server states the variables it needs and refuses without them.
+
+9. **Screenshot your work and critique it against §2 before telling me a screen is done.** If it looks like a generic dark dashboard with neon accents, it has failed the brief — say so and fix it.
+10. Test at 1280px and at mobile widths. Mobile is spectate-and-browse only; the editor is desktop-only and should say so gracefully rather than degrade.
+11. Keyboard focus must be visible everywhere. `prefers-reduced-motion` must be honored in every animation you write, in the same commit that writes it.
+12. When a phase is done, write what changed to `PROGRESS.md` and stop. Do not roll into the next phase.
 
 **First task:** read this file, confirm the stack in §3, list anything you think is underspecified, then execute **Phase 0 only**.

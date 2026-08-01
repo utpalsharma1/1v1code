@@ -36,8 +36,15 @@ mkdir -p "$RUN" "$LOG"
 # shellcheck disable=SC1091
 set -a; [ -f "$ROOT/.env" ] && . "$ROOT/.env"; set +a
 
+# The stack starts Postgres, Redis, the judge, the gateway and the web app.
+# Every one of them fails on first use without these, and "fails on first use"
+# means the failure lands on a player rather than here. See scripts/lib/check.sh.
+. "$ROOT/scripts/lib/check.sh"
+require_env DATABASE_URL REDIS_URL SESSION_SECRET || exit 1
+
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+warn() { printf "  %s!%s %s\n" "${YELLOW:-}" "${RESET:-}" "$1"; }
 info() { printf '  · %s\n' "$1"; }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
@@ -54,15 +61,43 @@ running() {           # running <name> <argv-fragment>
   printf '%s' "$pid"
 }
 
+# The environment each service's behaviour depends on. A change to any of these
+# means a running instance is stale, and "stale but running" is the pidfile bug
+# wearing different clothes: something IS running, but not the thing you just
+# configured.
+#
+# This was found the expensive way. The gateway's WEB_ORIGIN gained the
+# production-e2e proxy origin, `pnpm stack` reported "gateway already running",
+# and six specs failed against a gateway still enforcing the old allowlist. The
+# config on disk and the config in memory disagreed and nothing said so.
+config_env() {
+  case "$1" in
+    gateway) printf '%s|%s|%s' "${WEB_ORIGIN:-}" "${REDIS_URL:-}" "${GATEWAY_PORT:-}" ;;
+    judge)   printf '%s|%s|%s' "${REDIS_URL:-}" "${JUDGE_CONCURRENCY:-}" "${JUDGE_STRICT:-}" ;;
+    web)     printf '%s|%s' "${NEXT_PUBLIC_GATEWAY_URL:-}" "${TRUSTED_PROXY:-}" ;;
+    *)       printf '' ;;
+  esac
+}
+
 start() {             # start <name> <argv-fragment> <command...>
   local name="$1" frag="$2"; shift 2
-  local pid
+  local pid want have
+  want="$(config_env "$name" | cksum | cut -d' ' -f1)"
   if pid="$(running "$name" "$frag")"; then
-    ok "$name already running (pid $pid)"
-    return 0
+    have="$(cat "$RUN/$name.env" 2>/dev/null || echo "")"
+    if [ -n "$(config_env "$name")" ] && [ "$want" != "$have" ]; then
+      warn "$name is running with STALE config — restarting it"
+      warn "  (its environment changed since it started; a running process is not"
+      warn "   evidence that the config you just edited is in effect)"
+      stop "$name" "$frag"
+    else
+      ok "$name already running (pid $pid)"
+      return 0
+    fi
   fi
   setsid nohup "$@" > "$LOG/$name.log" 2>&1 < /dev/null &
   echo $! > "$RUN/$name.pid"
+  printf '%s' "$want" > "$RUN/$name.env"
   ok "$name started (pid $(cat "$RUN/$name.pid")) → var/log/$name.log"
 }
 

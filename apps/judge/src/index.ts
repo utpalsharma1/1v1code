@@ -8,6 +8,7 @@
    ========================================================================= */
 
 import Redis from "ioredis";
+import { requireEnv } from "@1v1/core/env";
 import {
   JUDGE_QUEUE_KEY,
   JudgeJobSchema,
@@ -23,6 +24,12 @@ import {
   monotonicMs,
   runSandboxed,
 } from "./sandbox.ts";
+
+/* The judge pulls jobs from Redis and reads problems and test data from
+   Postgres. Starting without either means the first job fails instead of the
+   process — and a job that fails for infrastructure reasons is §6.9's VOID,
+   which costs a player their match. */
+requireEnv("DATABASE_URL", "REDIS_URL");
 
 const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
 const STRICT = process.env["JUDGE_STRICT"] !== "0";

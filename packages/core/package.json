@@ -8,7 +8,15 @@
     "./time": "./src/time.ts",
     "./glicko": "./src/glicko.ts",
     "./pulse": "./src/pulse.ts",
-    "./codes": "./src/code-format.ts"
+    "./codes": "./src/code-format.ts",
+    "./ladder": {
+      "types": "./src/ladder.ts",
+      "default": "./src/ladder.ts"
+    },
+    "./env": {
+      "types": "./src/env.ts",
+      "default": "./src/env.ts"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

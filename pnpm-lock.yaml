@@ -48,6 +48,9 @@ importers:
 
   apps/judge:
     dependencies:
+      '@1v1/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@1v1/proto':
         specifier: workspace:*
         version: link:../../packages/proto

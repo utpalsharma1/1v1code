@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import Redis from "ioredis";
 import { Server, type Socket } from "socket.io";
-import { generateCode, monotonicMs, normaliseCode } from "@1v1/core";
+import { generateCode, monotonicMs, normaliseCode, requireEnv } from "@1v1/core";
 import { prisma } from "@1v1/db";
 import {
   CodeSubmitSchema,
@@ -34,9 +34,14 @@ import { anonymousIdentity, identify, identifyById, type Identity } from "./sess
    to address a transport.
    ========================================================================= */
 
+/* Refuse to start without what we need, rather than failing on first use.
+   The gateway reads Postgres for users, matches and challenges, and Redis for
+   matchmaking, presence and tickets — a missing one is not survivable. */
+requireEnv("DATABASE_URL", "REDIS_URL");
+
 const PORT = Number(process.env["GATEWAY_PORT"] ?? "4000");
 const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
-const WEB_ORIGIN = process.env["WEB_ORIGIN"] ?? "http://localhost:3000";
+import { WEB_ORIGINS, originAllowed } from "./origin.ts";
 
 const redis = new Redis(REDIS_URL);
 const matchmaker = new Matchmaker(redis);
@@ -65,7 +70,13 @@ const userMatch = new Map<string, string>();
 
 const http = createServer();
 const io = new Server(http, {
-  cors: { origin: WEB_ORIGIN, credentials: true },
+  cors: {
+    origin: (origin, cb) =>
+      originAllowed(origin ?? undefined)
+        ? cb(null, true)
+        : cb(new Error(`origin not allowed: ${origin ?? "(none)"}`)),
+    credentials: true,
+  },
   // A reconnect must land within the grace period, not be refused at the door.
   pingTimeout: 20_000,
 });
@@ -1223,5 +1234,5 @@ process.on("uncaughtException", (e) => console.error("[gateway] uncaught (contin
 process.on("unhandledRejection", (e) => console.error("[gateway] unhandled (continuing):", e));
 
 http.listen(PORT, () => {
-  console.log(`[gateway] listening on :${PORT}, origin ${WEB_ORIGIN}`);
+  console.log(`[gateway] listening on :${PORT}, origins ${WEB_ORIGINS.join(", ")}`);
 });

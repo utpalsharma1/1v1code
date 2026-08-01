@@ -12,6 +12,7 @@
     "reaper": "node --experimental-strip-types src/reaper.ts"
   },
   "dependencies": {
+    "@1v1/core": "workspace:*",
     "@1v1/proto": "workspace:*",
     "ioredis": "^5.4.2"
   },
