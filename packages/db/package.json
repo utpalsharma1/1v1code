@@ -22,7 +22,8 @@
     "audit-wrong": "node --experimental-strip-types src/audit-wrong.ts",
     "coverage": "node --experimental-strip-types src/coverage.ts",
     "verify-seed": "node --experimental-strip-types src/verify-seed.ts",
-    "fill": "node --experimental-strip-types src/fill.ts"
+    "fill": "node --experimental-strip-types src/fill.ts",
+    "timing": "node --experimental-strip-types src/timing.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

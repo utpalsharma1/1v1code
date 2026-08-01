@@ -23,6 +23,31 @@ const nums = (s: string): number[] =>
 const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean);
 
 const SOLVERS: Record<string, Solver> = {
+  "trailing-zeros": (s) => {
+    const n = nums(s)[0]!;
+    let z = 0;
+    for (let p = 5; p <= n; p *= 5) z += Math.floor(n / p);
+    return String(z);
+  },
+
+  "equalise-cost": (s) => {
+    const [, ...a] = nums(s);
+    a.sort((x, y) => x - y);
+    const m = a[Math.floor(a.length / 2)]!;
+    return String(a.reduce((t, x) => t + Math.abs(x - m), 0));
+  },
+
+  "coin-ways": (s) => {
+    const all = nums(s);
+    const target = all[1]!;
+    const coins = all.slice(2);
+    const MOD = 1_000_000_007n;
+    const dp = new Array<bigint>(target + 1).fill(0n);
+    dp[0] = 1n;
+    for (const c of coins) for (let v = c; v <= target; v++) dp[v] = (dp[v]! + dp[v - c]!) % MOD;
+    return String(dp[target]);
+  },
+
   "sum-of-two": (s) => {
     const [a, b] = nums(s);
     return String(a! + b!);

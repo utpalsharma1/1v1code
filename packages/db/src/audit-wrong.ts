@@ -106,6 +106,68 @@ const WRONG: Record<string, Wrong[]> = {
      nothing in it to get wrong. */
   "sum-of-two": [],
 
+  "trailing-zeros": [
+    {
+      name: "count only the multiples of 5",
+      why: "One zero per factor of five, and 25 quietly contributes two.",
+      solve: (s) => String(Math.floor(nums(s)[0]! / 5)),
+    },
+    {
+      name: "compute the factorial, then count zeros",
+      why: "Reads straight off the statement, and is the reason the statement warns about it.",
+      solve: (s) => {
+        const n = nums(s)[0]!;
+        if (n > 4000) throw new Error("would not finish — a real judge reports TIME_LIMIT");
+        let f = 1n;
+        for (let i = 2n; i <= BigInt(n); i++) f *= i;
+        const digits = f.toString();
+        let z = 0;
+        for (let i = digits.length - 1; i >= 0 && digits[i] === "0"; i--) z++;
+        return String(z);
+      },
+    },
+  ],
+
+  "equalise-cost": [
+    {
+      name: "move everything to the mean",
+      why: "The average is the obvious target, and it is the wrong one — one outlier drags it.",
+      solve: (s) => {
+        const [, ...a] = nums(s);
+        const mean = Math.round(a.reduce((t, x) => t + x, 0) / a.length);
+        return String(a.reduce((t, x) => t + Math.abs(x - mean), 0));
+      },
+    },
+    {
+      name: "move everything to the midpoint of min and max",
+      why: "Another plausible centre, and also not the one that minimises total distance.",
+      solve: (s) => {
+        const [, ...a] = nums(s);
+        const mid = Math.round((Math.min(...a) + Math.max(...a)) / 2);
+        return String(a.reduce((t, x) => t + Math.abs(x - mid), 0));
+      },
+    },
+  ],
+
+  "coin-ways": [
+    {
+      name: "totals on the outside, coins on the inside",
+      why: "The natural loop order, and it counts ORDERINGS rather than combinations.",
+      solve: (s) => {
+        const all = nums(s);
+        const target = all[1]!;
+        const coins = all.slice(2);
+        const MOD = 1_000_000_007n;
+        const dp = new Array<bigint>(target + 1).fill(0n);
+        dp[0] = 1n;
+        for (let v = 1; v <= target; v++) {
+          for (const c of coins) if (c <= v) dp[v] = (dp[v]! + dp[v - c]!) % MOD;
+        }
+        return String(dp[target]);
+      },
+    },
+  ],
+
   "count-vowels": [
     {
       name: "y counts as a vowel",
@@ -180,30 +242,23 @@ const WRONG: Record<string, Wrong[]> = {
       name: "subtractive Euclid",
       counterexample: "1000000000 1\n",
       slowNotWrong: "a - b per step instead of a mod b",
-      /* MEASURED, AND DISMISSED. This was reported as a defect and it is not
-         one, which only became clear by timing it instead of reasoning about
-         it.
+      /* MEASURED, AND DISMISSED — but the measurement lives in `pnpm db:timing`,
+         not here.
 
-         The worst input the constraints permit is (10^9, 1), which is 10^9
-         iterations. Measured with g++ -O2 on the dev host: 0.50s, so about
-         1.0s inside the sandbox's --cpus 0.5, against a 5000ms limit. It
-         passes with 5x headroom, and no test can be sized to change that,
-         because a, b <= 10^9 CAPS the work at 10^9 iterations.
+         This entry used to carry a hand-typed "0.50s in C++ against a 5000ms
+         limit". That number was true on the laptop it was taken on and is a
+         claim about a HOST, so writing it down froze it: move to a slower
+         machine and a recorded non-defect silently becomes a live one, with a
+         comment still asserting otherwise.
 
-         So at these constraints subtractive Euclid is a correct and
-         fast-enough C++ solution. The same code in Python takes ~159s and
-         times out, but that is ordinary language variance, not a broken test
-         set. Adding a test here would fail Python and pass C++, which is worse
-         than adding nothing.
+         `db:timing` now compiles this exact approach, runs it at (10^9, 1) —
+         the worst input `1 <= a, b <= 10^9` permits — and re-derives the verdict
+         on whatever host it runs on. If the margin ever closes, it says so and
+         tells you that gcd-pair should GAIN a test rather than keep this entry.
 
-         Forcing the Euclidean algorithm would mean raising the bound to about
-         10^18, where subtractive needs 10^18 steps and is hopeless in any
-         language. That is a real option and a DIFFERENT PROBLEM: it makes
-         64-bit arithmetic part of the task, and it needs the validator, the
-         Python reference and the TypeScript reference all moved past 2^53. Not
-         done on the audit's say-so. */
-      notADefect:
-        "measured 0.50s in C++ at the worst permitted input (10^9, 1), against a 5000ms limit",
+         The claim, restated so it is falsifiable rather than numeric: at these
+         constraints the work is capped at 10^9 iterations, and if that fits
+         inside the limit the approach is legitimate and NO test can catch it. */
       why: "The textbook version before the modulo refinement. The answer is right; the step count is not.",
       solve: (s) => {
         /* Returns the STEP COUNT, because that is the quantity in question.

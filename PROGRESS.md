@@ -1874,3 +1874,671 @@ approaches caught. `pnpm db:seed` succeeds with no override. typecheck 7/7, core
 
 The bank is sound and the road to launch (§12) is: the shareable spectator link is done, challenge
 links are done, so **Phase 2E — deployment** is the remaining item. Per §13.10, stopping here.
+
+---
+
+## Stage 0 — a public HTTPS URL, and the deployment bugs found cheaply
+
+**`pnpm tunnel` puts the local stack behind one public HTTPS URL.** Verified against the live
+tunnel: `/play` 200, the same-origin socket.io handshake 200, `/dev/*` 404, and an unknown
+challenge code 200 (our screen, not an error page).
+
+> **THE STAGE 0 URL IS FOR PEOPLE YOU KNOW. DO NOT POST IT.** A quick tunnel has no access
+> control, and the judge is executing strangers' code on a personal laptop rather than on a
+> disposable VPS.
+
+### The single-origin design, and what it removed
+
+Caddy sits in front of both services on `:8080`, routing `/socket.io/*` to the gateway and
+everything else to the web app; the tunnel points at Caddy. One URL instead of two, and three of
+the five listed bugs stopped being bugs rather than being fixed:
+
+- **`wss://` is derived, not configured.** `io()` connects to the page's own origin and takes the
+  protocol from `location`. Mixed content became impossible to write.
+- **`NEXT_PUBLIC_GATEWAY_URL` stopped mattering.** It is empty in every proxied environment, so
+  there is nothing to inline at build time and nothing to point at the wrong gateway. All four call
+  sites now go through `gatewayTarget()` in `apps/web/lib/gateway.ts`.
+- **Cross-origin disappeared.** Same origin means no CORS preflight and no `SameSite` question.
+
+`deploy/Caddyfile.stage0` is the Stage 1 config with a different hostname, so this is a rehearsal
+rather than a detour.
+
+### 1. Bank soundness is now host-dependent, mechanically — `pnpm db:timing`
+
+Measures every reference against its largest test on the current host and reports effective wall
+clock, modelled as `cpu / 0.5` because the judge gives each submission half a core.
+
+**Threshold: a reference may use at most 40% of the limit — 2.5x headroom.** Chosen because the
+move under consideration is x86 to ARM at half a core: Ampere is roughly 1.3–1.7x slower per clock
+for scalar integer work, so 2x would be spent by the move alone, and beyond ~3x the gate starts
+failing problems that are genuinely fine. A gate that cries wolf gets ignored.
+
+**It found two real problems on the x86 baseline, before any host change.**
+
+- **`coin-change-min` needed 940% of the limit.** The test I added last session to cover `n <= 100`
+  sat at the worst legal point of *two* bounds at once — target 10^6 with n = 100 — which is a
+  10^8-step DP and 23.5 CPU-seconds in Python. Shrunk to target 20000, which covers the same bound;
+  `target <= 10^6` is covered by a different, cheaper test. Now 18%.
+- **`edit-distance` needs 3.4x the limit** and no test change fixes it: `|a| = |b| = 2000` is a
+  4·10^6 cell DP, ~3.7 CPU-seconds in Python against a budget of 2.
+
+That second one is a **language-parity fact, not a host fact**, and conflating the two would hide
+both. The tool now separates `HOST-THIN` from `LOCKED`, and `pythonLocked` is a recorded field on
+the problem with a reason — the same shape as `discriminator: null`. It matters because §8 hands
+problems out without knowing the player's language, so **a Python player drawn onto `edit-distance`
+cannot win.** The structural fix is per-language time limits, and the tool prints exactly the number
+that designs it: **a 4x Python multiplier covers the whole bank.** Not built.
+
+`coin-change-min` keeps its `pythonLocked` note even though its tests now fit, and the tool
+reports that state separately rather than demanding the note be deleted. The note is a claim about
+the *constraints* — a legal input exists that Python cannot do — and §6.8's hack phase could supply
+one even though no seeded test does. An earlier version of the check would have deleted a true
+statement on the strength of a measurement that does not bear on it.
+
+**gcd-pair's `notADefect` no longer carries a number.** It said "measured 0.50s in C++", which
+froze a claim about a *host* into a comment. `db:timing` now compiles that exact approach, runs it
+at `(10^9, 1)`, and re-derives the verdict per host — and says that if the margin ever closes,
+gcd-pair should *gain* a test rather than keep the exemption. On this host: **1840 ms effective,
+36.8% of the limit, still legitimate.**
+
+### 2. `TRUSTED_PROXY`, with the positive control
+
+`none` (default) ignores every proxy header; `cloudflare` trusts `CF-Connecting-IP` only, because
+Cloudflare overwrites it at its edge; `local` reads the **last** `X-Forwarded-For` hop, never the
+first. An unrecognised value falls back to `none` — the safe failure is everyone sharing one
+bucket, not everyone getting their own.
+
+**Positive-controlled:** `BREAK_TRUSTED_PROXY=1` restores the old unconditional trust, and **4 of 7
+tests fail**, including the one that matters — four forged addresses minting four buckets where
+they must mint one.
+
+**The test itself had the bug it was testing for.** The forged-bucket assertion read the ambient
+environment, so once `.env` gained `TRUSTED_PROXY=cloudflare` it silently began asserting the wrong
+mode's behaviour and failed. Now it pins the mode explicitly. A security test whose verdict depends
+on which env file was sourced is not testing the code.
+
+Caddy is configured to **overwrite** `X-Forwarded-For` rather than append, closing the second path
+to the same lie. And `WEB_ORIGIN` now accepts a comma-separated list with a narrow `*.` hostname
+suffix wildcard, because a quick tunnel's hostname is not knowable before `cloudflared` starts. The
+wildcard is Stage 0 only and has its own test, which tries `https://trycloudflare.com.evil.test`
+and the bare suffix.
+
+### 3. Stage 0 safety — what changes when the judge runs on your laptop
+
+Containment is unchanged and still proven; what changes is the **blast radius**. On a VPS a miss
+costs a rebuild; here it costs your machine, your SSH keys and your browser profile.
+
+What is tightened, and what is not:
+
+- **`/dev/*` is refused at the edge by Caddy**, and the production build already 404s the ticket
+  route `/api/dev/sparring-ticket` — which is the actual control. The page shell renders in any
+  mode and is harmless without a ticket. My first version of this check probed the page and printed
+  a scary warning about something that was never the risk.
+- **`NODE_ENV=production` is not optional**, so the tunnel serves a production build on `:3001`,
+  separate from the `:3000` dev server. Both can run at once and the tunnel can never accidentally
+  expose dev mode.
+- **Judge concurrency should be lowered for Stage 0.** On a VPS the cap exists to bound cost; here
+  it bounds how much of *your* machine a stranger can occupy. `JUDGE_CONCURRENCY=2` is the Stage 1
+  number and is the right number here too, for a different reason.
+- **What is not tightened, deliberately:** the sandbox flags. §11's set is already the strong part,
+  and weakening or "hardening" it ad hoc for one stage is how the `--ulimit nproc` incident
+  happened. The right response to a higher blast radius is fewer strangers, not different flags —
+  hence the URL rule above.
+
+### 4. Quick tunnel churn — a stale link fails CONFUSINGLY, and that is worse than expiry
+
+You are right that a challenge link embeds the tunnel hostname, and the consequence is worse than a
+dead link:
+
+- **An expired challenge fails cleanly.** `/c/<code>` on a live tunnel returns our screen —
+  verified through the public URL, an unknown code returns **200**, saying who challenged whom and
+  offering to send one back.
+- **A dead tunnel never reaches us at all.** The hostname is released, so the request dies at
+  Cloudflare's edge and the visitor gets a Cloudflare error page. All of §7's stale-link work is
+  bypassed, because it lives in an app the request never arrives at.
+
+So tunnel churn is not "the link expires", it is "the site appears broken". The mitigation is a
+named tunnel on a stable hostname, which needs a domain — hence the eu.org clock below.
+
+### Starting a eu.org application now
+
+Approval is volunteer-reviewed and reportedly takes days to weeks, so start it in parallel:
+
+1. Register at **`nic.eu.org`** and confirm the account by email.
+2. **New domain request**, pick `<something>.eu.org`.
+3. For nameservers: create a free Cloudflare account first, add the domain as a zone, and Cloudflare
+   gives you two nameservers like `xxx.ns.cloudflare.com`. Enter **those** on the eu.org form —
+   eu.org delegates, so the zone must exist on Cloudflare before the request is approved.
+4. Keep the request simple and truthful; volunteers reject vague ones.
+
+Freenom is dead (`.tk`, `.cf`, `.gq` shut down) — ignore any guide recommending it. DuckDNS and
+`is-a.dev` style services will **not** work: a named tunnel needs a delegated zone, not a CNAME.
+
+### Verification
+
+`db:verify` all three passes green, 153/153 test cases. `db:timing` green on x86 with one recorded
+`pythonLocked` exception. typecheck 7/7, core 56/56, unit 7/7 (and 4 failing under
+`BREAK_TRUSTED_PROXY=1`), origin 4/4, **probes 5/5**, **e2e 17/17**. Live tunnel verified over IPv4.
+
+One measurement artefact worth recording: `*.trycloudflare.com` resolves **AAAA-first**, and this
+WSL2 host has no IPv6 route, so the first verification reported the public URL as dead when it was
+fine for everyone else. Another "absence trivially true" result. The script now resolves the A
+record over DoH and pins it, so the check tests the tunnel rather than local IPv6.
+
+### Not done
+
+Stage 1 — the Oracle instance — is next, and `pnpm db:timing` is the first thing to run on it. Per
+§13.10, stopping here.
+
+---
+
+## Phase 3A — the shell
+
+§12 is updated: **Phase 3 is now the priority**, ahead of the per-language multiplier and
+everything else, and it splits into 3A (the shell) and 3B (what fills it). The reasoning is
+recorded there rather than here, because it is a lesson and not a status: **a deferred shell does
+not read as "coming soon", it reads as abandoned, and it discredits the match screen it wraps.**
+
+### 1. Dev artefacts removed from the player path
+
+Audited every player-facing route. What was there for my benefit rather than a player's:
+
+| where | what | why it was wrong |
+| --- | --- | --- |
+| `/` | `CURRENT_PHASE.label` + `.summary` — *"Phase 2E — Deployment"* and a sentence about that session's work | A build log addressed to the person writing the code, printed **above the product name**, first thing every visitor read |
+| `/` | Links to `/dev/judge`, `/dev/hud`, `/dev/kitchen-sink` | Three of the four front-page links went to a developer's toolbox |
+| `/play` | The **Socket events** panel — raw event names, side labels, gateway transitions | The largest element on the screen after the Play button, so it was the first thing read. It told a player nothing they wanted |
+| `/play` | `CURRENT_PHASE.label` above the word "Play" | Same as above |
+
+Nothing was lost: `/dev/sparring` still shows the same event stream, and the JSONL log on disk
+remains the authoritative record (§10). The `/dev/*` routes are unchanged and still reachable
+directly — they are just no longer advertised on the player path, and the rail hides itself on them.
+
+### 2. The Hub
+
+`/` signed in is now the Hub; signed out it is a pitch with two buttons and no jargon.
+
+**The layout is an argument about priority.** PLAY is a 48px display-type control in `--p1`,
+by a wide margin the largest thing on screen, top-left where reading starts, with the mode
+selector attached beneath it (Ranked live; Blitz and Bo3 shown disabled, since §12 defers them in
+full and a control that changes shape as features land teaches players to re-read it). Rank sits
+beside it because "where am I" is the second question, never the first. Recent matches and the
+challenge control sit below, smaller than both.
+
+**Pressing PLAY queues.** §6.1 is explicit that PLAY starts searching rather than navigating to a
+screen with another PLAY on it, so the intent travels as `?queue=1` and `/play` acts on it the
+moment the socket is up. Same for *Create a link* via `?challenge=new`. The link-minting code was
+**extracted into one `createChallengeLink` callback used by both callers** rather than duplicated —
+a second path to the same state is how the challenge waiting-slot bug happened.
+
+**Motion:** nothing on the Hub animates on load. It is not one of §2's five moments; it is the
+place you pass through on the way to one, and a screen that performs on every visit is tiring by
+the third.
+
+### 3. Rank tiers — the ladder exists
+
+`packages/core/src/ladder.ts`, **18 tests**, pure and independent of Glicko: it takes a number, so
+the ladder can be tested and rendered without a rating system anywhere near it.
+
+**Nine tiers, 200 points each, four divisions of 50.** The width is chosen against the bank rather
+than picked: problems run 800–2000, matchmaking selects at mean − 120, and most players will sit
+between 1200 and 1600, so 200-point tiers put four or five tiers across the populated range. Wider
+and nobody promotes; narrower and the badge churns. Iron is open-ended downward.
+
+A player at 1442 now sees **Gold II, 58 to Platinum** — asserted as a test, since it is the
+example §8 gives.
+
+**Placements show no badge at all.** Showing somebody Bronze IV after one match and Gold II after
+five is worse than showing nothing, because the first badge is the one they remember. The Hub
+shows `2/5` in a dashed plate until placements are done.
+
+**What earns a cinematic is decided in `ladderChange`.** A *tier* change fires the §6.7 rank-up; a
+*division* change does not, because firing the full sequence four times per tier is how a moment
+stops being one (§2 rule 3). Finishing placements counts as a tier change — it is the first badge
+the player has ever had. Demotion is detected and reported as a descent, not silently as an ascent.
+
+`auraOf` implements §4's rule that **most tiers get no aura**: flat colour through Gold, faint at
+Platinum and Diamond, full at Master and above. A test asserts no tier is left unclassified.
+
+### 4. The left rail
+
+The three-item top bar is replaced by the persistent rail from §7, **capped at six**. Four live
+(Hub, Play, Spectate, sign out) and two shown-but-disabled (Profile, Ladder) because they are 3B
+and a rail that changes shape teaches players to re-read it. The active marker is a 2px bar in the
+player colour driven by a transform, not a layout change. It hides itself on `/watch/*`, `/c/*` and
+`/dev/*`, where the viewport belongs to the match.
+
+### Verification
+
+Landing page greps clean for `dev/hud`, `dev/judge`, `kitchen-sink` and `Phase N`. A real
+registered session renders the Hub with the placement plate, all three sections and zero dev
+artefacts. **core 74/74** (56 + 18 ladder), unit 7/7, typecheck 7/7, **e2e 17/17**.
+
+### Not done — deliberately, and this is the part to look at
+
+**The rank-up cinematic is not yet wired to a real match**, and **league colour is not yet on
+handles**. Both were in 3A's scope and both are downstream of the ladder that now exists — the
+cinematic needs `ladderChange` called on `match.end` with the pre-match rating, and the handle
+colour needs a shared component that reads tier outside a match and defers to `--player` inside
+one (§4: side colour always wins). They are the first thing in the next session.
+
+Per the instruction to stop and let you look before 3B: **the shell is in, please look at it.**
+Getting it wrong and then filling it with four more screens is the expensive mistake.
+
+---
+
+## Both tunnel failures — one cause, and it was a one-word bug
+
+**Diagnosis: `cleanup()` called `stop_pid next` while the pidfile is written as `web.pid`.**
+The names did not match, so `stop_pid` returned silently, **the production web server survived
+every Ctrl-C**, and the script still printed *"tunnel, proxy and web stopped"*.
+
+The chain from there:
+
+1. Next run rebuilds, **overwriting `.next-build` underneath the still-running server**.
+2. `next start -p 3001` fails `EADDRINUSE` — visible in `web.log` and nowhere else.
+3. The readiness check `curl :3001/play` **passes**, because the stale server answers.
+4. The script proceeds and prints a URL pointing at a server whose build directory has been
+   replaced under it.
+
+Evidence, not inference: the stale process was started **19:09:07** and
+`.next-build/BUILD_ID` was rewritten **19:15:09** — six minutes later.
+
+**Both reported symptoms follow from that one state, and both were reproduced against it:**
+
+| symptom | reproduced | why |
+| --- | --- | --- |
+| *"Unexpected end of JSON input"* on registration | `POST /api/auth/register` → **500, empty body, no content-type** | Next lazily loads route modules from disk; the chunk had been replaced, so the route 500s with nothing in the body and `response.json()` throws |
+| *"a client-side exception has occurred"* | HTML references chunk hashes the rebuild replaced | The document loads, its scripts 404, React cannot hydrate |
+
+**There is no second bug.** Against a genuinely fresh production build the same request returns
+`200 {"ok":true,"handle":"fresh7"}`. The production path, `NODE_ENV`, Caddy, cloudflared and the
+database were all fine — every one of those candidates is eliminated by that one result.
+
+### Was the tunnel hostname embedded in the build? No — and it is checked, not assumed
+
+```
+grep -rl trycloudflare apps/web/.next-build   →  0 files
+grep -rl localhost:4000 .next-build/static    →  0 files
+```
+
+**The single-origin property holds.** The bundle contains no hostname at all, so a new tunnel
+hostname needs no rebuild for correctness. That is now stated in the script header alongside the
+grep that proves it, because "is a rebuild expected?" was exactly the question that could not be
+answered from the outside.
+
+### 1. The workflow can no longer do this
+
+- **`cleanup` stops `web`**, the name it actually writes.
+- **`free_port 3001` runs BEFORE the build**, not after, so a rebuild can never land underneath a
+  running server. It kills by *port ownership* rather than by pidfile — the pidfile answers "did
+  the process I started die", which is the wrong question.
+- **The served build is compared against the built build.** `BUILD_ID` on disk versus the one the
+  server reports; a mismatch aborts with "that is a stale process". *"Something answers"* is not
+  *"the thing I started answers"* — that conflation is what let every previous run proceed.
+- The script still rebuilds each run, because it is also what you run after changing code, and a
+  stale build is the likelier mistake. What it must never do is rebuild under a live server.
+
+### 2. `pnpm tunnel` verifies before printing a URL
+
+Same standard as the containment canary. It fetches the landing page, **fetches every script the
+page references**, and **registers a throwaway account through the real route over the real
+hostname** — the exact request that failed. Any failure and **the URL is not printed**.
+
+Verified working end to end: `/` 200, `/play` 200, `/register` 200, socket.io handshake 200, and
+`POST /api/auth/register` → `200 application/json`.
+
+**Two false alarms in my own new check, both fixed, both the house pattern.**
+
+- It reported *"every referenced script loads"* on a run where the landing page came back **empty**
+  — nothing to iterate, so nothing failed. Identical in shape to the probes reporting
+  "prisma noise: 0" while every probe was failing to connect. The asset **count** is now asserted,
+  not just the failure count.
+- It counted `000` as a missing asset. `000` is curl failing to connect, not a 404, and a quick
+  tunnel caps concurrent in-flight requests — so a burst of checks produced transport failures and
+  the pre-flight refused a URL that worked. Assets now retry, and `000` after retries is reported
+  as transport, distinctly from a real 4xx.
+
+### 3. A non-JSON response no longer lands in the player's face
+
+`AuthForm` reads the body **as text once**, parses defensively, and on failure shows
+*"Something went wrong on our side (500). Please try again."* while logging the status,
+content-type and first 2 KB of the real body to the console. The server being at fault does not
+license an incomprehensible message.
+
+### 4. Running e2e against the production build behind Caddy
+
+This is the third instance of the class — the RSC seam, the asset collision, now this — and the
+common property is that **e2e runs against `next dev` on `http://localhost:3000`, which is not the
+configuration any real person uses.** Every one of these bugs lived in the gap.
+
+What it would take, in order of cost:
+
+1. **A second Playwright project with `baseURL` pointing at Caddy (`http://localhost:8080`)**, and
+   a global setup that builds, frees the port, starts `next start -p 3001`, and starts Caddy. The
+   specs need no changes — they are already written against relative paths. This is the bulk of the
+   value: it exercises the production build, the reverse proxy, the single-origin socket path and
+   the proxy headers.
+2. **`TRUSTED_PROXY=local`** for that project, since Caddy is the proxy rather than Cloudflare, so
+   the header path under test is the one that ships.
+3. **Two specs that only make sense there**: every referenced script loads (the client-exception
+   check, promoted from the pre-flight into the suite), and registration returns JSON with a JSON
+   content-type.
+4. **Not through the tunnel.** A quick tunnel adds a random hostname, an in-flight cap and real
+   network flakiness; the failures found here were all local to build-and-proxy, and a suite that
+   fails intermittently for transport reasons gets ignored. Caddy is the right boundary.
+
+Cost is roughly one config file, a global setup script, and about three minutes added to a full
+run. **It is worth it**: three production-only bugs have now shipped past a green suite, and the
+suite was green each time because it was testing a configuration nobody runs.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7. `pnpm tunnel` completes its pre-flight and prints a URL whose
+landing page, assets, socket handshake and registration all verified independently afterwards.
+Cleanup now leaves :3001 genuinely free, checked directly.
+
+### Not done
+
+The production-configuration e2e project (item 4) is specced above and **not built** — it is the
+next thing, and it is what stops a fourth instance. Phase 3A's two remaining items (rank-up
+cinematic wiring, league colour on handles) are still outstanding behind it.
+
+---
+
+## The 500 was a missing DATABASE_URL — and my earlier "proof" was invalid
+
+**Root cause: `scripts/tunnel.sh` never sourced `.env`. `scripts/up.sh` does (line 37).**
+
+So `pnpm stack` started the gateway with a database and `pnpm tunnel` started the production web
+server without one. `next start` runs from `apps/web`, and Next only auto-loads `.env` from the
+application directory, so the repo-root `.env` was never read.
+
+**Every GET works without a database**, which is why the failure was so well hidden: the landing
+page, all 12 assets and the socket.io handshake passed, and the first route that touches Postgres —
+registration — returned a 500 with an empty body.
+
+Reproduced exactly, by starting the production server with `DATABASE_URL` unset:
+
+```
+register: status=500 type=[]  body=[]
+landing:  200
+server:   Invalid `prisma.user.findFirst()` invocation:
+          error: Environment variable not found: DATABASE_URL.
+```
+
+### My earlier conclusion was wrong, and the reason matters
+
+I reported that "against a genuinely fresh production build the same request returns 200". That was
+true of *my* run and false of yours, because **I had run `set -a; . ./.env; set +a` in the same
+shell before invoking the script every single time.** My testing inherited the variables the script
+fails to load. The check passed for me and failed for the person running it cleanly — the worst
+possible split, and one I created by never once running the thing the way it is actually run.
+
+The fix for that specific blind spot is in the verification below: the final run was made in
+`env -i` with nothing but `HOME`, `PATH` and `TERM`.
+
+### Layer isolation, as asked
+
+| hop | result |
+| --- | --- |
+| `:3001` direct | **200** `application/json` |
+| via Caddy `:8080` | **200** `application/json` |
+| through the tunnel | **200** `application/json` |
+
+All three passed *once `.env` was sourced*, which is what localised it to the environment rather
+than the app or the proxy chain.
+
+**Item 3 — the pre-flight reusing a handle — was ruled out first, as the cheapest test.**
+`probe$(date +%s%N | tail -c 6)` produces a fresh handle per run (`probe83487`, `probe25121`,
+`probe54708`), and the email derives from it. Not a unique-constraint collision.
+
+### Three fixes
+
+**1. `tunnel.sh` sources `.env`, and fails fast if it cannot.** It now refuses to build at all
+unless `DATABASE_URL`, `REDIS_URL` and `SESSION_SECRET` are set — starting a server that will 500
+on its first query is strictly worse than not starting, because the failure then surfaces to a
+player instead of to the operator.
+
+**2. Nothing leaves the register route as an empty 500.** The handler is wrapped, and the two cases
+are separated because they differ in kind:
+
+- **A duplicate is not an error.** `register()` already returned a polite 400, but its clash check
+  and its insert are not atomic, so two simultaneous signups can both pass and one hits the unique
+  index. Prisma's `P2002` now lands in the same place as the polite check, as a **409**, instead of
+  becoming a server error.
+- **Anything else is ours.** A readable JSON 500 with a short reference, and the real cause logged
+  server-side under the same reference so the two can be matched.
+
+Verified: duplicate → `400 {"error":"That handle or email is already taken."}`; unexpected failure →
+`500 {"error":"Something went wrong on our side. Reference sgtk5w."}` with
+`[register:sgtk5w] unhandled failure` in the log.
+
+**3. The pre-flight's own error message was garbled**, which cost the whole first diagnosis. It read
+the status by counting lines from the end, so an **empty content-type** — exactly what a crashed
+route returns — shifted everything by one and printed `returned (500)` with a blank status. It now
+parses labelled fields. A diagnostic that garbles the one number it exists to report is worse than
+no diagnostic.
+
+Also fixed, same class as the asset check last session: `/dev/sparring` returning `000` was reported
+as **"is PUBLIC"** — a transport failure announced as an exposure. `000` is "could not ask", not "is
+exposed"; it now retries and distinguishes.
+
+### Verification
+
+**Final run made in `env -i`** — no `.env`, no inherited variables, the way you run it:
+
+```
+✓ gateway :4000 is up
+✓ database, redis and session secret are configured
+✓ production web on :3001 (/play -> 200, build XYWDHgIm)
+✓ Caddy :8080, /dev/* refused at the edge
+✓ public URL answers 200 · socket.io handshake works
+✓ every referenced script loads (12 checked)
+✓ registered a throwaway account through the real form (probe35293)
+```
+
+Independently against the printed URL afterwards: `/` 200, `/play` 200, `/dev/sparring` 404,
+register `200 application/json`, duplicate register **400**. typecheck 7/7, core 74/74, unit 7/7.
+
+### What this says about the e2e gap
+
+This is the fourth instance, and it is a sharper version of the same thing: the production
+configuration was never exercised, and neither was the *invocation* — I only ever ran the script
+from a shell I had already prepared. The production-configuration Playwright project specced last
+session would have caught the empty-500 shape; running it from a clean environment is what would
+have caught the missing variable. Both belong in the same piece of work, and it is still not built.
+
+---
+
+## The production e2e project, env guards, and the false-alarm mechanism
+
+### The suite exists, and it is already earning its keep
+
+`pnpm test:e2e:prod` runs the specs against **`next start` behind Caddy on one origin** — the
+topology `pnpm tunnel` and Stage 1 use. `e2e/prod.setup.ts` builds, starts the server, starts the
+proxy, and tears both down.
+
+**Both halves, as proposed.** The `baseURL` change is the easy half. The important half is the
+invocation: child processes are started with an **explicitly constructed environment**, not
+`...process.env`. A variable reaches the app because it is named in that list, so a missing one
+fails in setup rather than becoming a property of whoever's shell launched the suite. That is the
+`env -i` lesson expressed where it can be enforced.
+
+**Four new specs**, one per bug that shipped past a green suite:
+
+- every script the landing page references actually loads, **and the script count is asserted** —
+  "no failed assets" over a page that loaded none is the vacuous pass this whole class is about
+- registration returns JSON *and* a parseable body, and a **duplicate is a 4xx**, never a 500
+- `/dev/*` is 404 through the proxy, asserted as a status rather than as "not 200"
+- `/socket.io` is proxied on the same origin
+
+**Status: 15 of 21 passing. All four new specs pass. Six do not, and that is a real finding.**
+
+It has already caught two production-only differences:
+
+1. **The gateway's origin allowlist did not include the proxy origin.** The suite serves from
+   `:8180`; `WEB_ORIGIN` listed only `:3000`, `:3001` and the tunnel wildcard, so every socket was
+   refused. Fixed by adding it — and note the gateway had to be *restarted* to pick it up, which
+   `pnpm stack` does not do for an already-running service.
+2. **Six match/relay specs still fail under the production configuration and pass under dev.**
+   Not yet diagnosed. **I am not calling this suite green**, and it should not be treated as green
+   until those six are either fixed or understood — they are exactly the class of thing it was
+   built to surface, and the whole argument for building it was that dev hides them.
+
+The dev suite is unaffected: **17/17**.
+
+### Every entry point now refuses to start without its environment
+
+| entry point | requires | mechanism |
+| --- | --- | --- |
+| `pnpm stack` (`scripts/up.sh`) | `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET` | `require_env` |
+| `pnpm tunnel` (`scripts/tunnel.sh`) | same | `require_env` |
+| gateway (`apps/gateway/src/index.ts`) | `DATABASE_URL`, `REDIS_URL` | `requireEnv` |
+| judge (`apps/judge/src/index.ts`) | `DATABASE_URL`, `REDIS_URL` | `requireEnv` |
+| production e2e (`e2e/prod.setup.ts`) | all three | explicit env list |
+
+Each **names every missing variable at once** rather than failing on whichever comes first, because
+failing one at a time turns one restart into three. `apps/judge` gained a workspace dependency on
+`@1v1/core` to share the guard rather than duplicate it — no external package.
+
+Positive-controlled: gateway and judge both print
+`missing required environment: DATABASE_URL` and exit; `require_env` and `require_checked` were
+exercised directly under `env -i`.
+
+### The false-alarm class is mechanised, not just written down
+
+**§13 rule 7 — "A check that cannot fail is not a check"** — now states the pattern, lists six of
+the sixteen instances, and notes that **two of the sixteen are in the pre-flight written to catch
+the other fourteen**, which is the proof that a remembered rule is not the fix. **Rule 8 — "Run it
+the way it is actually run"** — records the invocation lesson and the `env -i` standard.
+
+The mechanism is `scripts/lib/check.sh`, three functions for the three recurring shapes:
+
+- **`require_checked COUNT LABEL`** — zero iterations is a failure. This is the single most common
+  shape: the asset loop over an empty page, the probes that never connected, the containment suite
+  whose canary never ran.
+- **`http_probe` / `expect_status`** — "could not ask" is never "asked and got a bad answer".
+  `curl` writes `000` for a failed connection and it looks exactly like a status code. That one
+  conflation produced false alarms in **both** directions: a working URL refused, and
+  `/dev/sparring is PUBLIC` announced on a run where it was correctly blocked. `expect_status`
+  returns a distinct exit code for *unreachable*, so the caller decides whether not-knowing is
+  fatal rather than having a string comparison decide for it.
+- **`require_env`** — the guard above.
+
+Plus `requireEnv` in `@1v1/core/env` for the TypeScript entry points. Both scripts now source the
+library instead of hand-rolling the same three mistakes.
+
+**What is not yet mechanised, honestly.** Two of the sixteen do not fit these shapes: the readiness
+check satisfied by a *stale process* (fixed ad hoc with a BUILD_ID comparison) and the security test
+whose verdict moved with an *ambient environment variable* (fixed by pinning the mode). Both are
+"verify identity, not liveness" and "pin your inputs" — real rules, but I do not have a helper that
+enforces either without knowing what identity means for the thing under test. They are rule 7's
+third and fourth bullets rather than functions.
+
+### Not done
+
+**The two Phase 3A stragglers did not fit** — the rank-up cinematic wired to `match.end` with the
+pre-match rating, and league colour on handles. They are unchanged from last session and remain the
+next thing, ahead of 3B.
+
+**And the six failing production specs are ahead of even those.** A suite built to catch
+production-only bugs that is currently reporting six of them should be resolved before more surface
+area lands on top.
+
+Per §13.12, stopping here.
+
+---
+
+## The six were one bug, the stack no longer hides stale config, and 3A is complete
+
+### 1. One cause, not six
+
+**All six drive a second player through `/dev/sparring`, which production deliberately removes.**
+Caddy 404s `/dev/*` at the edge and `/api/dev/sparring-ticket` 404s under `NODE_ENV=production`
+(§13.6). They are un-runnable in that configuration **by construction**, and their failing is the
+production configuration working correctly.
+
+Confirmed rather than assumed: every one of the six calls `spar.goto("/dev/sparring")`, and
+`match.spec.ts:176` — the one match spec that needs no second player — passed throughout.
+
+**Excluded by tag, not by silence.** The six carry `@needs-dev-routes` and the prod config carries
+`grepInvert`, with the reason written into the config: two-player coverage in production is **not**
+lost, because `challenge.spec.ts` drives two *real* browser contexts through a challenge link,
+touches no dev affordance, and passes. That is the path a real pair walks; sparring exists because
+one developer cannot be two people, not because it is more realistic. If `challenge.spec.ts` ever
+stops covering a real match, the exclusion silently becomes a coverage hole — which is why it is
+recorded there rather than left as a flag.
+
+**`pnpm test:e2e:prod`: 15 passed, 0 failed.** Dev suite unaffected: 17/17.
+
+### 2. `pnpm stack` no longer leaves a stale process running
+
+The gateway kept an old `WEB_ORIGIN` while `pnpm stack` reported *"gateway already running"* — the
+pidfile bug in different clothes. `start()` now hashes each service's config-relevant environment
+(`config_env`), records it beside the pidfile, and **restarts a service whose config has changed**,
+saying so:
+
+```
+! gateway is running with STALE config — restarting it
+  (its environment changed since it started; a running process is not
+   evidence that the config you just edited is in effect)
+```
+
+Positive-controlled in both directions by editing `.env` for real: unchanged → *already running*;
+changed → restart; restored → restart back, with the live gateway's printed origins matching the
+file. My first attempt at this control was invalid — I exported `WEB_ORIGIN` on the command line and
+`up.sh` re-sources `.env` over it, so the test proved nothing.
+
+### 3. Phase 3A is complete
+
+**The rank-up cinematic fires on a real match.** It has existed in `/dev/hud` since Phase 1 and
+nothing ever handed it a tier crossing. The change is computed **in `applyOutcome`**, which is the
+only place both the pre-match rating and the pre-match placement count are still in scope — the row
+is overwritten immediately after. `RatingDelta` gained a `ladder` field carrying it, so `match.end`
+delivers it and the client does no rating arithmetic.
+
+Promotions only. A demotion is real and shows on the Hub, but §6.7 is *"rank-ups should feel like
+they cost something to earn"*, and playing that backwards on a bad night is kicking someone who is
+already down. Division changes deliberately do not fire — four per tier is how a moment stops being
+one.
+
+**League colour on handles**, as a `Handle` component. `inMatch` is checked **first and returns
+early**, so no tier styling is reachable from a match context however the component is later
+extended — §4's separation rule enforced by control flow rather than by discipline. Aura is a
+`text-shadow`, which has no spread parameter and therefore cannot quietly become §5's 24px state
+glow. Most tiers get none. In use on the Hub for the player's own handle and every opponent in
+recent matches.
+
+### 4. Standing workstream started — 20 → 23 problems
+
+§12 now carries **the problem bank as a standing workstream, not a phase**: 3–5 problems every
+session until past 60, through the full pipeline, spread across the range.
+
+The distribution was checked first and the thinnest bucket filled rather than the most interesting
+one — **1700 was empty**:
+
+| | rating | topic | discriminator |
+| --- | --- | --- | --- |
+| `trailing-zeros` | 900 | MATH | n = 25 answers 6, not 5 — 25 contributes two factors of five |
+| `equalise-cost` | 1200 | GREEDY | the median, not the mean; one outlier drags the mean and cannot drag the median |
+| `coin-ways` | 1700 | DP | coins on the outside, not totals — the other loop order counts orderings, 4 not 7 |
+
+**The gates caught their gaps before I did**: the test-count policy demanded 7 for the 1200 and 9
+for the 1700, and coverage demanded a test at `n = 100000`. Five wrong approaches modelled across
+the three, all caught. `db:verify` **176/176**, `db:audit` clean, `db:coverage` clean, `db:timing`
+all three under 2% of the limit.
+
+Bank: **23 problems**, buckets 800–2000 now 2·1·2·2·2·2·2·3·2·2·1·2·1 — no empty bucket.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7, **db gates all green (176 test cases)**, **e2e 17/17**,
+**e2e:prod 15/15**.
+
+### Not done
+
+3B has not started, per the instruction to look at the Hub with a fresh account first. Outstanding
+questions I still owe you an answer *from*: the empty-Hub state and tier distribution.
+
+Per §13.12, stopping here.

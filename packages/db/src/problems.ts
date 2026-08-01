@@ -84,6 +84,20 @@ export interface SeedProblem {
    *  Same shape as `discriminator: null`: it forces the decision to be recorded
    *  instead of letting an omission pass as an oversight. */
   coverageExemptions?: Record<string, string>;
+
+  /** WHY CAN THE REFERENCE LANGUAGE NOT FIT INSIDE THIS PROBLEM'S TIME LIMIT?
+
+   *  `db:timing` measures the Python reference against the largest test and
+   *  fails if it needs more than 40% of the limit. A problem may legitimately
+   *  be beyond Python — a tight O(target * n) DP at 10^8 steps is a C++
+   *  problem whatever we do — but that must be STATED, because §8 hands
+   *  problems out without knowing which language the player writes, so a
+   *  Python player drawn onto one of these cannot win.
+   *
+   *  Same shape as `discriminator: null` and `coverageExemptions`: the field
+   *  forces the decision to be recorded rather than letting it pass unnoticed.
+   *  The structural fix is per-language time limits, which is not built yet. */
+  pythonLocked?: string;
   /** Samples (`isSample: true`) are PUBLIC — shown in the statement and run as
    *  the first tests, so a player gets fast feedback on whether they understood
    *  the format. Everything else is hidden. At least two samples are required. */
@@ -302,10 +316,17 @@ const COINS_WIDE = generated(
   "coin-change-min at n = 100",
   () => {
     const coins = Array.from({ length: 100 }, (_, i) => i + 1);
-    return `100 1000000\n${coins.join(" ")}\n`;
+    /* target 20000, not 10^6. The bound this test exists to cover is n = 100;
+       `target <= 10^6` is covered by the `1 1000000` test, which is a 10^6-step
+       DP rather than a 10^8-step one. Sitting at the worst legal point of BOTH
+       bounds at once cost 23.5 CPU-seconds in the reference and bought no extra
+       coverage. */
+    return `100 20000\n${coins.join(" ")}\n`;
   },
   {
     "n is exactly 100": (i) => firstToken(i, 0) === "100",
+    "the target is small enough for the reference language to finish": (i) =>
+      Number(firstToken(i, 1)) * 100 <= 5_000_000,
     "there are n denominations": (i) => lines(i)[1]!.split(" ").length === 100,
     "every denomination is in range": (i) =>
       lines(i)[1]!.split(" ").every((c) => Number(c) >= 1 && Number(c) <= 1_000_000),
@@ -419,6 +440,21 @@ const PALINDROME_MAX = generated(
   },
 );
 
+const EQUALISE_MAX = generated(
+  "equalise-cost at n = 100000 with both value extremes",
+  () => {
+    const a: number[] = [];
+    for (let i = 0; i < 100_000; i++) a.push(i % 2 === 0 ? -1_000_000_000 : 1_000_000_000);
+    return `100000\n${a.join(" ")}\n`;
+  },
+  {
+    "n is exactly 100000": (i) => lines(i)[0] === "100000",
+    "there are n values": (i) => lines(i)[1]!.split(" ").length === 100_000,
+    "it reaches both value bounds": (i) =>
+      i.includes("-1000000000") && lines(i)[1]!.split(" ").includes("1000000000"),
+  },
+);
+
 const DIJKSTRA_MAX = generated(
   "dijkstra-shortest at n = 100000, m = 200000",
   () => {
@@ -438,6 +474,139 @@ const DIJKSTRA_MAX = generated(
 
 export const PROBLEMS: SeedProblem[] = [
   /* ── MATH ───────────────────────────────────────────────────────────── */
+  {
+    slug: "trailing-zeros",
+    title: "Trailing Zeros",
+    topic: "MATH",
+    rating: 900,
+    validatorKey: "single-n-small",
+    statement:
+      "Consider n factorial — the product 1 x 2 x 3 x ... x n. Written out in " +
+      "full it usually ends in a run of zeros.\n\n" +
+      "Report how many zeros that run contains. You are not asked for the " +
+      "factorial itself, which for n in the thousands has more digits than you " +
+      "could print.",
+    inputFormat: "One line containing the integer n.",
+    outputFormat:
+      "Print one integer: how many zeros n! ends with. A trailing newline is " +
+      "fine; trailing whitespace is ignored.",
+    constraints: ["1 <= n <= 10^6"],
+    discriminator:
+      "Sample 3 (n = 25) answers 6, not 5, so it rejects counting only the " +
+      "multiples of 5 — 25 contributes two factors of five by itself.",
+    note:
+      "For n = 5, 5! is 120, which ends in one zero.\n\n" +
+      "For n = 3, 3! is 6, which ends in none.\n\n" +
+      "A zero at the end comes from a factor of 10, and 10 is 2 x 5. Between 1 " +
+      "and n there are always more factors of 2 than of 5, so the answer is " +
+      "just how many factors of five the product contains.\n\n" +
+      "The third sample is where the obvious count fails. Among 1..25 there are " +
+      "five multiples of 5, but 25 is 5 x 5 and contributes two. So count the " +
+      "multiples of 5, then of 25, then of 125, and so on.\n\n" +
+      "n reaches 10^6, so 10^6! cannot be computed — the answer has to come from " +
+      "counting factors, not from multiplying.",
+    tests: [
+      { input: "5\n", expected: "1", isSample: true },
+      { input: "3\n", expected: "0", isSample: true },
+      { input: "25\n", expected: "6", isSample: true },
+      { input: "1\n", expected: "0" },
+      { input: "10\n", expected: "2" },
+      { input: "1000000\n", expected: "249998" },
+    ],
+  },
+
+  {
+    slug: "equalise-cost",
+    title: "Equalise the Array",
+    topic: "GREEDY",
+    rating: 1200,
+    validatorKey: "int-array",
+    statement:
+      "You are given an array of n integers. In one move you may add 1 to any " +
+      "single element, or subtract 1 from it.\n\n" +
+      "Report the fewest moves needed to make every element equal. You choose " +
+      "what they all end up equal to.",
+    inputFormat:
+      "The first line contains the integer n.\n" +
+      "The second line contains n integers a_1 ... a_n, separated by single spaces.",
+    outputFormat:
+      "Print one integer: the fewest moves. A trailing newline is fine; " +
+      "trailing whitespace is ignored.",
+    constraints: ["1 <= n <= 10^5", "-10^9 <= a_i <= 10^9"],
+    discriminator:
+      "Sample 3 answers 8, so it rejects moving everything to the MEAN: the " +
+      "mean of 1, 2, 3, 100 is 26.5 and costs 122 either side of it.",
+    note:
+      "In the first sample, moving everything to 2 costs 1 + 0 + 1 = 2, and " +
+      "nothing is cheaper.\n\n" +
+      "The second sample is already equal, so the answer is 0.\n\n" +
+      "The third sample is the one that separates the two natural guesses. The " +
+      "target that minimises the total distance is the MEDIAN, not the mean — " +
+      "moving to 2 costs 1 + 0 + 1 + 98 = 100, while the mean of 26.5 costs far " +
+      "more. Intuitively, one far-away value drags the mean but cannot drag the " +
+      "median.\n\n" +
+      "The total reaches 10^5 x 2 x 10^9, so accumulate in a 64-bit integer.",
+    tests: [
+      { input: "3\n1 2 3\n", expected: "2", isSample: true },
+      { input: "4\n7 7 7 7\n", expected: "0", isSample: true },
+      { input: "4\n1 2 3 100\n", expected: "100", isSample: true },
+      { input: "1\n5\n", expected: "0" },
+      { input: "2\n-1000000000 1000000000\n", expected: "2000000000" },
+      { input: "5\n-5 -1 0 1 5\n", expected: "12" },
+      { input: "4\n10 10 20 20\n", expected: "20" },
+      /* SCALE. Last, because the runner stops at the first failure. */
+      { input: EQUALISE_MAX, expected: "100000000000000" },
+    ],
+  },
+
+  {
+    slug: "coin-ways",
+    title: "Counting Change",
+    topic: "DP",
+    rating: 1700,
+    validatorKey: "coins-target",
+    statement:
+      "You have an unlimited supply of coins in each of n denominations. Count " +
+      "the number of distinct ways to make exactly `target`.\n\n" +
+      "Two ways are the same if they use the same number of each denomination — " +
+      "order does not matter, so 1 + 2 and 2 + 1 are one way, not two.\n\n" +
+      "The count can be enormous, so report it modulo 1000000007.",
+    inputFormat:
+      "The first line contains two integers n and target, separated by a space.\n" +
+      "The second line contains n integers c_1 ... c_n, the denominations, " +
+      "separated by single spaces.",
+    outputFormat:
+      "Print one integer: the number of distinct ways, modulo 1000000007. A " +
+      "trailing newline is fine; trailing whitespace is ignored.",
+    constraints: ["1 <= n <= 100", "1 <= target <= 10^6", "1 <= c_i <= 10^6"],
+    discriminator:
+      "Sample 1 answers 4, not 7, so it rejects looping over the target on the " +
+      "outside and the coins on the inside — that counts ORDERINGS, which is a " +
+      "different and larger number.",
+    note:
+      "With coins 1, 2 and 3 and a target of 4 the four ways are 1+1+1+1, " +
+      "1+1+2, 2+2 and 1+3. Note that 1+3 and 3+1 are the SAME way.\n\n" +
+      "This is the trap the problem exists for. The obvious loop — for each " +
+      "total, try every coin — counts 1+3 and 3+1 separately and answers 7. " +
+      "Putting the coins on the OUTSIDE and the totals on the inside fixes it: " +
+      "each coin is considered once, for all totals, so a combination can only " +
+      "be built in the order the coins are iterated.\n\n" +
+      "The second sample cannot be made at all, so the answer is 0. The third " +
+      "makes 0 from an empty selection, which is one way.\n\n" +
+      "Reduce modulo 1000000007 as you go rather than at the end.",
+    tests: [
+      { input: "3 4\n1 2 3\n", expected: "4", isSample: true },
+      { input: "1 7\n5\n", expected: "0", isSample: true },
+      { input: "2 10\n2 5\n", expected: "2", isSample: true },
+      { input: "1 1000000\n1\n", expected: "1" },
+      { input: "4 27\n1 5 10 25\n", expected: "13" },
+      { input: "2 12\n3 4\n", expected: "2" },
+      { input: "1 1000000\n1000000\n", expected: "1" },
+      { input: "3 1000\n7 11 13\n", expected: "515" },
+      { input: "100 200\n1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100\n", expected: "546578315" },
+    ],
+  },
+
   {
     slug: "sum-of-two",
     title: "Sum Of Two",
@@ -703,6 +872,9 @@ export const PROBLEMS: SeedProblem[] = [
   },
   {
     slug: "edit-distance",
+    pythonLocked:
+      "|a| = |b| = 2000 is a 4 * 10^6 cell DP, about 3.7 CPU-seconds in Python " +
+      "against a limit that allows 2. C++ does it in milliseconds.",
     title: "Edit Distance",
     topic: "STRINGS",
     rating: 1650,
@@ -800,6 +972,10 @@ export const PROBLEMS: SeedProblem[] = [
   },
     {
     slug: "coin-change-min",
+    pythonLocked:
+      "The worst legal input is target 10^6 with n = 100, which is 10^8 DP steps. " +
+      "No Python solution completes that in 5 s and no choice of test data changes " +
+      "it — the constraints themselves are beyond the language.",
     title: "Minimum Coins",
     topic: "DP",
     rating: 1400,
@@ -848,7 +1024,7 @@ export const PROBLEMS: SeedProblem[] = [
       { input: "4 27\n1 5 10 25\n", expected: "3" },
       { input: "3 7\n4 5 6\n", expected: "-1" },
       /* SCALE. Last, because the runner stops at the first failure. */
-      { input: COINS_WIDE, expected: "10000" },
+      { input: COINS_WIDE, expected: "200" },
     ],
   },
   {

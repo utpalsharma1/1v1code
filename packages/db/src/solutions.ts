@@ -16,6 +16,37 @@
    ========================================================================= */
 
 export const SOLUTIONS: Record<string, string> = {
+  "trailing-zeros": `import sys
+n = int(sys.stdin.read())
+z = 0
+p = 5
+while p <= n:
+    z += n // p
+    p *= 5
+print(z)
+`,
+
+  "equalise-cost": `import sys
+data = sys.stdin.read().split()
+n = int(data[0])
+a = sorted(map(int, data[1 : 1 + n]))
+m = a[n // 2]
+print(sum(abs(x - m) for x in a))
+`,
+
+  "coin-ways": `import sys
+MOD = 10 ** 9 + 7
+data = sys.stdin.read().split()
+n, target = int(data[0]), int(data[1])
+coins = list(map(int, data[2 : 2 + n]))
+dp = [0] * (target + 1)
+dp[0] = 1
+for c in coins:
+    for v in range(c, target + 1):
+        dp[v] = (dp[v] + dp[v - c]) % MOD
+print(dp[target])
+`,
+
   "sum-of-two": `import sys
 a, b = map(int, sys.stdin.read().split())
 print(a + b)
