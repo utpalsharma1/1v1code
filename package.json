@@ -37,7 +37,12 @@
     "db:audit": "pnpm --filter @1v1/db audit-wrong",
     "db:coverage": "pnpm --filter @1v1/db coverage",
     "db:verify:seed": "pnpm --filter @1v1/db verify-seed",
-    "db:fill": "pnpm --filter @1v1/db fill"
+    "db:fill": "pnpm --filter @1v1/db fill",
+    "db:timing": "pnpm --filter @1v1/db timing",
+    "test:unit": "pnpm --filter @1v1/web test:unit",
+    "tunnel": "bash scripts/tunnel.sh",
+    "test:origin": "pnpm --filter @1v1/gateway test:origin",
+    "test:e2e:prod": "playwright test -c e2e/playwright.prod.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

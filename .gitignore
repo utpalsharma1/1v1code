@@ -23,3 +23,12 @@ test-results/
 playwright-report/
 var/log/
 var/run/
+
+# Tunnel and process artefacts
+*.pid
+1v1-tunnel/
+.next-tunnel/
+
+# Local binaries fetched by the tunnel setup
+caddy
+cloudflared

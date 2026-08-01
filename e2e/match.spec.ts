@@ -26,7 +26,7 @@ async function registerAndQueue(page: Page): Promise<string> {
   return handle;
 }
 
-test("/play survives a socket blip and stays matchable", async ({ browser }) => {
+test("/play survives a socket blip and stays matchable", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   /* The bug that made the match screen unreachable by hand: a queued player
      whose socket blipped was dropped from the Redis pool and never put back,
      while their screen carried on showing the queue card. Any Next dev
@@ -60,7 +60,7 @@ test("/play survives a socket blip and stays matchable", async ({ browser }) => 
   await partner.close();
 });
 
-test("two players: queue, pair, accept, solve in Monaco, and finish rated", async ({ browser }) => {
+test("two players: queue, pair, accept, solve in Monaco, and finish rated", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   test.setTimeout(240_000);
 
   const player = await browser.newContext();
@@ -119,7 +119,7 @@ test("two players: queue, pair, accept, solve in Monaco, and finish rated", asyn
   await partner.close();
 });
 
-test("reloading mid-match still ends cleanly and re-enables Play", async ({ browser }) => {
+test("reloading mid-match still ends cleanly and re-enables Play", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   /* Correct server state, client parked in a state nothing tells it to leave —
      the same shape as the QueuePop overlay covering Accept.
 
@@ -190,7 +190,7 @@ test("an empty queue says so instead of sweeping a radar forever", async ({ page
   await expect(page.getByRole("button", { name: /leave queue/i })).toBeVisible();
 });
 
-test("an unaccepted match is CANCELED, never VOID", async ({ browser }) => {
+test("an unaccepted match is CANCELED, never VOID", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   /* §6.9 gives VOID one meaning — our infrastructure failed. It fired on the
      first real browser match for the entirely ordinary reason that nobody
      could accept, which is what made it worthless as a signal. Two players

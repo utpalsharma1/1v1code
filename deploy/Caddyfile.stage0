@@ -1,0 +1,80 @@
+# =============================================================================
+#  Stage 0 — single public origin, in front of the local stack.
+#
+#  A Cloudflare quick tunnel exposes exactly ONE local port and cannot route, so
+#  without this the web app and the gateway would need two tunnels, two random
+#  hostnames, and a rebuild of the web app every time either restarted (the
+#  gateway URL is inlined at build time).
+#
+#  Putting Caddy in front collapses that: one origin, one URL to share, and
+#  `wss://` derived from the page's own protocol rather than configured. The
+#  Stage 1 Caddyfile on the real host is this file with a real hostname and
+#  automatic TLS — the topology does not change between stages, which is what
+#  makes Stage 0 a rehearsal rather than a detour.
+#
+#  Web is on :3001 — a PRODUCTION build, separate from the :3000 dev server so
+#  both can run at once and the tunnel never accidentally exposes dev mode.
+#
+#  Run:  caddy run --config deploy/Caddyfile.stage0
+#  Then: cloudflared tunnel --url http://localhost:8080
+# =============================================================================
+
+{
+	# No TLS here: Cloudflare terminates it at the edge and the tunnel reaches
+	# this over the loopback. Stage 1 removes this block and lets Caddy get a
+	# certificate for the real hostname.
+	auto_https off
+	admin off
+}
+
+:8080 {
+	# --- The gateway, same origin, under socket.io's default path ------------
+	# This is what makes `io()` with no URL work: the browser connects to the
+	# page's own origin and Caddy routes it here. WebSocket upgrades pass
+	# through without configuration.
+	handle /socket.io/* {
+		reverse_proxy 127.0.0.1:4000 {
+		# OVERWRITE X-Forwarded-For, never append. Caddy's default is to append,
+		# which leaves any client-supplied value in FRONT of ours — and a limiter
+		# reading the first entry then trusts the client. The app runs with
+		# TRUSTED_PROXY=cloudflare and reads CF-Connecting-IP (which Cloudflare
+		# overwrites at its edge and a client cannot forge); this stops the other
+		# header being usable as a second path to the same lie.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# --- Dev routes are refused at the edge ----------------------------------
+	# `/dev/sparring` MINTS SOCKET TICKETS. Those routes 404 under
+	# NODE_ENV=production, and Stage 0 runs a production build, so this is the
+	# second of two locks rather than the only one. It is here because the cost
+	# of the app being started in dev mode by accident, while a public tunnel is
+	# pointed at it, is that anyone holding the URL can join matches as a second
+	# identity.
+	handle /dev/* {
+		respond "not found" 404
+	}
+
+	# --- Everything else is the web app --------------------------------------
+	handle {
+		reverse_proxy 127.0.0.1:3001 {
+		# OVERWRITE X-Forwarded-For, never append. Caddy's default is to append,
+		# which leaves any client-supplied value in FRONT of ours — and a limiter
+		# reading the first entry then trusts the client. The app runs with
+		# TRUSTED_PROXY=cloudflare and reads CF-Connecting-IP (which Cloudflare
+		# overwrites at its edge and a client cannot forge); this stops the other
+		# header being usable as a second path to the same lie.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		}
+	}
+
+	encode gzip
+
+	log {
+		output stderr
+		format console
+		level ERROR
+	}
+}

@@ -54,7 +54,42 @@ export function AuthForm({ mode }: { mode: "register" | "login" }) {
         credentials: "same-origin",
         body: JSON.stringify(payload),
       });
-      const data = (await response.json()) as { error?: string };
+      /* READ THE BODY AS TEXT, THEN TRY TO PARSE IT.
+
+         `response.json()` on a non-JSON body throws "Failed to execute 'json'
+         on 'Response': Unexpected end of JSON input", and that string is what a
+         player saw when the server returned a 500 with an empty body. It is a
+         parser's complaint about our mistake, shown to somebody trying to sign
+         up, and it tells them nothing they can act on.
+
+         The server being at fault does not license an incomprehensible
+         message. So: read once as text, parse defensively, say something true,
+         and put the real body in the console where it can be diagnosed. */
+      const raw = await response.text();
+      let data: { error?: string } = {};
+      let parsed = true;
+      try {
+        data = raw.length > 0 ? (JSON.parse(raw) as { error?: string }) : {};
+      } catch {
+        parsed = false;
+      }
+
+      if (!parsed || (!response.ok && data.error === undefined)) {
+        console.error(
+          `POST /api/auth/${mode} returned ${response.status} ` +
+            `(${response.headers.get("content-type") ?? "no content-type"}) ` +
+            `with a body we could not parse:`,
+          raw.slice(0, 2000),
+        );
+        setError(
+          response.ok
+            ? "The server sent a reply we could not read. Please try again."
+            : `Something went wrong on our side (${response.status}). Please try again.`,
+        );
+        setPending(false);
+        return;
+      }
+
       if (!response.ok) {
         setError(data.error ?? `Request failed (${response.status})`);
         setPending(false);

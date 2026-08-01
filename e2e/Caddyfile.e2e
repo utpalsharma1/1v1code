@@ -1,0 +1,27 @@
+# The Stage 0 / Stage 1 topology, on test ports. Kept separate from
+# deploy/Caddyfile.stage0 only because the ports differ; the routing is the
+# same, which is the point — the suite exercises the shape that ships.
+{
+	auto_https off
+	admin off
+}
+
+:{$PROXY_PORT} {
+	handle /socket.io/* {
+		reverse_proxy 127.0.0.1:4000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	handle /dev/* {
+		respond "not found" 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:{$WEB_PORT} {
+			# OVERWRITE, never append — a client-supplied value must not survive
+			# in front of ours. TRUSTED_PROXY=local reads the LAST hop.
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+}

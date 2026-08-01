@@ -23,7 +23,7 @@ async function register(page: Page): Promise<string> {
   return handle;
 }
 
-test("typing reaches a spectator, and never the opponent", async ({ browser }) => {
+test("typing reaches a spectator, and never the opponent", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   test.setTimeout(240_000);
 
   const playerCtx = await browser.newContext();
@@ -75,7 +75,7 @@ test("typing reaches a spectator, and never the opponent", async ({ browser }) =
   await watcherCtx.close();
 });
 
-test("a player cannot spectate their own live match", async ({ browser }) => {
+test("a player cannot spectate their own live match", { tag: "@needs-dev-routes" }, async ({ browser }) => {
   /* The one-click bypass. §7's 45s ranked delay does not close it, so the
      gateway refuses by identity. */
   test.setTimeout(180_000);
