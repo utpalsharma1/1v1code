@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button, Card, cn } from "@1v1/ui";
+import { gatewayTarget } from "../../../lib/gateway.ts";
 
 /* ============================================================================
    /dev/sparring — drive a second player on command.
@@ -29,7 +30,7 @@ import { Button, Card, cn } from "@1v1/ui";
    the earlier receipt must win regardless of which verdict lands first.
    ========================================================================= */
 
-const GATEWAY = process.env["NEXT_PUBLIC_GATEWAY_URL"] ?? "http://localhost:4000";
+
 
 /** Compiles, runs, and is wrong — the shape of a real near-miss, not a typo. */
 const WRONG_PY = `import sys
@@ -81,7 +82,7 @@ export default function SparringPage() {
       if (cancelled) return;
       setHandle(data.handle);
 
-      socket = io(GATEWAY, { transports: ["websocket"], auth: { ticket: data.ticket } });
+      socket = io(gatewayTarget(), { transports: ["websocket"], auth: { ticket: data.ticket } });
       socketRef.current = socket;
 
       socket.on("connect", () => {

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button, Card, cn } from "@1v1/ui";
 import type { EditorChange } from "@1v1/proto";
+import { gatewayTarget } from "../../../lib/gateway.ts";
 
 /* ============================================================================
    /watch/<code> — the shareable spectator link (§7).
@@ -25,7 +26,7 @@ import type { EditorChange } from "@1v1/proto";
    as `SELF_SPECTATE` rather than as a hidden button.
    ========================================================================= */
 
-const GATEWAY = process.env["NEXT_PUBLIC_GATEWAY_URL"] ?? "http://localhost:4000";
+
 
 interface DocState {
   text: string;
@@ -115,7 +116,7 @@ export default function WatchPage() {
       const { ticket } = (await response.json()) as { ticket: string };
       if (cancelled) return;
 
-      socket = io(GATEWAY, { transports: ["websocket"], auth: { ticket } });
+      socket = io(gatewayTarget(), { transports: ["websocket"], auth: { ticket } });
       socketRef.current = socket;
 
       socket.on("connect", () => socket?.emit("spectate.watch", { code }));

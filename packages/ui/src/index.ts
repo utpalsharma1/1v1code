@@ -1,5 +1,6 @@
 export { Button, type ButtonProps } from "./components/Button";
 export { Card, type CardProps } from "./components/Card";
+export { Handle, type HandleProps } from "./components/Handle";
 export { Clock, type ClockProps } from "./components/Clock";
 export { Nameplate, type NameplateProps, type NameplateState } from "./components/Nameplate";
 export { RankBadge, type RankBadgeProps } from "./components/RankBadge";

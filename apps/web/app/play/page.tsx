@@ -3,7 +3,6 @@
 import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { CURRENT_PHASE } from "@/lib/phase";
 import {
   ChallengeLink,
   MatchScreen,
@@ -25,6 +24,7 @@ import {
   type Tier,
 } from "@1v1/ui";
 import { PULSE_WINDOW, pulseStep } from "@1v1/core/pulse";
+import { gatewayTarget } from "../../lib/gateway.ts";
 
 /* ============================================================================
    /play — the first time Phase 1's cinematics fire on a real match.
@@ -34,7 +34,7 @@ import { PULSE_WINDOW, pulseStep } from "@1v1/core/pulse";
    2B-3; this takes the flow as far as LIVE.
    ========================================================================= */
 
-const GATEWAY = process.env["NEXT_PUBLIC_GATEWAY_URL"] ?? "http://localhost:4000";
+
 
 /* `challenge` is its own phase, not a flavour of `queued`.
 
@@ -93,7 +93,56 @@ function Play() {
      already redeemed it — emit challenge.join once connected. The gateway pairs
      whoever is waiting on that code through the SAME createMatch matchmaking
      uses, which is what probe:lifecycle asserts. */
-  const [challengeCode, setChallengeCode] = useState<string | null>(initialChallenge);
+  const [challengeCode, setChallengeCode] = useState<string | null>(
+    initialChallenge === "new" ? null : initialChallenge,
+  );
+
+  /* THE HUB'S PLAY BUTTON CARRIES ITS INTENT HERE.
+
+     §6.1 is explicit that pressing PLAY starts searching — it does not take you
+     to a screen with another PLAY button on it. The Hub owns the giant control
+     and this screen owns the socket, so the intent travels as `?queue=1` and is
+     acted on the moment the connection is up. Without it the player presses
+     PLAY twice for one decision, which is the exact friction §6.1 exists to
+     remove. */
+  const autoQueue =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("queue") === "1";
+
+  /* `?challenge=new` is the Hub's "create a link" control. It is NOT a code —
+     `new` is a sentinel, and it is checked before `initialChallenge` is used so
+     it can never be mistaken for one. */
+  const autoChallenge = initialChallenge === "new";
+
+  /* One implementation, two callers: the button on this screen and the Hub's
+     "Create a link" control arriving as `?challenge=new`. Duplicating it would
+     be a second path to the same state, which is how the challenge waiting-slot
+     bug happened. */
+  const createChallengeLink = useCallback(async () => {
+    setLinkError(null);
+    const response = await fetch("/api/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const body = (await response.json()) as {
+      code?: string;
+      ratingMin?: number;
+      ratingMax?: number;
+      error?: string;
+    };
+    if (!response.ok || !body.code) {
+      setLinkError(body.error ?? "Could not create a link.");
+      return;
+    }
+    setLink({ code: body.code, band: [body.ratingMin ?? 800, body.ratingMax ?? 2000] });
+    /* Register the host on their own challenge immediately, or the friend
+       arrives and nothing pairs until the host presses something. */
+    setChallengeCode(body.code);
+    setPhase("challenge");
+    socketRef.current?.emit("challenge.join", { code: body.code });
+  }, []);
+
   const [challengeWait, setChallengeWait] = useState<{ host: string; youAreHost: boolean } | null>(
     null,
   );
@@ -181,7 +230,7 @@ function Play() {
       }
       if (cancelled) return;
 
-      socket = io(GATEWAY, {
+      socket = io(gatewayTarget(), {
         withCredentials: true,
         transports: ["websocket", "polling"],
         auth: ticket ? { ticket } : {},
@@ -199,6 +248,14 @@ function Play() {
       if (challengeCode) {
         socket.emit("challenge.join", { code: challengeCode });
         note(`joining challenge ${challengeCode}`);
+      } else if (autoChallenge) {
+        void createChallengeLink();
+        window.history.replaceState({}, "", "/play");
+      } else if (autoQueue) {
+        socket.emit("queue.join", { mode: "RANKED" });
+        note("queueing from the hub");
+        /* Drop the parameter so a reload is not a second queue attempt. */
+        window.history.replaceState({}, "", "/play");
       }
     });
 
@@ -586,10 +643,10 @@ function Play() {
     <main className="mx-auto flex min-h-dvh max-w-4xl flex-col gap-6 px-6 py-10">
       <header className="flex items-baseline justify-between gap-4">
         <div>
-          <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-            {CURRENT_PHASE.label}
-          </p>
-          <h1 className="font-display text-fg mt-1 text-34 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
+          {/* The build-phase label that was here is gone. It said "Phase 2E —
+              Deployment" above the word Play, which is a note to the person
+              writing the code. */}
+          <h1 className="font-display text-fg text-34 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
             Play
           </h1>
         </div>
@@ -641,39 +698,7 @@ function Play() {
                 <div>
                   <Button
                     variant="outline"
-                    onClick={() => {
-                      void (async () => {
-                        setLinkError(null);
-                        const response = await fetch("/api/challenge", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({}),
-                        });
-                        const body = (await response.json()) as {
-                          code?: string;
-                          ratingMin?: number;
-                          ratingMax?: number;
-                          error?: string;
-                        };
-                        if (!response.ok || !body.code) {
-                          setLinkError(body.error ?? "Could not create a link.");
-                          return;
-                        }
-                        setLink({
-                          code: body.code,
-                          band: [body.ratingMin ?? 800, body.ratingMax ?? 2000],
-                        });
-                        /* Register the host on their own challenge immediately.
-                           Otherwise minting a link left them in the lobby, and
-                           when their friend arrived nothing paired until the
-                           host happened to press something — on a screen whose
-                           only button was PLAY, which would have put them into
-                           open matchmaking instead. */
-                        setChallengeCode(body.code);
-                        setPhase("challenge");
-                        socketRef.current?.emit("challenge.join", { code: body.code });
-                      })();
-                    }}
+                    onClick={() => void createChallengeLink()}
                   >
                     Create a challenge link
                   </Button>
@@ -764,22 +789,16 @@ function Play() {
         </Card>
       )}
 
-      <section>
-        <p className="font-display text-fg-faint mb-1.5 text-12 font-bold tracking-[var(--track-hud)] uppercase">
-          Socket events
-        </p>
-        <div className="border-line h-48 overflow-y-auto border bg-surface p-3">
-          {log.length === 0 ? (
-            <p className="text-fg-faint text-12">Nothing yet.</p>
-          ) : (
-            log.map((line, i) => (
-              <p key={i} className="tabular text-fg-dim text-12 leading-relaxed">
-                {line}
-              </p>
-            ))
-          )}
-        </div>
-      </section>
+      {/* THE SOCKET EVENT LOG LIVED HERE and has been removed from the player
+          path. It was a debugging tool — raw event names, side labels, gateway
+          state transitions — and it was the largest thing on the screen after
+          the Play button, so it was the first thing a new player read. It told
+          them nothing they wanted and quite a lot they should not have to
+          think about.
+
+          The information still exists where it belongs: `/dev/sparring` shows
+          the same stream, and the JSONL event log on disk is the authoritative
+          record (§10). Nothing was lost except a player having to look at it. */}
 
       {/* Phase 1's cinematics, fired by real socket events. */}
       <AnimatePresence>

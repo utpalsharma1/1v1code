@@ -1,4 +1,4 @@
-import { botMatchIsRated, rateMatch, type Rating } from "@1v1/core";
+import { PLACEMENT_MATCHES, botMatchIsRated, ladderChange, rateMatch, type Rating } from "@1v1/core";
 import { prisma } from "@1v1/db";
 import type { MatchOutcome } from "@1v1/core";
 import type { RatingDelta, Side } from "@1v1/proto";
@@ -150,7 +150,34 @@ export async function applyOutcome(opts: {
       update: {},
     });
 
-    deltas.push({ side, before: snap.rating.rating, after: Math.round(after.rating) });
+    /* THE LADDER CHANGE IS COMPUTED HERE, where the placement counts live.
+
+       §6.7's rank-up cinematic has existed in /dev/hud since Phase 1 and has
+       never fired on a real match, because nothing ever worked out that a match
+       crossed a tier. It needs the PRE-match rating and the PRE-match placement
+       count, and both are only in scope at this point — the row has already
+       been overwritten by the update above.
+
+       `ladderChange` decides what is worth a cinematic: a tier crossing yes, a
+       division change no (§2 rule 3 — four per tier is how a moment stops being
+       one), and finishing placements yes, because it is the first badge the
+       player has ever had. */
+    const change = ladderChange(
+      { rating: snap.rating.rating, ratedMatches: PLACEMENT_MATCHES - snap.placementsLeft },
+      {
+        rating: Math.round(after.rating),
+        ratedMatches: PLACEMENT_MATCHES - Math.max(0, snap.placementsLeft - 1),
+      },
+    );
+    deltas.push({
+      side,
+      before: snap.rating.rating,
+      after: Math.round(after.rating),
+      ladder:
+        change.kind === "tier"
+          ? { kind: "tier", up: change.up, to: change.to.tier, label: change.to.label }
+          : null,
+    });
   }
 
   return deltas;

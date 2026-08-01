@@ -22,6 +22,7 @@ import {
 } from "@1v1/ui";
 import { PULSE_SAMPLE_MS } from "@1v1/core/pulse";
 import type { EditorChange } from "@1v1/proto";
+import { rankOf } from "@1v1/core/ladder";
 
 /* ============================================================================
    The match screen — Phase 1's cinematics driven by real gateway events.
@@ -90,7 +91,14 @@ export interface MatchScreenProps {
     kind: string;
     winner?: Side;
     reason?: string;
-    ratings: { side: Side; before: number; after: number }[];
+    ratings: {
+      side: Side;
+      before: number;
+      after: number;
+      /* Server-computed (§6.7). Null unless the match crossed a TIER — a
+         division change deliberately does not fire the cinematic. */
+      ladder?: { kind: "tier"; up: boolean; to: string; label: string } | null;
+    }[];
   } | null;
   inFlight: boolean;
   onSubmit: (language: "CPP17" | "PYTHON3", source: string) => void;
@@ -565,6 +573,21 @@ function MatchEnding({
         winner={ending.winner === you ? "p1" : "p2"}
         ratingFrom={mine?.before ?? 0}
         ratingTo={mine?.after ?? 0}
+        /* THE RANK-UP CINEMATIC, FIRING ON A REAL MATCH FOR THE FIRST TIME.
+           It has existed in /dev/hud since Phase 1 and nothing ever handed it a
+           real tier crossing. Promotions only: a demotion is real and is shown
+           on the Hub, but §6.7's sequence is "rank-ups should feel like they
+           cost something to earn", and playing it backwards on a bad night is
+           kicking someone who is already down. */
+        rankUp={
+          mine?.ladder && mine.ladder.up
+            ? {
+                from: (rankOf(mine.before).tier as Tier),
+                to: mine.ladder.to as Tier,
+                division: (rankOf(mine.after).division ?? undefined) as Division | undefined,
+              }
+            : null
+        }
         burstKey={1}
         onRematch={onRematch}
         onQueue={onRematch}

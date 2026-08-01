@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, JetBrains_Mono, Martian_Mono } from "next/font/google";
 import { MotionPrefProvider, motionPrefBootstrapScript } from "@1v1/ui";
-import { Nav } from "./Nav";
+import { Rail } from "./Rail";
 import "./globals.css";
 
 // Display / headings / HUD. Monospace headlines are the point, not an accident.
@@ -48,11 +48,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bg-ink text-fg min-h-dvh">
         <MotionPrefProvider>
-          {/* Persistent and deliberately thin. §6.4 wants the match HUD fixed
-              to the top and never scrolling away; a 45px bar above it costs
-              little and means there is always a way out of a screen. */}
-          <Nav />
-          {children}
+          {/* The persistent left rail (§7). It hides itself on the match,
+              spectate and challenge screens, where the viewport belongs to the
+              match. Content is inset by the rail width on md and up. */}
+          <Rail />
+          <div className="md:pl-[68px]">{children}</div>
         </MotionPrefProvider>
       </body>
     </html>

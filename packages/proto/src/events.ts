@@ -217,6 +217,21 @@ export const RatingDeltaSchema = z.object({
   side: SideSchema,
   before: z.number().int(),
   after: z.number().int(),
+  /** THE §6.7 RANK-UP TRIGGER, and null unless the match crossed a TIER.
+   *
+   *  Computed on the server because it needs the PRE-match rating and the
+   *  PRE-match placement count, and both are gone from the row by the time the
+   *  client hears anything. A division change is deliberately NOT reported:
+   *  firing the full cinematic four times per tier is how a moment stops being
+   *  one (§2 rule 3). */
+  ladder: z
+    .object({
+      kind: z.literal("tier"),
+      up: z.boolean(),
+      to: z.string(),
+      label: z.string(),
+    })
+    .nullable(),
 });
 
 export const MatchEndSchema = z.object({

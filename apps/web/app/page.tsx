@@ -1,80 +1,56 @@
 import Link from "next/link";
-import { CURRENT_PHASE } from "@/lib/phase";
+import { currentUser } from "@/lib/auth";
+import { Hub } from "./Hub";
 
-export default function Home() {
+/* ============================================================================
+   Signed in, this is the Hub (§7). Signed out, it is the pitch.
+
+   WHAT WAS REMOVED, and why it mattered. This screen used to open with
+   `CURRENT_PHASE.label` and `CURRENT_PHASE.summary` — "Phase 2E — Deployment"
+   followed by a sentence about what had been built that session — and then
+   listed four links, three of which went to /dev/judge, /dev/hud and
+   /dev/kitchen-sink.
+
+   That is a build log and a developer's toolbox, addressed to the person
+   writing the code, printed above the product name. It was the first thing
+   every visitor read, and it told them accurately that they were looking at
+   something unfinished.
+   ========================================================================= */
+
+export default async function Home() {
+  const user = await currentUser();
+  if (user) return <Hub user={user} />;
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-10 px-6 py-16">
       <div>
-        <p className="font-display text-fg-faint text-12 font-bold tracking-[var(--track-hud)] uppercase">
-          {CURRENT_PHASE.label}
-        </p>
-        <h1 className="font-display text-fg mt-3 text-48 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
+        <h1 className="font-display text-fg text-48 leading-none font-extrabold tracking-[var(--track-display)] uppercase">
           1v1<span className="text-player">.</span>code
         </h1>
         <p className="text-fg-dim mt-4 max-w-lg text-16 leading-relaxed">
-          A fighting-game HUD rendered in the language of a code editor. {CURRENT_PHASE.summary}
+          Two people, one problem, one clock. Solve it faster than your opponent while
+          spectators watch both editors live.
         </p>
       </div>
 
-      <nav className="flex flex-col gap-px">
+      <div className="flex flex-col gap-3 sm:flex-row">
         <Link
-          href="/play"
-          className="clip-p1 border-line group flex items-center justify-between border bg-surface px-5 py-4 transition-colors duration-[160ms] hover:border-[var(--player)]"
+          href="/register"
+          className="clip-p1 focus-ring font-display text-ink bg-p1 px-7 py-4 text-16 font-extrabold tracking-[var(--track-display)] uppercase transition-transform duration-[160ms] hover:scale-[1.02] active:scale-[0.97]"
         >
-          <span>
-            <span className="font-display text-fg block text-16 font-bold tracking-[var(--track-display)] uppercase">
-              Play
-            </span>
-            <span className="text-fg-faint text-13">
-              Queue for a match — sign in first, the bot answers after 20s
-            </span>
-          </span>
-          <span className="text-player font-display text-20">→</span>
+          Create an account
         </Link>
+        <Link
+          href="/login"
+          className="focus-ring border-line hover:border-line-hot font-display text-fg border bg-surface px-7 py-4 text-16 font-bold tracking-[var(--track-display)] uppercase transition-colors duration-[160ms]"
+        >
+          Sign in
+        </Link>
+      </div>
 
-        <Link
-          href="/dev/judge"
-          className="clip-p1 border-line group flex items-center justify-between border bg-surface px-5 py-4 transition-colors duration-[160ms] hover:border-[var(--player)]"
-        >
-          <span>
-            <span className="font-display text-fg block text-16 font-bold tracking-[var(--track-display)] uppercase">
-              Judge console
-            </span>
-            <span className="text-fg-faint text-13">
-              Paste code, watch verdicts stream test by test
-            </span>
-          </span>
-          <span className="text-player font-display text-20">→</span>
-        </Link>
-
-        <Link
-          href="/dev/hud"
-          className="clip-p1 border-line group flex items-center justify-between border bg-surface px-5 py-4 transition-colors duration-[160ms] hover:border-[var(--player)]"
-        >
-          <span>
-            <span className="font-display text-fg block text-16 font-bold tracking-[var(--track-display)] uppercase">
-              Moment simulator
-            </span>
-            <span className="text-fg-faint text-13">
-              Every beat of §6, plus the motion tuning surface
-            </span>
-          </span>
-          <span className="text-player font-display text-20">→</span>
-        </Link>
-
-        <Link
-          href="/dev/kitchen-sink"
-          className="clip-p1 border-line group flex items-center justify-between border bg-surface px-5 py-4 transition-colors duration-[160ms] hover:border-[var(--player)]"
-        >
-          <span>
-            <span className="font-display text-fg block text-16 font-bold tracking-[var(--track-display)] uppercase">
-              Kitchen sink
-            </span>
-            <span className="text-fg-faint text-13">Every primitive, every state</span>
-          </span>
-          <span className="text-player font-display text-20">→</span>
-        </Link>
-      </nav>
+      <p className="text-fg-faint text-13">
+        Got a challenge link? Open it — you can play without an account.
+      </p>
     </main>
   );
 }
