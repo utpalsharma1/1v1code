@@ -2542,3 +2542,112 @@ typecheck 7/7, core 74/74, unit 7/7, **db gates all green (176 test cases)**, **
 questions I still owe you an answer *from*: the empty-Hub state and tier distribution.
 
 Per §13.12, stopping here.
+
+---
+
+## Tier distribution, the empty Hub, both repos public — and 3B part 1
+
+### 1. The empty Hub
+
+The emptiest this product ever is, and exactly what a friend arriving from a
+challenge link sees. It was three blank panels.
+
+**Placements are now a goal.** Five pips that fill, the count in display type, and
+`5 placement matches to earn your rank` — a target rather than a dashed box pretending to be a
+badge that failed to load. **An empty history teaches the two ways to start a match** — press
+PLAY, or send a link your opponent needs no account for — instead of a sentence apologising for
+having nothing, and closes on the thing that makes this product different: every match is
+watchable live.
+
+Verified against a genuinely fresh account through the real registration route.
+
+### 2. Tier distribution — the bands were wrong, and the fix is measured
+
+**Your instinct was right, and worse than you put it.** Modelling the base as N(1200, 300) — the
+start is 1200, the spread taken from comparable CP ladders — the 200-point bands gave:
+
+| | Iron | Bronze | Silver | Gold | Plat | Diamond | Master | GM | Legend |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 200-wide | 15.9% | 21.1% | 26.1% | 21.1% | 11.1% | 3.8% | **0.8%** | **0.12%** | **0.012%** |
+
+Legend was **1 player in 8,139**. The decisive test is not the percentage but whether a badge is
+ever worn at the scale this will actually have:
+
+```
+                   N=50        N=200       N=1000
+  200-wide   3 badges dead   2 dead      1 dead
+  150-wide   2 badges dead   1 dead      0 dead
+```
+
+**Bands narrowed to 150**, so nine tiers span 1350 instead of 1800. Master 3.3%, GM 1.1%,
+Legend 0.4% — 1 in 261, a mountain somebody in a room of 250 people has climbed.
+
+**On starting a third of the way up: the start should stay at 1200, and the answer is placements
+rather than a lower start.** The rating is a *measurement prior*, not a reward — moving it distorts
+matchmaking for everyone rather than changing what a badge says, and a strong new player would
+climb out of an artificially low start immediately while being matched against people they should
+not be. What makes early rank feel earned is that **no badge exists until five matches are done**:
+the first badge is a result, not a starting position. A new account lands mid-ladder with three
+tiers below and five above, which is climbing room in both directions.
+
+The bands are presentation over Glicko, so this changed **nobody's rating** and can be recalibrated
+again once there is real data — §8's "ratings converge on real data" applied to the mapping. The
+ladder tests now derive from the constants rather than hardcoding boundaries, so the next
+recalibration will not need them rewritten.
+
+### 3. Both repos are public
+
+**Secret scan re-run against full history on both before flipping, since public is irreversible in
+practice.**
+
+| | `.env` ever committed | SESSION_SECRET in any blob | key/token-shaped strings |
+| --- | --- | --- | --- |
+| `1v1code` | 0 | **0** | none |
+| `argus` | none | n/a | none |
+
+The 1v1code scan reads **every blob in the object database**, not just `git log -S`. argus was
+scanned the same way for private keys, `ghp_`/`sk-`/`AKIA` tokens and inline passwords.
+
+Both now **public**, with descriptions and topics:
+
+- **1v1code** — `competitive-programming, websockets, docker, real-time, nextjs, typescript`
+- **argus** — `cpp, computer-vision, real-time, onnx, edge-ai`
+
+`gh repo edit --visibility` silently did nothing; the flip went through `gh api -X PATCH`. Confirmed
+PUBLIC on both afterwards rather than assumed.
+
+**argus already had a README of the same standard** — problem, what it does, differentiator,
+architecture, quick start with verification, calibration, measurement, layout, requirements. 284
+lines. No rewrite needed, so none was written.
+
+### 4. Order of work recorded in §12
+
+1. Phase 3B · 2. the §9 sound library · 3. Stage 1 deployment · 4. problem authoring as a block.
+
+The sound library is **pulled out of deferred Phase 4 and scheduled**, because six placeholder
+oscillator tones against a spec that calls sound *half the feeling of aliveness* should be a
+decision rather than a leftover.
+
+And recorded explicitly: **the thin problem bank is deliberate.** Authoring is the one thing on the
+critical path that does not decay — a problem written in three months is worth what a problem
+written today is worth, while an unbuilt screen blocks everything downstream. A future session
+should not read 23 problems as a gap to fill on sight in place of scheduled work.
+
+### 5. Phase 3B — part one only
+
+**The leaderboard is built.** It is the screen the recalibration was for and the place league
+colour does most of its work. Only finished-placement accounts appear; guests never do, because
+they cannot earn rating and the row could never move. No pagination, deliberately — at this scale
+the top 100 *is* the ladder.
+
+**Three of 3B's four screens are not built: profile with the per-topic radar, the replay viewer,
+and the live match panel.** I stopped rather than starting a fourth screen I could not finish
+properly in the same session — the same reasoning that split 3A from 3B in the first place, and
+your own standard that nine correct beats eighteen rushed. They are the next session.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7, bank gates green (176 test cases, 23 problems), **e2e 17/17**,
+**e2e:prod 15/15**. Pushed to `master`.
+
+Per §13.12, stopping here.
