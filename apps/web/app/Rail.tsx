@@ -36,7 +36,7 @@ const ITEMS: Item[] = [
   { href: "/", label: "Hub", glyph: <Glyph d="M3 9.5 10 4l7 5.5V16a1 1 0 0 1-1 1h-4v-4H8v4H4a1 1 0 0 1-1-1z" /> },
   { href: "/play", label: "Play", glyph: <Glyph d="M6 4l10 6-10 6z" /> },
   { href: "/watch", label: "Spectate", glyph: <Glyph d="M10 5c4 0 7 3.2 8 5-1 1.8-4 5-8 5s-7-3.2-8-5c1-1.8 4-5 8-5zm0 2.5A2.5 2.5 0 1 0 10 12.5 2.5 2.5 0 0 0 10 7.5z" /> },
-  { href: "/profile", label: "Profile", soon: true, glyph: <Glyph d="M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-6 7c0-3 2.7-5 6-5s6 2 6 5z" /> },
+  { href: "/profile", label: "Profile", glyph: <Glyph d="M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-6 7c0-3 2.7-5 6-5s6 2 6 5z" /> },
   { href: "/leaderboard", label: "Ladder", glyph: <Glyph d="M3 16h4V9H3zm5 0h4V3H8zm5 0h4v-5h-4z" /> },
 ];
 

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { io } from "socket.io-client";
 
 /* ============================================================================
    2C-1 in a real browser: typing in /play appears in /dev/spectate.
@@ -99,31 +100,42 @@ test("a player cannot spectate their own live match", { tag: "@needs-dev-routes"
     () => document.querySelector("[data-match-id]")?.getAttribute("data-match-id") ?? "",
   );
 
-  /* Ask as the competitor's own session, on the same origin, exactly as a
-     modified client would. */
-  const refused = await play.evaluate(async (id: string) => {
-    const response = await fetch("/api/socket-ticket", { method: "POST", credentials: "same-origin" });
-    const { ticket } = (await response.json()) as { ticket: string };
-    const { io } = (window as unknown as { __io?: unknown }).__io
-      ? (window as unknown as { __io: { io: unknown } }).__io
-      : await import(/* webpackIgnore: true */ "https://esm.sh/socket.io-client@4");
-    const socket = (io as (u: string, o: unknown) => any)("http://localhost:4000", {
-      transports: ["websocket"],
-      auth: { ticket },
+  /* Ask as the competitor's own session, exactly as a modified client would:
+     their real ticket, their real identity, a direct socket to the gateway.
+
+     THE TICKET IS FETCHED IN THE PAGE; THE SOCKET IS OPENED FROM NODE. The
+     first version did both in the page, which meant `await import(
+     "https://esm.sh/socket.io-client@4")` — an external CDN fetch at test time.
+     That made a security test depend on a third party being up, and when esm.sh
+     became unreachable from this host the test failed for three minutes and
+     said nothing about the gateway. A check that goes red for reasons unrelated
+     to the thing it checks is one that gets ignored (§13.7).
+
+     Nothing is lost by moving the connection: the gateway refuses by IDENTITY,
+     and the identity is carried by the ticket, not by which process holds the
+     socket. */
+  const ticket = await play.evaluate(async () => {
+    const response = await fetch("/api/socket-ticket", {
+      method: "POST",
+      credentials: "same-origin",
     });
-    return new Promise<string>((resolve) => {
-      const timer = setTimeout(() => resolve("no response"), 15_000);
-      socket.on("connect", () => socket.emit("spectate.join", { matchId: id }));
-      socket.on("error", (e: { code: string }) => {
-        clearTimeout(timer);
-        resolve(e.code);
-      });
-      socket.on("editor.snapshot", () => {
-        clearTimeout(timer);
-        resolve("LEAKED");
-      });
+    return ((await response.json()) as { ticket: string }).ticket;
+  });
+
+  const socket = io("http://localhost:4000", { transports: ["websocket"], auth: { ticket } });
+  const refused = await new Promise<string>((resolve) => {
+    const timer = setTimeout(() => resolve("no response"), 15_000);
+    socket.on("connect", () => socket.emit("spectate.join", { matchId }));
+    socket.on("error", (e: { code: string }) => {
+      clearTimeout(timer);
+      resolve(e.code);
     });
-  }, matchId);
+    socket.on("editor.snapshot", () => {
+      clearTimeout(timer);
+      resolve("LEAKED");
+    });
+  });
+  socket.close();
 
   expect(refused, "a competitor spectating their own match must be refused").toBe("SELF_SPECTATE");
 

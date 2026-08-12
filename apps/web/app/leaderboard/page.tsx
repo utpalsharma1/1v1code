@@ -91,7 +91,12 @@ export default async function Leaderboard() {
                   />
 
                   <span className="min-w-0 flex-1 truncate text-14">
-                    <Handle handle={player.handle} tier={standing.tier as Tier} />
+                    <Link
+                      href={`/u/${encodeURIComponent(player.handle)}`}
+                      className="focus-ring hover:underline underline-offset-2"
+                    >
+                      <Handle handle={player.handle} tier={standing.tier as Tier} />
+                    </Link>
                     {isMe && (
                       <span className="font-display text-fg-faint ml-2 text-11 font-bold tracking-[var(--track-hud)] uppercase">
                         you

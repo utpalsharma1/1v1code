@@ -47,6 +47,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "turbo": "^2.10.7",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "socket.io-client": "^4.8.3"
   }
 }

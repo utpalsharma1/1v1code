@@ -2651,3 +2651,124 @@ typecheck 7/7, core 74/74, unit 7/7, bank gates green (176 test cases, 23 proble
 **e2e:prod 15/15**. Pushed to `master`.
 
 Per §13.12, stopping here.
+
+---
+
+## 3B part 2: the profile — and the event log turned out to be broken
+
+### The replay investigation found a live bug in the keystroke relay
+
+You were right that the replay viewer would be the first thing to read the log in anger. It did
+not need to be built to find something: reading 338 real logs was enough.
+
+**`MatchScreen`'s snapshot effect listed `onSnapshot` in its dependency array**, and `page.tsx`
+passes it as an inline arrow — a new function identity every render. So the effect ran on **every
+render**, and the damage was not cosmetic:
+
+| | before | §10 says | after the fix |
+| --- | --- | --- | --- |
+| snapshot cadence | every **122 ms** | every 30 s | on mount and on desync |
+| one match's log | 110 KB (367 snapshots, 1 delta) | ~130 KB of deltas, 16 KB of snapshots | **2 KB** (2 snapshots, 1 delta) |
+| across 174 logs | 22,047 snapshots vs 2,977 deltas | — | — |
+| worst single match | 932 KB, **zero deltas** | — | — |
+
+Three consequences, in increasing order of seriousness:
+
+1. **Logs ~50× larger than designed.**
+2. **§10's paste-detection evidence was never being captured.** The effect also ran
+   `pending.current = []`, discarding the delta buffer before its 50 ms flush, so matches logged
+   *zero* deltas. The per-change `inserted`/`removed`/`origin` shape exists precisely so "the
+   evidence exists when we decide what to do about it" — and it was being thrown away.
+3. **The per-side monotonic `seq` was being reset constantly.** `seq.current = 0` on every render;
+   across 80 logs, delta seq 1 appears **400 times**. §10 requires a receiver to REFUSE any batch
+   that is not `lastSeq + 1`, because applying a delta to the wrong base silently corrupts the
+   document. A sequence restarting hundreds of times per match makes that check fire on gaps that
+   do not exist.
+
+Fixed by putting the callback behind a ref and reducing the dependency list to `desyncKey` — the
+only thing that genuinely means "start again". Verified on a fresh match: **367 snapshots → 2**,
+which is one per side on mount, exactly right.
+
+### Does §10's "replay is a pure function of the log" hold? No, and here is the precise gap
+
+The ordering half holds: every event carries a gapless `seq`, replay orders by it, and nothing
+depends on wall-clock time. **The self-containment half does not.**
+
+A log references `p1`/`p2` as **user IDs** and the problem as a **slug**. Rendering a replay
+therefore needs the `User` and `Problem` tables, so playback is a pure function of *(log +
+database)*, not of the log. Two real consequences:
+
+- A replay of a match between players who later change handles shows the **new** handles.
+- A replay of a match whose problem was edited shows the **edited** statement.
+
+So the log is not a recording, it is a **diff against mutable state**. The fix is to denormalise
+the few display fields into `match.created` — handles and problem title at the time the match
+happened — which is cheap and makes the claim true. **Not done here**, because it changes the log
+format and belongs with the viewer that consumes it.
+
+### The profile
+
+**Profiles are public**, at `/u/<handle>`. A profile is the natural thing to link to, and §7
+already establishes that watching needs no account; a profile a friend cannot open is a feature
+built halfway. `/profile` redirects to your own, so there is one canonical shareable URL.
+
+**§10's allowlist rule applied, because a profile is a new channel.** The public view is
+constructed from named fields rather than filtered, so adding a column to `User` cannot leak it.
+Anonymous and owner see the same thing — a profile whose content changes with the viewer is two
+screens to keep correct, and nothing on it is private. Deliberately absent: email, `ratingDev` and
+`volatility` (Glicko internals — §8 hides the rating behind a tier, so publishing its uncertainty
+invites reading the number nobody was meant to read), and:
+
+> **LIVE MATCHES ARE EXCLUDED, IN THE QUERY.** A profile listing an in-progress match with its
+> spectator code would hand anyone a route into a live game, bypassing §7's mandatory 45-second
+> ranked delay and §10's rule that a player may not spectate their own live match. This is the
+> field nobody would have thought to check, which is what the allowlist rule exists for.
+
+Verified: anonymous gets 200 and the public view, owner additionally sees "this is you", an unknown
+handle 404s, a guest profile 404s, and a leak grep for email/`ratingDev`/`volatility`/`passwordHash`
+returns **0**.
+
+### The radar: hidden until it means something
+
+**A radar from sparse data is worse than no radar, and the reason is specific.** With one or two
+matches in a topic the only possible win rates are 0%, 50% and 100%; and any smoothing pulls an
+unmeasured topic toward the middle, drawing a near-regular pentagon. **A regular pentagon does not
+read as "no data" — it reads as "evenly skilled across all five".** That is a confident claim made
+from nothing, on the screen a shared link most often lands on.
+
+| matches | what the profile shows |
+| --- | --- |
+| **0** | no chart and no frame — one line saying what will appear and what it takes |
+| **3** | the per-topic **breakdown**: played and won per topic, with progress bars toward the threshold. Counts are facts; a skill estimate from three is not |
+| **30** | the radar, over the topics that qualify |
+
+**A spoke needs 5 decided matches; the radar needs 3 qualifying spokes** — ~15 matches minimum,
+realistically 25 before it is full. An unqualified spoke is pulled to the **centre**, never the
+middle, so absent data can never look like average performance.
+
+### A security test that depended on a CDN
+
+`relay.spec.ts:78` — "a player cannot spectate their own live match" — started failing. **It fails
+identically with my relay fix stashed**, so it was never the fix: the test did
+`await import("https://esm.sh/socket.io-client@4")` inside the page, and esm.sh is unreachable from
+this host (000 on IPv4 and default, 20 s timeout).
+
+A security test that goes red for three minutes because a third party is down says nothing about
+the gateway, and is the cry-wolf shape §13.7 is about. The ticket is still fetched **in the page**
+— that is the identity under test — and the socket is now opened from Node with the workspace's own
+`socket.io-client`. Nothing is lost: the gateway refuses by identity, and identity travels in the
+ticket, not in which process holds the socket.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7, bank gates green (176 cases, 23 problems), **e2e 17/17**,
+**e2e:prod 15/15**.
+
+### Not done
+
+**The replay viewer and the live match panel.** I stopped rather than start the viewer, because the
+log format finding above should be fixed *first* — building a viewer on a log that needs the
+database to resolve its own references would bake that dependency in, and the denormalisation is a
+log-format change that wants to land with its consumer. That is the next session, in that order.
+
+Per §13.12, stopping here.

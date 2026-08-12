@@ -207,12 +207,35 @@ export function MatchScreen(props: MatchScreenProps) {
     return () => clearInterval(id);
   }, [onDelta]);
 
-  // Ground truth on mount, and again whenever the gateway reports a gap.
+  /* GROUND TRUTH ON MOUNT, AND ON A REPORTED GAP. NOTHING ELSE.
+
+     This effect listed `onSnapshot` as a dependency, and the parent passes it
+     as an inline arrow — a new function identity on every render. So it ran on
+     EVERY RENDER, and the damage was not just a noisy log:
+
+       - a full-text snapshot every ~122ms instead of every 30s (§10). Across
+         174 recorded matches that is 22,047 snapshots against 2,977 deltas,
+         with single matches reaching 932 KB.
+       - `pending.current = []` discarded the delta buffer before the 50ms
+         flush could send it, so some matches logged ZERO deltas. §10's
+         paste-detection evidence — per-change inserted/removed/origin — was
+         therefore never being captured, which was the entire point of
+         recording it now rather than later.
+       - `seq.current = 0` reset the per-side monotonic sequence constantly.
+         §10 requires a receiver to REFUSE a batch that is not lastSeq + 1,
+         because applying a delta to the wrong base silently corrupts the
+         document. A sequence that restarts at 1 hundreds of times per match
+         makes that check fire on gaps that do not exist.
+
+     The callback goes through a ref so its identity cannot retrigger this, and
+     the dependency list is now only what genuinely means "start again". */
+  const snapshotRef = useRef(onSnapshot);
+  snapshotRef.current = onSnapshot;
   useEffect(() => {
     seq.current = 0;
     pending.current = [];
-    onSnapshot(0, sourceRef.current);
-  }, [onSnapshot, desyncKey]);
+    snapshotRef.current(0, sourceRef.current);
+  }, [desyncKey]);
 
   // A submitted pass shakes the screen (§6.6.4). Failure does not — it stings
   // for a second and gets out of the way rather than punishing with motion.
