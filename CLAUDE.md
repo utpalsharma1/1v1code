@@ -983,6 +983,19 @@ This supersedes the earlier framing of §6.8 as "if scope ever has to be cut, cu
 
 The failure mode this exists to prevent is a wall at the end: forty problems written in a fortnight, all by one person in one mood, is a worse bank than forty accumulated three at a time against real gaps.
 
+### Order of work — decided, not assumed
+
+A session picks up the next item here. It is written down so that "what is next" is a decision already taken rather than a judgement re-made each time, badly, under context pressure.
+
+1. **Phase 3B** — profile with match history and the per-topic radar, leaderboard, replay viewer from the event log, the live match panel.
+2. **The §9 sound library.** Pulled out of the deferred Phase 4 and scheduled here deliberately. What exists is six placeholder oscillator tones, and §9 calls sound *half the feeling of aliveness* — a match with no `test_pass` tick rising in pitch, no countdown, no victory sting is a different product from the one this brief describes. Deferring it should be a decision, and this is the decision: it lands after 3B, before deployment.
+3. **Stage 1 deployment** to Oracle Cloud (Hyderabad, ARM). `pnpm db:timing` is the first thing to run on the new host.
+4. **Problem authoring, as a dedicated block.**
+
+**THE SMALL BANK IS A DELIBERATE DECISION, NOT AN OVERSIGHT.** 23 problems is not enough to launch on and everyone involved knows it. It is deprioritised anyway, because authoring is the one thing on the critical path that *does not decay* — a problem written in three months is worth exactly what a problem written today is worth, whereas an unbuilt screen blocks everything downstream of it and an unrun deployment blocks all of it.
+
+So a future session should **not** read the thin bank as a gap to fill on sight, and should not start generating problems in place of the scheduled work above. Author them when the schedule says to, or when a session has slack at the end and the standing workstream applies. The 60-problem target and the per-session cadence are recorded under *The problem bank* below; the *scheduling* is here.
+
 ### The road to launch
 
 Only these, in order:

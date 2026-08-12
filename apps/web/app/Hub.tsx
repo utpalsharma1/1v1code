@@ -110,18 +110,39 @@ export async function Hub({ user }: { user: { id: string; handle: string; rating
             /* No badge during placements (§8). The first badge somebody sees is
                the one they remember, so it is not shown until it means
                something. */
+            /* PLACEMENTS ARE A GOAL, NOT AN ABSENCE.
+
+               This is the emptiest the product ever is, and it is exactly what
+               a friend arriving from a challenge link sees. An empty badge slot
+               and an empty history read as broken; the same screen reads as an
+               invitation if it says what happens next and shows progress toward
+               it. So: five pips that fill, a target rather than a blank, and no
+               dashed placeholder pretending to be a badge that failed to load. */
             <>
-              <div className="border-line flex h-[104px] w-[104px] items-center justify-center rounded-[8px] border border-dashed">
-                <span className="font-display text-fg-faint text-26 font-extrabold tabular">
-                  {standing.played}/5
-                </span>
+              <div className="flex flex-col items-center gap-3">
+                <div className="flex items-center gap-1.5" aria-hidden="true">
+                  {Array.from({ length: 5 }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`h-2.5 w-2.5 rotate-45 ${
+                        i < standing.played ? "bg-p1" : "border-line border bg-transparent"
+                      }`}
+                    />
+                  ))}
+                </div>
+                <p className="font-display text-fg text-34 font-extrabold leading-none tabular">
+                  {standing.played}
+                  <span className="text-fg-faint text-20">/5</span>
+                </p>
               </div>
               <div className="text-center">
                 <p className="font-display text-fg text-16 font-extrabold tracking-[var(--track-hud)] uppercase">
-                  Placements
+                  {standing.played === 0 ? "Earn your rank" : "Placements"}
                 </p>
                 <p className="text-fg-dim mt-1 text-13">
-                  {standing.label}. Your rank appears when they are done.
+                  {standing.played === 0
+                    ? "5 placement matches to earn your rank."
+                    : `${standing.label} — then your tier appears.`}
                 </p>
               </div>
             </>
@@ -160,11 +181,32 @@ export async function Hub({ user }: { user: { id: string; handle: string; rating
           Recent matches
         </h2>
         {matches.length === 0 ? (
-          <div className="border-line clip-corner border border-dashed bg-surface/40 px-5 py-7 text-center">
-            <p className="text-fg-dim text-13">
-              No matches yet. Press PLAY, or send someone a challenge link.
-            </p>
-          </div>
+          /* An empty history is the NORMAL state for the person this product
+             most needs to keep — someone who just arrived. It gets the two ways
+             to start a match, in the order of least friction, rather than a
+             sentence apologising for having nothing. */
+          <ol className="border-line clip-corner flex flex-col gap-3 border border-dashed bg-surface/40 px-5 py-5">
+            <li className="flex items-start gap-3">
+              <span className="font-display text-p1 text-13 font-extrabold tabular">1</span>
+              <span className="text-fg-dim text-13">
+                <span className="text-fg font-semibold">Press PLAY.</span> You are matched with
+                whoever is closest to your rating. Nobody around? The queue tells you, and waits.
+              </span>
+            </li>
+            <li className="flex items-start gap-3">
+              <span className="font-display text-p1 text-13 font-extrabold tabular">2</span>
+              <span className="text-fg-dim text-13">
+                <span className="text-fg font-semibold">Or send a link.</span> Your opponent does
+                not need an account — they open it and play.
+              </span>
+            </li>
+            <li className="border-line mt-1 flex items-start gap-3 border-t pt-3">
+              <span className="font-display text-fg-faint text-13 font-extrabold">·</span>
+              <span className="text-fg-faint text-13">
+                Every match is watchable live. Both editors, side by side, as they are typed.
+              </span>
+            </li>
+          </ol>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {matches.map((match) => {

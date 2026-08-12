@@ -7,16 +7,12 @@
    58 to Platinum" tells a player where they stand and what to do next, while
    "1442" tells them neither.
 
-   THE BANDS. Nine tiers, 200 rating points each, four divisions of 50 inside
-   every tier except Legend. The width is chosen against the problem bank rather
-   than picked: problems run 800–2000 (§8), matchmaking selects at mean − 120,
-   and most players will sit between 1200 and 1600. 200-point tiers put four or
-   five tiers across the populated range, so a tier change is frequent enough to
-   feel like progress and rare enough to mean something. Wider and nobody ever
-   promotes; narrower and the badge churns.
+   THE BANDS. Nine tiers of 150 rating points, four divisions inside every tier
+   except Legend. The width is derived from the distribution it has to produce
+   rather than picked — see the block above TIER_FLOOR, which shows the working.
 
-   Iron starts at nothing rather than at 800: rating floors at 100 in practice
-   and a player below the bank's easiest problem still needs a rank to stand on.
+   Iron is open-ended downward: rating floors around 100 in practice, and a
+   player below the bank's easiest problem still needs a rank to stand on.
 
    PLACEMENTS. A new account plays 5 matches before it has a tier at all (§8).
    Before that it shows progress through placements, not a badge — showing
@@ -42,9 +38,35 @@ export type Tier = (typeof TIERS)[number];
 export const DIVISIONS = ["IV", "III", "II", "I"] as const;
 export type Division = (typeof DIVISIONS)[number];
 
-/** Where `iron` ends and `bronze` begins. */
-export const TIER_FLOOR = 900;
-export const TIER_WIDTH = 200;
+/* THE BANDS ARE PRESENTATION OVER GLICKO, and they were re-derived once.
+   Nobody's rating changes when these move, which is exactly why they can be
+   recalibrated from real data later — §8's own "ratings converge on real data"
+   applied to the mapping rather than the numbers.
+
+   THE FIRST ATTEMPT WAS 200 WIDE and put nine tiers across 1800 rating points.
+   Modelling the player base as N(1200, 300) — everyone starts at 1200, and the
+   spread is taken from comparable competitive-programming ladders — that gives
+   Grandmaster 0.12% and Legend 0.012%, which is 1 player in 8,139.
+
+   That is the defect. At the populations this will actually have, those badges
+   are not rare, they are UNREACHABLE:
+
+                       N=50        N=200       N=1000
+     200-wide   3 badges dead   2 dead      1 dead
+     150-wide   2 badges dead   1 dead      0 dead
+
+   A ladder whose top third is decorative is worse than a shorter ladder, so the
+   bands narrowed to 150 and nine tiers now span 1350. Master becomes 3.3% and
+   Legend 0.4% — still the top of the mountain, but a mountain somebody in a
+   room of 250 people has climbed.
+
+   THE START STAYS AT 1200. It is a measurement prior, not a reward, and moving
+   it distorts matchmaking for everyone rather than changing what a badge says.
+   A new account lands mid-ladder, and the thing that makes early rank feel
+   earned is PLACEMENTS (below): no badge exists at all until five matches are
+   done, so the first badge is a result rather than a starting position. */
+export const TIER_FLOOR = 950;
+export const TIER_WIDTH = 150;
 export const DIVISION_WIDTH = TIER_WIDTH / DIVISIONS.length;
 
 /** §8: five matches before a rank exists. */

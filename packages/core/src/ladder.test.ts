@@ -4,6 +4,7 @@ import {
   DIVISIONS,
   PLACEMENT_MATCHES,
   TIERS,
+  TIER_WIDTH,
   auraOf,
   ladderChange,
   rankOf,
@@ -12,12 +13,14 @@ import {
 } from "./ladder.ts";
 
 describe("the ladder", () => {
-  test("the worked example from the brief", () => {
-    /* §8 wants "Gold II, N to Platinum" where the product used to show 1442. */
+  test("a rating reads as a rank, not a number", () => {
+    /* §8's point: 1442 should say where you stand and what is next. The exact
+       tier moves when the bands are recalibrated, so this asserts the SHAPE
+       against the constants rather than a frozen string. */
     const rank = rankOf(1442);
-    assert.equal(rank.label, "Gold II");
-    assert.equal(rank.nextTier, "platinum");
-    assert.equal(rank.toNextTier, 58);
+    assert.equal(rank.label, `${rank.tier[0]!.toUpperCase()}${rank.tier.slice(1)} ${rank.division}`);
+    assert.ok(rank.nextTier, "a mid-ladder rating must have somewhere to climb to");
+    assert.equal(rank.toNextTier, Math.ceil(tierFloor(rank.nextTier!) - 1442));
   });
 
   test("every tier boundary lands in the tier it opens", () => {
@@ -34,10 +37,12 @@ describe("the ladder", () => {
   });
 
   test("a tier's bottom is division IV and its top is division I", () => {
-    assert.equal(rankOf(1300).division, "IV");
-    assert.equal(rankOf(1499).division, "I");
+    const base = tierFloor("gold");
+    assert.equal(rankOf(base).division, "IV");
+    assert.equal(rankOf(base + TIER_WIDTH - 1).division, "I");
     /* Divisions must not skip: walking a tier hits all four in order. */
-    const seen = [1300, 1350, 1400, 1450].map((r) => rankOf(r).division);
+    const step = TIER_WIDTH / DIVISIONS.length;
+    const seen = [0, 1, 2, 3].map((i) => rankOf(base + i * step).division);
     assert.deepEqual(seen, [...DIVISIONS]);
   });
 
@@ -69,9 +74,10 @@ describe("the ladder", () => {
   });
 
   test("progress is a fraction of the tier, not of the ladder", () => {
-    assert.equal(rankOf(1300).progress, 0);
-    assert.equal(rankOf(1400).progress, 0.5);
-    assert.ok(rankOf(1499).progress > 0.99);
+    const base = tierFloor("gold");
+    assert.equal(rankOf(base).progress, 0);
+    assert.equal(rankOf(base + TIER_WIDTH / 2).progress, 0.5);
+    assert.ok(rankOf(base + TIER_WIDTH - 1).progress > 0.99);
   });
 });
 
@@ -94,8 +100,8 @@ describe("placements", () => {
 describe("what earns a cinematic", () => {
   test("a tier change does", () => {
     const change = ladderChange(
-      { rating: 1499, ratedMatches: 20 },
-      { rating: 1505, ratedMatches: 21 },
+      { rating: tierFloor("gold") - 1, ratedMatches: 20 },
+      { rating: tierFloor("gold") + 5, ratedMatches: 21 },
     );
     assert.equal(change.kind, "tier");
     assert.equal(change.kind === "tier" && change.up, true);
@@ -103,16 +109,16 @@ describe("what earns a cinematic", () => {
 
   test("a division change does NOT — it would fire four times per tier", () => {
     const change = ladderChange(
-      { rating: 1340, ratedMatches: 20 },
-      { rating: 1360, ratedMatches: 21 },
+      { rating: tierFloor("gold") + 5, ratedMatches: 20 },
+      { rating: tierFloor("gold") + TIER_WIDTH / 2, ratedMatches: 21 },
     );
     assert.equal(change.kind, "division");
   });
 
   test("drifting inside one division is nothing at all", () => {
     const change = ladderChange(
-      { rating: 1310, ratedMatches: 20 },
-      { rating: 1320, ratedMatches: 21 },
+      { rating: tierFloor("gold") + 2, ratedMatches: 20 },
+      { rating: tierFloor("gold") + 6, ratedMatches: 21 },
     );
     assert.equal(change.kind, "none");
   });
@@ -136,8 +142,8 @@ describe("what earns a cinematic", () => {
 
   test("demotion is detected and is not reported as an ascent", () => {
     const change = ladderChange(
-      { rating: 1505, ratedMatches: 20 },
-      { rating: 1490, ratedMatches: 21 },
+      { rating: tierFloor("gold") + 5, ratedMatches: 20 },
+      { rating: tierFloor("gold") - 10, ratedMatches: 21 },
     );
     assert.equal(change.kind, "tier");
     assert.equal(change.kind === "tier" && change.up, false);
