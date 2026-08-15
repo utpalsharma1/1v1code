@@ -2867,3 +2867,106 @@ typecheck 7/7, core 74/74, unit 7/7, **e2e 18/18** (the new spec included, passi
 failure).
 
 Per §13.12, stopping here.
+
+---
+
+## The relay corruption, root-caused — and it was none of the three fixes
+
+### The mechanism
+
+Your `rangeOffset` reasoning was right about the *symptom* and the diagnosis it implies is not
+what was happening. Replaying a real log step by step, with the user typing `def ste…`:
+
+```
+seq 2  (0,'d') (1,'e') (2,'f')                    -> "def"      correct
+seq 3  (1,' ') (2,'s') (3,'t')                    -> "d stef"   offsets 1,2,3
+                                                                where they had to be 3,4,5
+seq 4  (2,'e') (3,'p') (4,'_') (5,'0') (4,'()')   non-monotonic within one batch
+```
+
+The offsets were not stale-but-consistent, they were **wrong at capture time**, and one batch
+contained offsets that could not all be valid against any single document.
+
+**The cause: the Monaco editor was fully controlled** — `value={source}` with `onChange` calling
+`setSource`. React state is asynchronous, so the `value` prop lagged the model while somebody
+typed, and `@monaco-editor/react` then forced the model back to match the stale prop — **rewriting
+the document underneath the change stream**, and emitting further events of its own.
+
+**So none of the three options would have worked.** Descending-order application, offset rebasing,
+and one-message-per-event all assume the recorded offsets are a coherent sequence against a
+document only we are changing. There was a second writer.
+
+For the record, had it been the batching, I would have taken the third option — per-event units
+with a base version and loud rejection — because "make the failure loud instead of silent" is the
+property everything else here has, and this bug is the argument for it: it was silent for months.
+
+### The fix, and the verification you asked to make permanent
+
+The editor is now **uncontrolled**: `defaultValue`, a `key` on language so switching remounts, and
+`sourceRef` for submission. Removing `source` state also removes a re-render per keystroke, which
+was what tore down the 50 ms flush interval.
+
+`relay-load.spec.ts` flipped from `test.fail()` to passing — Playwright reported **"expected to
+fail, but passed"**, which is the marker doing its job rather than a test quietly going green.
+
+The permanent check is the one that found this without a viewer: **replay the logged deltas and
+diff character-by-character against the gateway's own authoritative snapshot.** It reports the
+divergence index and 20 characters of context either side. On a real match at seq 179 it now
+reproduces the gateway's text exactly, and the guard was confirmed to actually execute rather than
+being skipped.
+
+Two faults fixed along the way that were real but not the cause: the flush interval torn down every
+render, and the delta buffer swapped non-atomically.
+
+### The denormalisation
+
+`match.created` now carries everything a viewer needs with no database lookup:
+
+- **`schemaVersion: 1`** — one integer, written even though only one version has existed, because
+  the version you wish you had written is always the first one. Absent means version 0.
+- **Both players at match time**: handle, rating, tier, division, plus `userId` for joining back.
+- **The problem as shown**: title, rating, statement, input/output format, constraints, note, time
+  and memory limits, and the public samples.
+- **Match context**: mode, spectator delay, duration.
+
+**No `testCount`, deliberately.** The match does not know it — the gateway holds only public
+samples by design — and `submission.verdict` already carries `total`, which is where §6.4's cell
+count comes from. A second copy could only disagree with the first.
+
+**The 374 pre-v1 logs are discarded.** They have corrupted delta streams and no version field;
+teaching a viewer two formats forever costs more than losing test data that was never real.
+
+### A hardcoded tier, found by verifying the denormalisation
+
+`cardFor` returned **`tier: "gold", division: "II"` for every player in every match** — a
+placeholder from before the ladder existed. It survived because nothing rendered a tier anywhere
+until Phase 3A, and **the denormalisation would have baked it permanently into every replay log.**
+
+Tier is now derived from the ladder, and is **null during placements**: §8 gives a rating from match
+one and a rank from five, so inventing one publishes the number the ladder exists to hide.
+`PlayerCard.tier` is nullable through proto, gateway and client.
+
+### One diagnostic detour worth recording
+
+The production suite dropped to 11 passing mid-session. It was **Redis being down**, not the code —
+the gateway could not bind and every socket-dependent spec timed out. Restarting the containers
+restored 15/15. Worth noting because "four specs failed right after I changed the socket payload"
+is exactly the shape that invites a wrong conclusion.
+
+Also: `pnpm stack` restarts a service whose *environment* changed but not one whose *code* changed,
+which bit me twice — the gateway kept serving the old `match.created` shape after I edited it.
+Restarting explicitly is the current answer; the stale-config detector could reasonably grow a
+source-hash check.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7, bank gates green (176 cases, 23 problems), **probes 5/5**,
+**e2e 18/18**, **e2e:prod 15/15**.
+
+### Not done
+
+**The replay viewer and the live match panel.** The log is now correct and self-contained, so both
+are unblocked — this is the right place to stop rather than start the viewer with what is left of
+the session. Next session, in that order.
+
+Per §13.12, stopping here.
