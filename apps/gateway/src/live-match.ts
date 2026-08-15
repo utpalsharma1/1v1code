@@ -21,7 +21,7 @@ import {
   playerCardView,
   type Viewer,
 } from "./relay.ts";
-import { ReplayLog } from "./replay-log.ts";
+import { REPLAY_SCHEMA_VERSION, ReplayLog } from "./replay-log.ts";
 
 /* ============================================================================
    A live match: the state machine plus the timers it cannot own.
@@ -314,10 +314,58 @@ export class LiveMatch {
   /* ── Public transitions ─────────────────────────────────────────────── */
 
   async open(): Promise<void> {
+    /* DENORMALISED, SO A REPLAY IS ACTUALLY A PURE FUNCTION OF THE LOG.
+
+       §10 claims "this file IS the replay", and it was not: the record held
+       user IDs and a problem slug, so rendering needed the User and Problem
+       tables. Playback was therefore a pure function of (log + database), with
+       two consequences that only appear later — a replay of players who since
+       renamed shows the NEW handles, and a replay of an edited problem shows
+       the EDITED statement. The log was a diff against mutable state.
+
+       Everything a viewer needs to render without a lookup is written here, at
+       the moment it was true. IDs are kept alongside, because they are how the
+       log joins back to the database for anything beyond rendering.
+
+       SCHEMA VERSION IS A SINGLE INTEGER and it is the difference between a
+       viewer that can say "this log predates denormalisation" and one that
+       renders the wrong thing silently. It is written even though only one
+       version has ever existed, because the version you wish you had written is
+       always the first one. */
     await this.log.record("match.created", {
-      p1: this.players.p1.userId,
-      p2: this.players.p2.userId,
-      problem: this.problem.slug,
+      schemaVersion: REPLAY_SCHEMA_VERSION,
+
+      mode: this.rated ? "RANKED" : "UNRATED",
+      spectatorDelayMs: this.spectatorDelayMs,
+      durationMs: this.durationMs,
+
+      /* Both sides as they were AT MATCH TIME — handle, rating, tier and
+         division. A rank-up an hour later must not rewrite history. */
+      p1: { userId: this.players.p1.userId, ...playerCardView(this.players.p1) },
+      p2: { userId: this.players.p2.userId, ...playerCardView(this.players.p2) },
+
+      /* The problem exactly as the players saw it. `samples` is already the
+         public set — hidden tests stay hidden, and `testCount` carries the
+         number the HUD renders as cells without disclosing what they are. */
+      problem: {
+        id: this.problem.id,
+        slug: this.problem.slug,
+        title: this.problem.title,
+        rating: this.problem.rating,
+        statement: this.problem.statement,
+        inputFormat: this.problem.inputFormat,
+        outputFormat: this.problem.outputFormat,
+        constraints: this.problem.constraints,
+        note: this.problem.note,
+        timeLimitMs: this.problem.timeLimitMs,
+        memoryLimitMb: this.problem.memoryLimitMb,
+        /* NO testCount HERE, deliberately. The match does not know it — the
+           gateway holds only the public samples, by design — and the number is
+           already in the log on `submission.verdict` as `total`, which is where
+           §6.4's cell count comes from anyway. Denormalising it here would mean
+           a second copy that can disagree with the first. */
+        samples: this.problem.samples,
+      },
     });
     await this.apply({ type: "MATCH_FOUND" });
     await this.apply({ type: "ACCEPT_WINDOW_OPEN" });

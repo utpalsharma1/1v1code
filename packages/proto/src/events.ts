@@ -32,7 +32,10 @@ export const PlayerCardSchema = z.object({
   userId: z.string(),
   handle: z.string(),
   rating: z.number().int(),
-  tier: z.string(),
+  /** NULL DURING PLACEMENTS. §8 gives a player a rating from match one and a
+   *  TIER only after five, so this is nullable by design — a non-null tier for
+   *  an unplaced player would publish the number the ladder exists to hide. */
+  tier: z.string().nullable(),
   division: z.string().nullable(),
   isBot: z.boolean().default(false),
   isGuest: z.boolean().default(false),
@@ -45,7 +48,10 @@ export type PlayerCard = z.infer<typeof PlayerCardSchema>;
 export const PlayerCardViewSchema = z.object({
   handle: z.string(),
   rating: z.number().int(),
-  tier: z.string(),
+  /** NULL DURING PLACEMENTS. §8 gives a player a rating from match one and a
+   *  TIER only after five, so this is nullable by design — a non-null tier for
+   *  an unplaced player would publish the number the ladder exists to hide. */
+  tier: z.string().nullable(),
   division: z.string().nullable(),
   isBot: z.boolean().default(false),
   isGuest: z.boolean().default(false),

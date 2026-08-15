@@ -19,6 +19,18 @@ import { MatchEventLog, type AppendSink } from "@1v1/core";
    survives to ENDED is a complete replay and nothing later can need it.
    ========================================================================= */
 
+/* THE REPLAY LOG'S SCHEMA VERSION.
+ *
+ * 1 — handles, ratings, tiers and the problem as shown are denormalised into
+ *     `match.created`, so a replay renders without touching the database.
+ *
+ * Logs written before this field existed carry no `schemaVersion` at all, and a
+ * reader must treat "absent" as version 0 rather than as "current". Those logs
+ * ALSO have corrupted delta streams (the controlled-editor bug) and are being
+ * discarded rather than supported — see PROGRESS.md. The field exists so the
+ * NEXT format change is a version bump instead of an archaeology exercise. */
+export const REPLAY_SCHEMA_VERSION = 1;
+
 export const REPLAY_DIR = process.env["REPLAY_DIR"] ?? "var/replays";
 
 class FileSink implements AppendSink {

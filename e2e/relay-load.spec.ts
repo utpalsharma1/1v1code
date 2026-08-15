@@ -56,27 +56,10 @@ test(
   { tag: "@needs-dev-routes" },
   async ({ browser }) => {
     test.setTimeout(300_000);
-    /* KNOWN FAILING, AND DELIBERATELY LEFT THAT WAY.
-
-       `test.fail()` asserts the test does NOT pass, so the suite stays green
-       while this documents an open bug — and goes red the moment somebody
-       fixes it without updating this line. That is better than deleting the
-       test (the bug becomes invisible), skipping it (it rots), or leaving the
-       suite red (a red suite stops being read).
-
-       THE BUG: characters are dropped from the keystroke stream. Typing
-       `def step_0(n):` produces `dstep0n)` in the GATEWAY'S OWN authoritative
-       text — not merely in this reconstruction — so every spectator and every
-       replay reads corrupted source. It was invisible while a full snapshot
-       fired on every render and continuously overwrote the damage; removing
-       those snapshots exposed it.
-
-       NOT ROOT-CAUSED. Two candidates were tested and neither is it: the flush
-       interval being torn down every render, and the delta buffer being swapped
-       non-atomically. Both were genuine faults and both are fixed; the
-       corruption survived both, so the cause is elsewhere — most likely in how
-       offsets from several Monaco events accumulate into one batch. */
-    test.fail();
+    /* This was `test.fail()` while the relay dropped characters. It flipped
+       the moment the cause was fixed — Playwright reported "expected to fail,
+       but passed", which is the marker doing its job rather than a test quietly
+       going green. */
 
     const playerCtx = await browser.newContext();
     const partnerCtx = await browser.newContext();
@@ -189,6 +172,38 @@ test(
         doc,
         `replaying the deltas lost marker step_${i} — the stream is not sufficient`,
       ).toContain(`step_${i}`);
+    }
+
+    /* CHARACTER-BY-CHARACTER AGAINST THE GATEWAY'S OWN TEXT.
+
+       This is the check that found the corruption without a viewer existing, so
+       it is permanent rather than ad hoc. The gateway writes a snapshot of its
+       authoritative document; replaying the deltas must reproduce it exactly.
+       Any divergence means the two disagree about what the player typed, and
+       every spectator and every replay reads the gateway's side. */
+    const authoritative = snapshots
+      .filter((e) => String(e.payload["side"]) === "p1")
+      .at(-1);
+    if (authoritative && Number(authoritative.payload["seq"]) > 0) {
+      const truth = String(authoritative.payload["text"]);
+      const upTo = Number(authoritative.payload["seq"]);
+      let rebuilt = String(opening?.payload["text"] ?? "");
+      for (const d of deltas.filter(
+        (e) => String(e.payload["side"]) === "p1" && Number(e.payload["seq"]) <= upTo,
+      )) {
+        for (const ch of d.payload["changes"] as { offset: number; length: number; text: string }[]) {
+          rebuilt = rebuilt.slice(0, ch.offset) + ch.text + rebuilt.slice(ch.offset + ch.length);
+        }
+      }
+      const at = [...truth].findIndex((c, i) => rebuilt[i] !== c);
+      expect(
+        rebuilt,
+        at === -1
+          ? "lengths differ"
+          : `replay and the gateway diverge at character ${at}: gateway ${JSON.stringify(
+              truth.slice(Math.max(0, at - 20), at + 20),
+            )} vs replay ${JSON.stringify(rebuilt.slice(Math.max(0, at - 20), at + 20))}`,
+      ).toBe(truth);
     }
 
     /* §11's paste-detection evidence. The fields must be PRESENT and populated,

@@ -269,7 +269,8 @@ export function opponentVerdictView(input: {
 export interface PlayerCardView {
   handle: string;
   rating: number;
-  tier: string;
+  /** Null during placements. */
+  tier: string | null;
   division: string | null;
   isBot: boolean;
   /** §8's disclosure rule, generalised: an unrated pairing is disclosed BEFORE
@@ -280,7 +281,8 @@ export interface PlayerCardView {
 export function playerCardView(card: {
   handle: string;
   rating: number;
-  tier: string;
+  /** Null during placements — §8 gives a rating from match one, a tier from five. */
+  tier: string | null;
   division: string | null;
   isBot: boolean;
   isGuest?: boolean;

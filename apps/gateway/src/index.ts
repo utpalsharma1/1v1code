@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import Redis from "ioredis";
 import { Server, type Socket } from "socket.io";
 import { generateCode, monotonicMs, normaliseCode, requireEnv } from "@1v1/core";
+import { PLACEMENT_MATCHES, standingOf } from "@1v1/core/ladder";
 import { prisma } from "@1v1/db";
 import {
   CodeSubmitSchema,
@@ -384,13 +385,29 @@ async function pickProblem(
   return shape(pool[Math.floor(Math.random() * pool.length)]!);
 }
 
+/** Tier and division as the ladder defines them, or nulls during placements. */
+function tierOf(identity: Identity): { tier: string | null; division: string | null } {
+  const standing = standingOf(identity.rating, PLACEMENT_MATCHES - identity.placementsLeft);
+  return standing.kind === "ranked"
+    ? { tier: standing.tier, division: standing.division }
+    : { tier: null, division: null };
+}
+
 async function cardFor(identity: Identity): Promise<PlayerCard> {
   return {
     userId: identity.userId,
     handle: identity.handle,
     rating: identity.rating,
-    tier: "gold",
-    division: "II",
+    /* DERIVED, NOT HARDCODED. This was literally `tier: "gold", division: "II"`
+       for every player in every match — a placeholder from before the ladder
+       existed, which meant every nameplate said Gold II regardless of rating.
+       It survived because nothing rendered a tier anywhere else until Phase 3A,
+       and it would have been baked permanently into every replay log by the
+       denormalisation.
+
+       A player still in placements has NO tier (§8): they get a rating and no
+       rank, and inventing one publishes the number the ladder exists to hide. */
+    ...tierOf(identity),
     isBot: identity.isBot,
     isGuest: identity.isGuest ?? false,
   };

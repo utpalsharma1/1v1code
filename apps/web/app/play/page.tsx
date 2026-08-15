@@ -808,14 +808,14 @@ function Play() {
             p1={{
               handle: match.p1.handle,
               rating: match.p1.rating,
-              tier: match.p1.tier as Tier,
+              tier: (match.p1.tier ?? "iron") as Tier,
               division: (match.p1.division ?? undefined) as Division | undefined,
               accepted: accepted.p1,
             }}
             p2={{
               handle: match.p2.handle,
               rating: match.p2.rating,
-              tier: match.p2.tier as Tier,
+              tier: (match.p2.tier ?? "iron") as Tier,
               division: (match.p2.division ?? undefined) as Division | undefined,
               accepted: accepted.p2,
             }}

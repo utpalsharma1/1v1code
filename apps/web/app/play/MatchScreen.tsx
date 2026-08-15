@@ -45,7 +45,8 @@ import { rankOf } from "@1v1/core/ladder";
 export interface MatchPlayer {
   handle: string;
   rating: number;
-  tier: string;
+  /** Null during placements (§8): a rating from match one, a tier from five. */
+  tier: string | null;
   division: string | null;
   isBot: boolean;
 }
@@ -169,7 +170,31 @@ export function MatchScreen(props: MatchScreenProps) {
 
   const m = useMotion();
   const [language, setLanguage] = useState<"CPP17" | "PYTHON3">("PYTHON3");
-  const [source, setSource] = useState(STARTERS.PYTHON3);
+  /* THE EDITOR IS UNCONTROLLED, AND THAT IS THE FIX FOR A DATA-CORRUPTION BUG.
+
+     It used to be `value={source}` with `onChange` calling `setSource`. React
+     state is asynchronous, so the `value` prop lagged the Monaco model by one or
+     more keystrokes while someone typed; @monaco-editor/react then forced the
+     model back to match the stale prop, REWRITING THE DOCUMENT underneath the
+     change stream. The offsets we had already captured referred to a document
+     that no longer existed, and the rewrite emitted further events of its own.
+
+     The evidence, replayed from a real log — the user typed `def ste…`:
+
+       seq 2  (0,'d') (1,'e') (2,'f')        -> "def"        correct
+       seq 3  (1,' ') (2,'s') (3,'t')        -> "d stef"     offsets 1,2,3
+                                                             where they should
+                                                             have been 3,4,5
+       seq 4  (2,'e') (3,'p') (4,'_') (5,'0') (4,'()')       non-monotonic
+
+     That is why none of the usual offset fixes helps. Applying descending,
+     rebasing offsets, or sending one event per message all assume the recorded
+     offsets are a coherent sequence against a document only WE are changing.
+     They were not: a second writer was rewriting the model mid-stream.
+
+     `sourceRef` already held the text, and nothing rendered from `source`, so
+     the state simply goes. Losing it also removes a re-render per keystroke,
+     which is what was tearing down the 50ms flush interval as well. */
   const seq = useRef(0);
   const pending = useRef<EditorChange[]>([]);
   const pendingOrigin = useRef<string>("type");
@@ -266,7 +291,9 @@ export function MatchScreen(props: MatchScreenProps) {
     (side: Side, player: MatchPlayer): HUDPlayer => ({
       handle: player.handle,
       rating: player.rating,
-      tier: player.tier as Tier,
+      /* Placements have no tier; the nameplate shows the handle and rating
+         alone rather than inventing a rank. */
+      tier: (player.tier ?? "iron") as Tier,
       division: (player.division ?? undefined) as Division | undefined,
       cells: cells[side],
       status: statuses[side],
@@ -323,7 +350,6 @@ export function MatchScreen(props: MatchScreenProps) {
                     type="button"
                     onClick={() => {
                       setLanguage(lang);
-                      setSource(STARTERS[lang]);
                       sourceRef.current = STARTERS[lang];
                       // The whole document was replaced; re-establish ground
                       // truth rather than emitting a delta nobody can apply.
@@ -349,7 +375,7 @@ export function MatchScreen(props: MatchScreenProps) {
                 variant="solid"
                 tone="player"
                 side={you}
-                onClick={() => onSubmit(language, source)}
+                onClick={() => onSubmit(language, sourceRef.current)}
                 disabled={submitting || !!ending}
               >
                 {/* §6.8b: the in-flight lock IS the cost of a wrong answer, so
@@ -371,10 +397,14 @@ export function MatchScreen(props: MatchScreenProps) {
               transition={m.tween(m.dur.fast)}
             >
               <Editor
+                /* Remount on a language change so `defaultValue` takes effect —
+                   an uncontrolled editor ignores prop changes by design, which
+                   is exactly the property that makes it safe. */
+                key={language}
                 height="100%"
                 theme="vs-dark"
                 language={language === "PYTHON3" ? "python" : "cpp"}
-                value={source}
+                defaultValue={STARTERS[language]}
                 onMount={(editor) => {
                   /* §10 paste detection: capture the DATA, build no response.
                      Monaco tells us a paste happened separately from the change
@@ -385,9 +415,7 @@ export function MatchScreen(props: MatchScreenProps) {
                 }}
                 onChange={(value, event) => {
                   keystrokes.current += 1;
-                  const next = value ?? "";
-                  sourceRef.current = next;
-                  setSource(next);
+                  sourceRef.current = value ?? "";
 
                   /* Monaco emits a single event's changes in DESCENDING offset
                      order, and absolute offsets make applying them a pure

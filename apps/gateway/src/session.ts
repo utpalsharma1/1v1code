@@ -26,6 +26,10 @@ export interface Identity {
   ratingDeviation: number;
   volatility: number;
   isBot: boolean;
+  /** §8: how many placement matches remain. Needed to decide whether this
+   *  player has a TIER at all — before placements finish they have a rating
+   *  and no rank, and showing one would publish a number §8 hides. */
+  placementsLeft: number;
   /** A credential-less account (§7, challenge links). Plays, never rated,
    *  cannot create challenge links. NOT the same as `isAnonymous`: an
    *  anonymous socket may only watch, a guest may play. */
@@ -45,6 +49,7 @@ export function anonymousIdentity(id: string): Identity {
     handle: "spectator",
     rating: 0,
     ratingDeviation: 0,
+    placementsLeft: 0,
     volatility: 0,
     isBot: false,
     isAnonymous: true,
@@ -74,6 +79,7 @@ const SELECT = {
   handle: true,
   rating: true,
   ratingDev: true,
+      placementsLeft: true,
   volatility: true,
 } as const;
 
@@ -86,6 +92,7 @@ export async function identifyById(userId: string): Promise<Identity | null> {
     handle: user.handle,
     rating: user.rating,
     ratingDeviation: user.ratingDev,
+    placementsLeft: user.placementsLeft,
     volatility: user.volatility,
     isBot: user.handle.startsWith("bot_"),
   };
@@ -105,6 +112,7 @@ export async function identify(cookieHeader: string | undefined): Promise<Identi
           handle: true,
           rating: true,
           ratingDev: true,
+      placementsLeft: true,
           volatility: true,
         },
       },
@@ -122,6 +130,7 @@ export async function identify(cookieHeader: string | undefined): Promise<Identi
     handle: session.user.handle,
     rating: session.user.rating,
     ratingDeviation: session.user.ratingDev,
+    placementsLeft: session.user.placementsLeft,
     volatility: session.user.volatility,
     isBot: session.user.handle.startsWith("bot_"),
   };
