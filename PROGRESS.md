@@ -2772,3 +2772,98 @@ database to resolve its own references would bake that dependency in, and the de
 log-format change that wants to land with its consumer. That is the next session, in that order.
 
 Per §13.12, stopping here.
+
+---
+
+## Exercising the delta path found the relay corrupting text
+
+You were right that the delta finding was bigger than the log size. Exercising that path
+deliberately — a long match, heavy incremental typing — found that **the keystroke relay drops
+characters**, and it is the gateway's own authoritative state that is wrong.
+
+### The finding
+
+Typing `def step_0(n):` produces, in the **gateway's own final snapshot**:
+
+```
+'df stp_n):\n    ta= 0  n\n       ur tlt\n ...'
+```
+
+Roughly one character in three lost. This is not a reconstruction artefact: my replay of the
+logged deltas and the gateway's authoritative snapshot agree **exactly**, which means the changes
+as recorded are already lossy. Every spectator and every replay reads from that state.
+
+**It was invisible until this session.** A full snapshot fired on every render and continuously
+overwrote the damage with correct text, so the corruption never surfaced. Removing those snapshots
+— the right fix — exposed a bug that had been there the whole time. The single-marker relay test
+passes because it uses one bulk `insertText`, which is a single change; only incremental typing
+across multiple batched Monaco events triggers it.
+
+### Not root-caused, and I am saying so rather than guessing further
+
+Two genuine faults were found and fixed, and **neither is the cause** — the corruption survived
+both:
+
+1. **The 50 ms flush interval was torn down on every render.** `[onDelta]` is a dependency and the
+   parent passes an inline arrow, while `onChange` calls `setSource` — so every keystroke
+   re-rendered and cleared the pending timer. Now stabilised behind a ref with empty deps.
+2. **The delta buffer was swapped non-atomically** — read, passed to `onDelta`, then reassigned, so
+   a change arriving mid-send could land in an array already being serialised. Now swapped before
+   the handover.
+
+Both are real and both are kept. The remaining suspect is how `rangeOffset` values from several
+Monaco events accumulate into one batch: each event's offsets are relative to the document at that
+event, and sequential application on the far side should preserve that, but the evidence says
+something in that chain does not hold. **That is the next thing, ahead of everything else.**
+
+### What is verified, and what the test now does
+
+From a real match, after the snapshot fix:
+
+| | result |
+| --- | --- |
+| deltas logged | **113** in one match (was ~1) |
+| snapshots | 8 (was 367) |
+| `seq` per side | **contiguous 1..113, no restarts** — the phantom-gap problem is gone |
+| paste evidence | `changes`, `origin`, `inserted`, `removed` all present and populated; 974 inserted characters recorded |
+
+So **§11's paste-detection evidence is now genuinely being captured** — verified against a real
+match rather than against the code, which is the distinction that mattered.
+
+`e2e/relay-load.spec.ts` is new and **marked `test.fail()`**: the suite stays green while the test
+documents the open bug, and it goes red the moment somebody fixes the corruption without updating
+it. Better than deleting it (the bug becomes invisible), skipping it (it rots), or leaving the
+suite red (a red suite stops being read).
+
+### Two of my own checks were wrong before the finding was real
+
+Worth recording, because both are the house pattern and I nearly reported each as a product bug:
+
+- Reading Monaco through `window.monaco` returned nothing — it is not global in this build — so the
+  first run reported **every marker missing**, which looked exactly like a dead relay.
+- Asserting a spectator's DOM in a **ranked** match ignores §7's mandatory **45-second** delay. The
+  spectator legitimately shows nothing for the first 45 seconds; a burst sequence finishing in 30
+  would fail for a reason unrelated to the relay.
+
+The check that finally held is the one that does not depend on a viewer at all: replay the logged
+deltas and compare against the gateway's own snapshot.
+
+### Not done, and why
+
+**The denormalisation, the replay viewer and the live match panel are all deferred**, deliberately.
+Denormalising the log so replay is self-contained, and then building a viewer on it, would be
+building on a stream that is known to be dropping characters — the viewer would faithfully render
+corrupted source, and the format-version field would be stamped onto data that is already wrong.
+The corruption outranks all three.
+
+The three additions you asked for are still the right shape and are recorded for when it is fixed:
+a format version integer, a full denormalisation list (handles, problem title and statement as
+shown, test count, each player's rating and tier at match time), and discarding the 338 existing
+logs rather than teaching a viewer two formats.
+
+### Verification
+
+typecheck 7/7, core 74/74, unit 7/7, **e2e 18/18** (the new spec included, passing as an expected
+failure).
+
+Per §13.12, stopping here.

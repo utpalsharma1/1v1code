@@ -196,16 +196,35 @@ export function MatchScreen(props: MatchScreenProps) {
 
   /* §10: Monaco deltas, batched at ~50ms and sequence-numbered.
      Only emitted when there is something to say — an idle editor is silent. */
+  const deltaRef = useRef(onDelta);
+  deltaRef.current = onDelta;
   useEffect(() => {
     const id = setInterval(() => {
       if (pending.current.length === 0) return;
-      seq.current += 1;
-      onDelta({ seq: seq.current, changes: pending.current, origin: pendingOrigin.current });
+      /* Hand over the accumulated batch and replace the buffer in one step, so
+         a change arriving while this runs lands in the NEW array rather than in
+         one already being serialised. */
+      const batch = pending.current;
       pending.current = [];
+      const origin = pendingOrigin.current;
       pendingOrigin.current = "type";
+      deltaRef.current({ seq: (seq.current += 1), changes: batch, origin });
     }, 50);
     return () => clearInterval(id);
-  }, [onDelta]);
+    /* EMPTY DEPS, VIA A REF. `onDelta` is an inline arrow in the parent, so a
+       new identity every render — and `onChange` calls `setSource`, so every
+       keystroke renders. This interval was therefore CLEARED AND RECREATED on
+       every keystroke: while someone typed steadily it never survived long
+       enough to reach 50ms, and the batches that did flush were assembled
+       across a torn-down timer.
+
+       The result was not merely irregular batching. The gateway's own
+       authoritative text came out as "df stp_n):" where the player had typed
+       "def step_0(n):" — roughly one character in three lost, in the log AND in
+       the gateway's state, which is what every spectator and every replay reads
+       from. It was invisible while snapshots fired every render and papered
+       over the corruption; removing them exposed it. */
+  }, []);
 
   /* GROUND TRUTH ON MOUNT, AND ON A REPORTED GAP. NOTHING ELSE.
 
