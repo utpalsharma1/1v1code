@@ -169,6 +169,33 @@ export class Matchmaker {
     return (await this.redis.exists(cooldownKey(a, b))) === 1;
   }
 
+  /* NOTHING IN THE POOL SURVIVES THIS PROCESS, so it is emptied on startup.
+   *
+   * The pool is a Redis sorted set, so it OUTLIVES the gateway — but every
+   * entry in it names a socket held by the process that just died. Nothing
+   * cleaned them, so a restart left ghosts, and the atomic pairing script
+   * cheerfully matched the next real player against one. The victim got a
+   * match.found for an opponent who does not exist, waited out the accept
+   * window, and took a CANCELED.
+   *
+   * Worse than the phantom LIVE rows in the same class: those at least
+   * RENDERED on the live panel. This was invisible, and it manufactured broken
+   * matches rather than merely displaying stale ones.
+   *
+   * Only the queue and per-player entries go. Rematch cooldowns (§6.1) are
+   * deliberately kept: they are a fact about two players, not about a socket,
+   * and clearing them would let a restart reopen a pairing the cooldown exists
+   * to prevent.
+   */
+  async clearStalePool(): Promise<number> {
+    const stale = await this.redis.zcard(QUEUE_KEY);
+    const keys = await this.redis.keys("mm:player:*");
+    const ratings = await this.redis.keys("mm:rating:*");
+    const all = [QUEUE_KEY, ...keys, ...ratings];
+    if (all.length > 0) await this.redis.del(...all);
+    return stale;
+  }
+
   /** Test hook: wipe all matchmaking state. */
   async reset(): Promise<void> {
     const keys = await this.redis.keys("mm:*");

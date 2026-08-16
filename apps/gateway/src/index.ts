@@ -6,6 +6,7 @@ import { generateCode, monotonicMs, normaliseCode, requireEnv } from "@1v1/core"
 import { PLACEMENT_MATCHES, standingOf } from "@1v1/core/ladder";
 import { prisma } from "@1v1/db";
 import {
+  MatchRejoinSchema,
   CodeSubmitSchema,
   EditorDeltaSchema,
   EditorResyncSchema,
@@ -1063,6 +1064,59 @@ io.on("connection", (socket: Socket) => {
     fanOutDelta(match, side, parsed.data);
   });
 
+  /* "AM I STILL IN THIS?" — the answer a reconnecting browser could not get.
+   *
+   * `matches` and `userMatch` live in this process's memory, so after a restart
+   * the reconnect path above finds nothing and stays silent. Both players kept
+   * a match screen open, clock running, for a match the server had already
+   * reconciled to ABANDONED. Correct server-side and invisible to them.
+   *
+   * The client holds the id, so the client asks. Three answers, and none of
+   * them is silence:
+   *   - still live here      -> a full resync, exactly as on a normal reconnect
+   *   - finished while away  -> match.end with the real outcome from the row
+   *   - no such match        -> an error naming it, rather than nothing
+   */
+  socket.on("match.rejoin", (raw) => {
+    void (async () => {
+      const parsed = MatchRejoinSchema.safeParse(raw);
+      if (!parsed.success) return;
+      const { matchId } = parsed.data;
+
+      const live = matches.get(matchId);
+      const side = live?.sideOf(userId);
+      if (live && side) {
+        void live.reconnected(side);
+        socket.emit("match.resync", live.resyncFor(side));
+        return;
+      }
+
+      const row = await prisma.match.findUnique({
+        where: { id: matchId },
+        select: { id: true, state: true, outcomeKind: true, outcomeReason: true, winnerId: true, p1Id: true, p2Id: true },
+      });
+      if (!row || (row.p1Id !== userId && row.p2Id !== userId)) {
+        socket.emit("error", { code: "NO_SUCH_MATCH", message: "That match no longer exists." });
+        return;
+      }
+
+      /* The outcome the startup reconciliation wrote, or whatever really
+         happened. Rating deltas are deliberately empty: this path is reached
+         when the gateway lost the match, and §6.9 gives those outcomes no
+         rating change at all. */
+      socket.emit("match.end", {
+        matchId: row.id,
+        outcome: {
+          kind: (row.outcomeKind ?? "CANCELED") as "WIN" | "DRAW" | "CANCELED" | "VOID",
+          winner: row.winnerId === row.p1Id ? "p1" : row.winnerId === row.p2Id ? "p2" : null,
+          reason: row.outcomeReason ?? "BOTH_ABANDONED",
+        },
+        ratings: [],
+        elapsedMs: 0,
+      });
+    })();
+  });
+
   socket.on("editor.resync", (raw) => {
     const parsed = EditorResyncSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
@@ -1278,6 +1332,12 @@ async function reconcileOrphanedMatches(): Promise<void> {
       console.log(
         `[gateway] reconciled ${orphaned.count} match(es) left open by a previous process`,
       );
+    }
+
+    /* The same reasoning one layer down. See Matchmaker.clearStalePool. */
+    const ghosts = await matchmaker.clearStalePool();
+    if (ghosts > 0) {
+      console.log(`[gateway] cleared ${ghosts} stale queue entr(ies) from a previous process`);
     }
   } catch (error) {
     console.error("[gateway] could not reconcile orphaned matches:", error);

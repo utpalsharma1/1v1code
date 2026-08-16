@@ -105,6 +105,10 @@ function Play() {
      acted on the moment the connection is up. Without it the player presses
      PLAY twice for one decision, which is the exact friction §6.1 exists to
      remove. */
+  /* Read inside socket handlers, which capture their closure once — a piece of
+     state would be stale there. */
+  const matchRef = useRef<string | null>(null);
+
   const autoQueue =
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("queue") === "1";
@@ -248,6 +252,14 @@ function Play() {
       if (challengeCode) {
         socket.emit("challenge.join", { code: challengeCode });
         note(`joining challenge ${challengeCode}`);
+      } else if (matchRef.current) {
+        /* WE THINK WE ARE IN A MATCH — ask whether the server agrees.
+           A gateway restart empties its in-memory match map, so the normal
+           reconnect path finds nothing and says nothing, and this screen would
+           sit with a running clock over a match that no longer exists. The
+           answer is a resync, a match.end, or an error; never silence. */
+        socket.emit("match.rejoin", { matchId: matchRef.current });
+        note("asking whether the match is still live");
       } else if (autoChallenge) {
         void createChallengeLink();
         window.history.replaceState({}, "", "/play");
@@ -292,6 +304,7 @@ function Play() {
     });
 
     socket.on("match.found", (payload) => {
+      matchRef.current = payload.matchId;
       setMatch(payload);
       setAccepted({ p1: false, p2: false });
       // performance.now(), not Date.now() — §11 time discipline applies in the
@@ -472,6 +485,7 @@ function Play() {
     );
 
     socket.on("match.end", (payload) => {
+      matchRef.current = null;
       setPhase("ended");
       setAcceptDeadline(null);
       setHolding([]);

@@ -117,7 +117,37 @@ export function parseReplay(jsonl: string): ReplayLoad {
   return { ok: true, meta, events, endMs, markers: markersOf(events) };
 }
 
-/** §7's timeline markers: compiles, submissions, and idle pauses over 20s. */
+/** Judge verdicts as a person would say them. */
+function describeVerdict(verdict: string): string {
+  switch (verdict) {
+    case "ACCEPTED":
+      return "passed";
+    case "WRONG_ANSWER":
+      return "wrong answer";
+    case "TIME_LIMIT":
+      return "time limit";
+    case "MEMORY_LIMIT":
+      return "memory limit";
+    case "RUNTIME_ERROR":
+      return "runtime error";
+    case "COMPILE_ERROR":
+      return "compile error";
+    case "COMPILE_TIMEOUT":
+      return "compile timeout";
+    case "COMPILE_MEMORY":
+      return "compiler ran out of memory";
+    case "OUTPUT_LIMIT":
+      return "output limit";
+    /* §11 makes this unreachable from user code, and if it ever appears in a
+       replay it is worth naming plainly rather than dressing up. */
+    case "INTERNAL_ERROR":
+      return "internal error";
+    default:
+      return verdict.toLowerCase().replace(/_/g, " ");
+  }
+}
+
+/** §7's timeline markers: submissions, verdicts, drops and idle pauses. */
 export function markersOf(events: LogEvent[]): Marker[] {
   const out: Marker[] = [];
   const lastActivity: Record<string, number> = { p1: 0, p2: 0 };
@@ -126,26 +156,36 @@ export function markersOf(events: LogEvent[]): Marker[] {
     const side = (event.payload["side"] as "p1" | "p2" | undefined) ?? null;
     switch (event.type) {
       case "match.started":
-        out.push({ offsetMs: event.offsetMs, kind: "start", side: null, label: "Go" });
+        out.push({ offsetMs: event.offsetMs, kind: "start", side: null, label: "match started" });
         break;
       case "submission.received":
-        out.push({ offsetMs: event.offsetMs, kind: "submit", side, label: "Submitted" });
+        out.push({ offsetMs: event.offsetMs, kind: "submit", side, label: "submitted" });
         break;
-      case "submission.verdict":
+      case "submission.verdict": {
+        /* Say what happened AND how far they got. "P1 wrong answer 7/10" is a
+           moment somebody would scrub to; "verdict" is a tick. */
+        const verdict = String(event.payload["verdict"] ?? "verdict");
+        const passed = event.payload["passed"];
+        const total = event.payload["total"];
+        const counts =
+          typeof passed === "number" && typeof total === "number" && total > 0
+            ? ` ${passed}/${total}`
+            : "";
         out.push({
           offsetMs: event.offsetMs,
           kind: "verdict",
           side,
-          label: String(event.payload["verdict"] ?? "Verdict"),
+          label: `${describeVerdict(verdict)}${counts}`,
         });
         break;
+      }
       case "presence.changed":
         if (event.payload["connected"] === false) {
-          out.push({ offsetMs: event.offsetMs, kind: "disconnect", side, label: "Dropped" });
+          out.push({ offsetMs: event.offsetMs, kind: "disconnect", side, label: "dropped" });
         }
         break;
       case "match.ended":
-        out.push({ offsetMs: event.offsetMs, kind: "end", side: null, label: "End" });
+        out.push({ offsetMs: event.offsetMs, kind: "end", side: null, label: "match ended" });
         break;
       default:
         break;
@@ -162,7 +202,7 @@ export function markersOf(events: LogEvent[]): Marker[] {
           offsetMs: lastActivity[key]!,
           kind: "idle",
           side,
-          label: `${Math.round(gap / 1000)}s pause`,
+          label: `paused ${Math.round(gap / 1000)}s`,
         });
       }
       lastActivity[key] = event.offsetMs;

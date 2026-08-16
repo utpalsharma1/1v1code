@@ -204,14 +204,26 @@ function Scrubber({
         aria-label="Scrub the match"
         className="focus-ring bg-elevated h-2 w-full appearance-none rounded-[2px] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-[var(--p1)]"
       />
-      {/* §7's timeline markers. Positioned, never animated. */}
+      {/* §7's timeline markers. Positioned, never animated.
+
+          COLOURED BY SIDE THROUGH `data-side`, not by branching: the marker
+          inherits `--player` exactly like every other owned element in the
+          product (§4), so P1 and P2 are distinguishable at a glance without
+          reading a word. Markers that belong to neither side — the start and
+          the end — take the neutral tone.
+
+          The title is what happened AND who: "P1 wrong answer 7/10". A tick
+          you have to guess at is a decoration. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 h-2">
         {markers.map((m, i) => (
           <span
             key={i}
-            title={`${clock(m.offsetMs)} — ${m.label}`}
+            {...(m.side ? { "data-side": m.side } : {})}
+            title={`${clock(m.offsetMs)} — ${m.side ? `${m.side.toUpperCase()} ` : ""}${m.label}`}
             style={{ left: `${(m.offsetMs / Math.max(1, endMs)) * 100}%` }}
-            className={`absolute top-0 h-2 w-[2px] ${MARKER_TONE[m.kind]}`}
+            className={`pointer-events-auto absolute top-0 h-2 w-[2px] ${
+              m.side ? "bg-player" : MARKER_TONE[m.kind]
+            } ${m.kind === "idle" ? "opacity-50" : ""}`}
           />
         ))}
       </div>

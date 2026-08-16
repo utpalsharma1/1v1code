@@ -201,6 +201,70 @@ export default function SparringPage() {
     submit("PYTHON3", data.source, `reference solution for ${problemSlug}`);
   };
 
+  /* TYPE THE SOLUTION INSTEAD OF PASTING IT — the delta path's only exercise.
+   *
+   * Sparring never touched the editor at all: it submits and nothing else. So
+   * every `editor.delta` ever recorded came from a human in the other browser,
+   * and the relay's incremental path — the one that silently dropped a third of
+   * its characters through two separate bugs — has been exercised by exactly
+   * one thing that is hard to automate.
+   *
+   * This streams the reference solution as real batched deltas: characters in
+   * bursts with pauses, sequence-numbered per §10, so a replay of a sparring
+   * match has TWO keystroke streams instead of one. Same reasoning as the
+   * four-state typing model behind the pulse line — the point is not realism
+   * for its own sake, it is that the path gets walked.
+   *
+   * It is not the bot (§13.6, held): no solve model, no rating rules, no
+   * pretence of being human. Just characters going down the wire the way
+   * characters actually do.
+   */
+  const typeReference = async () => {
+    if (!problemSlug || !matchId) {
+      note("no live problem yet", "bad");
+      return;
+    }
+    const response = await fetch(`/api/dev/solution?slug=${encodeURIComponent(problemSlug)}`);
+    if (!response.ok) {
+      note(`no reference solution for ${problemSlug}`, "bad");
+      return;
+    }
+    const { source } = (await response.json()) as { source: string };
+    const socket = socketRef.current;
+    if (!socket) return;
+
+    note(`typing ${source.length} characters…`);
+    /* Ground truth first, exactly as a real client does on mount. */
+    socket.emit("editor.snapshot", { matchId, seq: 0, text: "" });
+
+    let seq = 0;
+    let offset = 0;
+    while (offset < source.length) {
+      /* A burst of 3–9 characters, then a pause — the shape §6.4's pulse line
+         is built to show, and the shape that produces multi-change batches. */
+      const burst = 3 + Math.floor(Math.random() * 7);
+      const chunk = source.slice(offset, offset + burst);
+      const changes = [...chunk].map((ch, i) => ({
+        offset: offset + i,
+        length: 0,
+        text: ch,
+      }));
+      seq += 1;
+      socket.emit("editor.delta", {
+        matchId,
+        seq,
+        changes,
+        origin: "type",
+        inserted: chunk.length,
+        removed: 0,
+      });
+      offset += chunk.length;
+      await new Promise((r) => setTimeout(r, 60 + Math.random() * 90));
+    }
+    setSource(source);
+    note(`typed ${source.length} characters in ${seq} batches`);
+  };
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-3xl flex-col gap-6 px-6 py-10">
       <header>
@@ -266,6 +330,9 @@ export default function SparringPage() {
             disabled={!matchId || !problemSlug}
           >
             Correct (reference)
+          </Button>
+          <Button variant="outline" onClick={() => void typeReference()}>
+            Type it (streams deltas)
           </Button>
           <Button variant="outline" onClick={() => submit("PYTHON3", WRONG_PY, "wrong")} disabled={!matchId}>
             Wrong answer

@@ -48,6 +48,7 @@ export {
   ErrorSchema,
   LOG_EVENT_TYPES,
   MatchAcceptSchema,
+  MatchRejoinSchema,
   MatchEndSchema,
   MatchFoundSchema,
   MatchResyncSchema,

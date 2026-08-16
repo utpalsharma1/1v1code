@@ -143,6 +143,8 @@ export interface ClientToServer {
   "spectate.join": (payload: z.infer<typeof EditorResyncSchema>) => void;
   "spectate.watch": (payload: z.infer<typeof SpectateWatchSchema>) => void;
   "challenge.join": (payload: z.infer<typeof ChallengeJoinSchema>) => void;
+  /** §10: "am I still in this?" — see MatchRejoinSchema. */
+  "match.rejoin": (payload: z.infer<typeof MatchRejoinSchema>) => void;
 }
 
 /* ── server → client ──────────────────────────────────────────────────── */
@@ -406,6 +408,19 @@ export const ChallengeWaitingSchema = z.object({
   host: z.string(),
   youAreHost: z.boolean(),
 });
+
+/* A CLIENT ASKING WHETHER ITS MATCH STILL EXISTS.
+ *
+ * A LiveMatch lives only in gateway memory, so a gateway that dies mid-match
+ * and comes back has no record of it — and the reconnecting browser was told
+ * NOTHING. Both players sat on a match screen, clock running, for a match with
+ * nothing behind it. The server-side row is reconciled at startup, which is
+ * correct and completely invisible to the two people looking at it.
+ *
+ * The client holds the match id, so the client is what has to ask. The gateway
+ * answers with a resync if the match is live, or with `match.end` carrying the
+ * outcome the reconciliation already wrote. */
+export const MatchRejoinSchema = z.object({ matchId: z.string() });
 
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 

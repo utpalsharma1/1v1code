@@ -283,5 +283,12 @@ case "${1:-up}" in
   up)     cmd_up "${2:-}" ;;
   down)   cmd_down ;;
   status) cmd_status ;;
-  *)      echo "usage: $0 [up [--fresh] | down | status]" >&2; exit 2 ;;
+  restart-gateway)
+    # Simulates what a crash or a deploy does on a real host: the process goes,
+    # its in-memory matches and its queue entries go with it, and it comes back
+    # with none of them. Used by e2e/gateway-restart.spec.ts.
+    stop gateway "gateway/src/index.ts"
+    start gateway "gateway/src/index.ts" "${NODE[@]}" apps/gateway/src/index.ts
+    ;;
+  *)      echo "usage: $0 [up [--fresh] | down | status | restart-gateway]" >&2; exit 2 ;;
 esac
