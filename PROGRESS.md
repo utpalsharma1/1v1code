@@ -3061,3 +3061,100 @@ typecheck 7/7, **core 86/86** (74 + 12 replay), unit 7/7, bank gates green (176 
 **The live match panel** — the last of 3B. Stopping rather than starting it here.
 
 Per §13.13, stopping here.
+
+---
+
+## The three format findings fixed, and Phase 3B finished
+
+### 1. The schema was lying, so the schema changed
+
+`Match.id` declared `@default(cuid())` and **the default never once fired**: the gateway generates
+`randomUUID()` and passes it explicitly, because the id also names the match's replay log on disk.
+
+Taking the second option, as you suggested — the `@default` is gone rather than the gateway changed.
+A UUID is fine; a default that cannot fire is worse than none, because it reads as documentation
+and is a trap. It had already cost one route that 400'd every real match. Removing it means a
+create without an id now fails loudly, and there is exactly one Match creation in the codebase
+which always supplies one.
+
+**Grepped for other cuid assumptions: none.** The only other mentions are two comments in `auth.ts`
+and `password.ts` explaining why session tokens are deliberately *not* cuids, which is the same
+lesson pointing the other way.
+
+### 2. The relative path was the wider bug
+
+`REPLAY_DIR` defaulted to the relative string `"var/replays"` in **four separate files** — the
+gateway's log writer, the lifecycle probe, the pulse calibrator, and the web route — each resolving
+it against its own working directory.
+
+One resolver now, in `@1v1/core/paths`:
+
+- **absolute always.** An absolute `REPLAY_DIR` is used as given, which is how a deployment points
+  at a volume; a relative one resolves against the **repo root**, never `process.cwd()`, so the
+  configured value means the same thing to every process.
+- **`ensureWritable` at gateway startup**, refusing with the path and the reason. §10 makes the log
+  the replay, so a process that cannot write one should say so on the line where that becomes
+  knowable rather than on the first match.
+
+You were right that this would break differently on Oracle: systemd units and containers place
+processes wherever they like, and the same relative string would have pointed somewhere new and
+looked like a fresh bug.
+
+### 3. The duplication, and an audit of the rest
+
+`match.started` no longer repeats `problem` and `durationMs`. It now carries **no payload at all** —
+what it contributes is its `offsetMs`, the moment the clock started, which nothing else records.
+
+**Audited every field in a real log for double-carriage.** Those two were the only genuine
+duplication. `side` and `seq` appear on several event types, but as discriminators rather than
+repeated facts — `seq` on a delta and on a snapshot are different sequences of the same counter, not
+two copies of one value. Nothing else is carried twice.
+
+### Phase 3B is finished — the live match panel
+
+**The tension ordering is written now, deliberately.** §7 asks for it and with single-digit traffic
+it is academic, which is exactly why it would otherwise default to newest-first and never be
+revisited. Three terms, and the component is explicit about which is real:
+
+- **closeness of rating** — the strongest signal a match is undecided, and the only term actually
+  measured;
+- **pair strength** — a strong match matters more to a stranger than the same margin lower down;
+- **problem rating** — a labelled stand-in for §7's "deep into test cases", which lives in gateway
+  memory and not the database. The note says to *replace* this term when the panel has a socket,
+  not add to it.
+
+Five tests, including that closeness saturates rather than going negative and inverting the other
+terms, and that a blowout never outranks an even match.
+
+**The empty state is the common case**, so it is designed as one: recently finished matches with
+replays, which exist and are watchable. Verified — with nothing live it reads *"Nobody playing right
+now — watch a finished match"* and links to real `/replay/<id>` pages. With no matches at all it
+says so and offers to play the first.
+
+Only `PUBLIC` matches are listed; `UNLISTED` is reachable by code and listing it would make §7's
+distinction meaningless.
+
+### Found by building the panel: phantom live matches
+
+**Five matches were still `LIVE` in the database** from killed test runs. A `LiveMatch` exists only
+in gateway memory, so a restart — a crash, a deploy, a `pnpm stack` — leaves rows stuck LIVE with
+nothing behind them. Nothing reconciled that, so they accumulated silently, and the panel found them
+the moment it existed and advertised matches nobody could join.
+
+The gateway now reconciles on startup, logging the count. They are **`CANCELED` / `BOTH_ABANDONED`,
+not `VOID`** — §6.9 reserves VOID for our failures and requires it to stay rare and alarming, and a
+restart with a match open is ordinary. Neither moves a rating.
+
+### Verification
+
+typecheck 7/7, **core 91/91**, unit 7/7, bank gates green (176 cases, 23 problems), **probes 5/5**,
+**e2e 18/18**, **e2e:prod 15/15**. Prisma schema validates. Reconciliation observed cleaning 5 rows
+on the next start.
+
+### Phase 3B is complete
+
+Profile with match history and the per-topic radar, leaderboard, replay viewer, live match panel.
+Per §12's order of work, next is **the §9 sound library**, then Stage 1 deployment to Oracle, then
+problem authoring as a dedicated block.
+
+Per §13.13, stopping here.
