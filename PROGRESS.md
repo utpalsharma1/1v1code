@@ -3158,3 +3158,112 @@ Per §12's order of work, next is **the §9 sound library**, then Stage 1 deploy
 problem authoring as a dedicated block.
 
 Per §13.13, stopping here.
+
+---
+
+## Gateway-memory orphans, and the delta path finally exercised
+
+Three of the four items from the 3B review. **§9 sound is split out to its own session** — it is a
+new subsystem with a timing question attached, not a follow-up.
+
+### 1a. A gateway restart left both players staring at a dead match
+
+**They were told nothing.** The previous session made the *database* correct on restart; the two
+browsers holding the match were never part of that. `matches` and `userMatch` are in-memory, so
+after a restart the reconnect path found no live match for the socket and simply fell through —
+match screen, running clock, opponent nameplate, over a match the server had already reconciled to
+`ABANDONED`. Silence is the worst of the available answers, and on Oracle the gateway will restart
+far more often than it does here.
+
+**The client holds the match id, so the client asks.** `match.rejoin` (typed in `packages/proto`
+first, per §13.5) has exactly three answers and none of them is silence:
+
+| server state | answer |
+| --- | --- |
+| match is live in memory | `match.resync` — reconnect as normal, grace period intact |
+| the row exists and has finished | `match.end` with the real outcome from the row |
+| no such match, or not yours | `error` naming it |
+
+The second is the case that matters: a player who was away when the match ended sees the result
+screen with the real outcome, not a hang.
+
+**Positive-controlled per §13.7.** `e2e/gateway-restart.spec.ts` starts a real match, kills the
+gateway mid-match via a new `scripts/up.sh restart-gateway`, and asserts the player reaches a
+terminal screen. It passes with the fix (27.2s) and **fails with the client change stashed** — the
+page sits on the match screen exactly as described.
+
+### 1b. Yes — and the other one was worse, because nothing rendered it
+
+The question was right to ask. **The matchmaking pool is a Redis sorted set, so it survives the
+gateway that wrote it — but every entry names a socket held by the process that died.** Nothing
+cleaned them.
+
+What that produces is not a stale display, it is a **manufactured broken match**: the atomic pairing
+script pairs the next real player against a ghost, the ghost never accepts, and the live player
+waits out the accept window for a `CANCELED`. The phantom LIVE rows were at least visible once the
+panel existed. This one had no surface at all, and it would have looked to the player like the
+matchmaker is broken rather than like the queue is empty.
+
+Cleared on startup alongside the match reconciliation, logging the count.
+
+**Rematch cooldowns are deliberately NOT cleared.** §6.1's 180s cooldown is a fact about two
+players, not about a socket, and it stays true across a restart. Everything else surveyed —
+challenge rows, spectator rooms, submissions — is either in Postgres already or is rebuilt from a
+socket connecting, so it has no orphan state to leave behind.
+
+### 2a. The markers say what happened and who
+
+They were unlabelled ticks. Each now carries a hover label naming the event and the side —
+`P1 wrong answer 7/10`, `P2 compile error`, `P1 paused 24s`, `P1 submitted` — with the clock offset.
+Verdicts are translated to what a person would say rather than the enum, because `WRONG_ANSWER` is
+a database value and "wrong answer" is a sentence. The counts are included because *how far they
+got* is the reason to scrub there.
+
+**Colour is by inheritance, not by branching.** A marker carries `data-side` and paints with
+`bg-player`, so P1 and P2 are distinguishable at a glance without reading, and the component never
+mentions jade or magenta — the same mechanism §4 requires of the match HUD. Sideless markers (match
+start, match end) keep the neutral tone.
+
+**The divergence marker from §7 is NOT built, and it is the one worth labelling most.** Being
+explicit about why, so it is a decision rather than an omission: "the point where the match was
+decided" is not an event in the log, it is an *inference* over it, and the honest version needs a
+definition we do not have yet. The candidates are not equivalent — the last moment the trailing
+player could still have won, the point where the test-bar lead stopped changing hands, or the
+divergence in the two documents where one solution became correct and the other did not. The first
+needs a model of remaining time, the third needs to run the judge over intermediate states. Guessing
+one and shipping it would put an authoritative-looking marker on a scrubber over an inference
+nobody checked. It goes on the list with the definition question attached.
+
+### 2b. Real typed input replays character-exact — and now sparring can produce it
+
+Confirmed, by execution rather than by reasoning: a match driven by incremental typing produced
+**170 delta batches**, and replaying them from the opening snapshot reconstructs the gateway's
+authoritative text **character for character**. `documentsAt` needed no changes.
+
+**The reason this was worth doing is in the question.** Every delta this project has ever recorded
+came from a human typing in a second browser, or from Playwright's `keyboard.type` in the one test
+that reconstructs the document. Sparring only ever *submitted* — it never touched the editor — so
+the path that has now lost characters through two separate bugs had exactly one exerciser, and it
+was the one that needs two humans or a running browser.
+
+Sparring gained **"Type it"**, which streams a reference solution as real batched deltas: 3–9
+character bursts with 60–150ms pauses, sequence-numbered through the same relay a player uses. It
+is deliberately not the §13.6 four-state typing model and does not pretend to be — it produces
+*deltas*, not plausible human rhythm, which is what the replay path needs to be exercised. The
+paste button stays, because a single-insert paste is also a real case and is what
+paste-detection evidence looks like.
+
+### Verification
+
+typecheck 7/7, **core 91/91**, unit 7/7, probes 5/5 (lifecycle, match, requeue, visibility,
+latejoin), **e2e 19/19**, **e2e:prod 15/15** (exit 0; the `SIGTERM` line in that output is Caddy's
+own shutdown log during teardown, not a failure). The new restart spec is positive-controlled.
+
+### Next
+
+**The §9 sound library**, per §12's order of work — carrying forward the three constraints from this
+review: that the countdown, sequential reveal and victory timings were fitted to placeholder
+oscillators and may need revisiting rather than preserving, that the rising semitone per consecutive
+pass is the placeholder behaviour worth keeping, and that every state change stays legible muted.
+
+Per §13.13, stopping here.
