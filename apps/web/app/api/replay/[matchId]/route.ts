@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { replayDir } from "@1v1/core/paths";
+import { join } from "node:path";
 import { prisma } from "@1v1/db";
 
 /* ============================================================================
@@ -22,29 +22,10 @@ import { prisma } from "@1v1/db";
 
 export const dynamic = "force-dynamic";
 
-/* MATCH IDS ARE UUIDS, not cuids, and the schema says otherwise.
-   `Match.id` is declared `@default(cuid())`, but the gateway generates a
-   `randomUUID()` and passes it explicitly, so the default never fires and every
-   real match id has hyphens. This regex was written from the schema and
-   rejected every genuine id with a 400.
-   Both shapes are accepted: the declared default could still produce a cuid if
-   a row were ever created without an explicit id. */
-/** Walks up to the directory holding the workspace manifest. */
-function repoRoot(): string {
-  let dir = process.cwd();
-  for (let i = 0; i < 6; i++) {
-    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
-    dir = dirname(dir);
-  }
-  return process.cwd();
-}
-
-/** Absolute REPLAY_DIR wins; a relative one is repo-root relative. */
-function replayDir(): string {
-  return process.env["REPLAY_DIR"] ?? "var/replays";
-}
-
-const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^c[a-z0-9]{20,31}$/;
+/* A match id is a UUID. The schema says so now — it used to declare a
+   `@default(cuid())` that never fired, and this regex, written from the schema,
+   rejected every real match with a 400. */
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function GET(
   _request: Request,
@@ -78,7 +59,7 @@ export async function GET(
        relative path pointed at `apps/web/var/replays` and every finished match
        reported "no log was recorded". Two processes sharing a relative path
        only agree while they share a working directory. */
-    const jsonl = await readFile(join(repoRoot(), replayDir(), `${matchId}.jsonl`), "utf8");
+    const jsonl = await readFile(join(replayDir(), `${matchId}.jsonl`), "utf8");
     return new Response(jsonl, {
       headers: { "content-type": "application/x-ndjson; charset=utf-8" },
     });

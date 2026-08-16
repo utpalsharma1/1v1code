@@ -20,6 +20,10 @@
     "./replay": {
       "types": "./src/replay.ts",
       "default": "./src/replay.ts"
+    },
+    "./paths": {
+      "types": "./src/paths.ts",
+      "default": "./src/paths.ts"
     }
   },
   "scripts": {

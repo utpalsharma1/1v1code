@@ -1250,6 +1250,41 @@ process.on("SIGTERM", () => void shutdown());
 process.on("uncaughtException", (e) => console.error("[gateway] uncaught (continuing):", e));
 process.on("unhandledRejection", (e) => console.error("[gateway] unhandled (continuing):", e));
 
+/* NOTHING IS LIVE AFTER A RESTART, and the database has to be told.
+ *
+ * A LiveMatch exists only in this process's memory, so a gateway that restarts
+ * — a crash, a deploy, a `pnpm stack` — leaves every in-flight match row stuck
+ * at LIVE with no machine behind it. Nothing reconciled that, so the rows
+ * accumulated: five of them were sitting LIVE from killed test runs, and the
+ * §7 live-match panel found them the moment it existed and advertised matches
+ * that nobody could join.
+ *
+ * They are CANCELED, not VOID. §6.9 is explicit that VOID means our failure and
+ * must stay rare and alarming; a gateway restart with a match open is ordinary,
+ * and `BOTH_ABANDONED` is exactly what it is. Neither moves any rating.
+ */
+async function reconcileOrphanedMatches(): Promise<void> {
+  try {
+    const orphaned = await prisma.match.updateMany({
+      where: { state: { in: ["LIVE", "PENDING"] } },
+      data: {
+        state: "ABANDONED",
+        outcomeKind: "CANCELED",
+        outcomeReason: "BOTH_ABANDONED",
+        finishedAt: new Date(),
+      },
+    });
+    if (orphaned.count > 0) {
+      console.log(
+        `[gateway] reconciled ${orphaned.count} match(es) left open by a previous process`,
+      );
+    }
+  } catch (error) {
+    console.error("[gateway] could not reconcile orphaned matches:", error);
+  }
+}
+
 http.listen(PORT, () => {
+  void reconcileOrphanedMatches();
   console.log(`[gateway] listening on :${PORT}, origins ${WEB_ORIGINS.join(", ")}`);
 });

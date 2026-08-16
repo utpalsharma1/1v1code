@@ -15,6 +15,7 @@
    ========================================================================= */
 
 import { readFileSync, readdirSync } from "node:fs";
+import { replayDir } from "./paths.ts";
 import { join } from "node:path";
 import { PULSE_FALL, PULSE_RISE, PULSE_SAMPLE_MS } from "./pulse.ts";
 
@@ -119,7 +120,7 @@ function stats(series: number[]) {
   };
 }
 
-const dir = process.env["REPLAY_DIR"] ?? "var/replays";
+const dir = replayDir();
 const all = collect(dir);
 const human = all.filter(
   (s) => s.batches >= MIN_BATCHES && s.chars / s.batches <= MAX_CHARS_PER_BATCH,

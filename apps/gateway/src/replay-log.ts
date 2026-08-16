@@ -1,4 +1,5 @@
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { ensureWritable, replayDir } from "@1v1/core/paths";
 import { dirname, join } from "node:path";
 import { MatchEventLog, type AppendSink } from "@1v1/core";
 
@@ -31,7 +32,11 @@ import { MatchEventLog, type AppendSink } from "@1v1/core";
  * NEXT format change is a version bump instead of an archaeology exercise. */
 export const REPLAY_SCHEMA_VERSION = 1;
 
-export const REPLAY_DIR = process.env["REPLAY_DIR"] ?? "var/replays";
+/* Absolute, and proven writable before any match runs. Resolved by the shared
+   helper so the gateway, the probes, the calibrator and the web app all mean
+   the same directory — they did not, and that cost every finished match its
+   replay when read from a process with a different cwd. */
+export const REPLAY_DIR = ensureWritable(replayDir());
 
 class FileSink implements AppendSink {
   private readonly stream: WriteStream;

@@ -24,6 +24,7 @@
    ========================================================================= */
 
 import { randomBytes } from "node:crypto";
+import { replayDir } from "@1v1/core/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { io, type Socket } from "socket.io-client";
@@ -31,7 +32,7 @@ import { prisma } from "@1v1/db";
 
 const WEB = process.env["WEB_URL"] ?? "http://localhost:3000";
 const GATEWAY = process.env["GATEWAY_URL"] ?? "http://localhost:4000";
-const REPLAY_DIR = process.env["REPLAY_DIR"] ?? "var/replays";
+const REPLAY_DIR = replayDir();
 
 const log = (...parts: unknown[]) => console.log(...parts);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

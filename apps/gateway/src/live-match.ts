@@ -233,10 +233,16 @@ export class LiveMatch {
           if (this.onBeforeLive) await this.onBeforeLive();
 
           this.clock = new Stopwatch();
-          await this.log.record("match.started", {
-            problem: this.problem.slug,
-            durationMs: this.durationMs,
-          });
+          /* NO PAYLOAD. `problem` and `durationMs` were repeated here and are
+             already on `match.created`, which is where a viewer reads them
+             from. Two copies of a fact are one copy and one opportunity to
+             disagree, and a consumer then has to decide which to trust —
+             cheap to remove while the replay viewer is the only consumer, and
+             expensive once it is not.
+
+             What this event carries is its OFFSET: the moment the clock
+             started, which nothing else records. */
+          await this.log.record("match.started", {});
           this.emit("match.start", {
             matchId: this.id,
             problem: this.problem,

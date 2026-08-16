@@ -242,7 +242,21 @@ enum MatchOrigin {
 }
 
 model Match {
-  id        String     @id @default(cuid())
+  /// A UUID SUPPLIED BY THE GATEWAY, and there is deliberately NO @default.
+  ///
+  /// This said `@default(cuid())` and the default never once fired: the gateway
+  /// generates `randomUUID()` and passes it explicitly, because the id also
+  /// names the match's replay log on disk and a UUID is what that file is
+  /// called. So the schema described a shape no row has ever had.
+  ///
+  /// That is not a cosmetic mismatch. A route that validated the id against the
+  /// SCHEMA's shape rejected every real match with a 400, and the next person to
+  /// read this file would have made the same mistake. A @default that cannot
+  /// fire is worse than none: it reads as documentation and is a trap.
+  ///
+  /// Removing it means a create without an id now fails loudly. There is
+  /// exactly one Match creation in the codebase and it always supplies one.
+  id        String     @id
   mode      MatchMode  @default(RANKED)
   state     MatchState @default(PENDING)
 
