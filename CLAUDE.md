@@ -1085,11 +1085,13 @@ Sixty problems at a ~2 hour average is roughly **120 hours of authoring** — a 
    - **"Something answered" is not "the thing I started answered".** Verify identity — a build ID, a PID, a port owner — not liveness.
    - **A check must be shown to fail.** Break the thing deliberately and watch the check go red, in the same session you write it. `BREAK_VISIBILITY=1` and `BREAK_TRUSTED_PROXY=1` exist for this.
 
-8. **Run it the way it is actually run.** The sharpest instance of the above was not a wrong configuration but a wrong *invocation*: `pnpm tunnel` was only ever tested from a shell that had already sourced `.env`, so it passed for me and failed for the user, and the production web server started with no `DATABASE_URL`. Entry points are verified with `env -i` and nothing but `HOME`, `PATH` and `TERM`. Every entry point that starts a server states the variables it needs and refuses without them.
+8. **Denormalisation freezes whatever is wrong at the moment it runs, so check every field at its source before copying it.** Denormalising the replay log copied each player's tier out of `cardFor`, which had returned a hardcoded `tier: "gold", division: "II"` for every player in every match since before the ladder existed. Nothing rendered a tier until Phase 3A, so it had been invisible for months — and the migration would have baked it permanently into every log ever written, where it would then have looked like history rather than a bug. The migration was what surfaced it, because the values were checked at their source before being copied. Do that every time: a copy is only as true as the thing it copied, and it outlives the chance to notice.
 
-9. **Screenshot your work and critique it against §2 before telling me a screen is done.** If it looks like a generic dark dashboard with neon accents, it has failed the brief — say so and fix it.
-10. Test at 1280px and at mobile widths. Mobile is spectate-and-browse only; the editor is desktop-only and should say so gracefully rather than degrade.
-11. Keyboard focus must be visible everywhere. `prefers-reduced-motion` must be honored in every animation you write, in the same commit that writes it.
-12. When a phase is done, write what changed to `PROGRESS.md` and stop. Do not roll into the next phase.
+9. **Run it the way it is actually run.** The sharpest instance of the above was not a wrong configuration but a wrong *invocation*: `pnpm tunnel` was only ever tested from a shell that had already sourced `.env`, so it passed for me and failed for the user, and the production web server started with no `DATABASE_URL`. Entry points are verified with `env -i` and nothing but `HOME`, `PATH` and `TERM`. Every entry point that starts a server states the variables it needs and refuses without them.
+
+10. **Screenshot your work and critique it against §2 before telling me a screen is done.** If it looks like a generic dark dashboard with neon accents, it has failed the brief — say so and fix it.
+11. Test at 1280px and at mobile widths. Mobile is spectate-and-browse only; the editor is desktop-only and should say so gracefully rather than degrade.
+12. Keyboard focus must be visible everywhere. `prefers-reduced-motion` must be honored in every animation you write, in the same commit that writes it.
+13. When a phase is done, write what changed to `PROGRESS.md` and stop. Do not roll into the next phase.
 
 **First task:** read this file, confirm the stack in §3, list anything you think is underspecified, then execute **Phase 0 only**.

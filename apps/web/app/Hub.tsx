@@ -215,7 +215,7 @@ export async function Hub({ user }: { user: { id: string; handle: string; rating
               return (
                 <li key={match.id}>
                   <Link
-                    href={`/watch/${match.spectatorCode}`}
+                    href={`/replay/${match.id}`}
                     className="focus-ring border-line hover:border-line-hot flex items-center gap-4 border bg-surface px-4 py-3 transition-colors duration-[160ms]"
                   >
                     <span

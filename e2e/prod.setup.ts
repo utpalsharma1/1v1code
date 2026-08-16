@@ -22,6 +22,7 @@
    ========================================================================= */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { connect } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -94,6 +95,45 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "Expected in .env at the repo root.",
     );
   }
+
+  /* A DEPENDENCY BEING DOWN IS NOT A TEST FAILING, and reporting it as one is
+     the cry-wolf shape removed from relay.spec.ts. Redis went down mid-session
+     and the suite reported four specs failing with "element not found" — the
+     gateway could not bind, so nothing connected, and the output pointed at the
+     socket payload that had just changed. Wrong conclusion, invited by the
+     report.
+
+     So the dependencies are checked FIRST and an unavailable one aborts with a
+     message naming it, before a single test runs. */
+  const deps: { name: string; host: string; port: number; hint: string }[] = [
+    { name: "Postgres", host: "127.0.0.1", port: 5432, hint: "docker compose up -d" },
+    { name: "Redis", host: "127.0.0.1", port: 6379, hint: "docker compose up -d" },
+    { name: "gateway", host: "127.0.0.1", port: 4000, hint: "pnpm stack" },
+  ];
+  const unreachable: string[] = [];
+  for (const dep of deps) {
+    const reachable = await new Promise<boolean>((resolve) => {
+      const socket = connect({ host: dep.host, port: dep.port });
+      const done = (ok: boolean) => {
+        socket.destroy();
+        resolve(ok);
+      };
+      socket.setTimeout(3000);
+      socket.once("connect", () => done(true));
+      socket.once("timeout", () => done(false));
+      socket.once("error", () => done(false));
+    });
+    if (!reachable) unreachable.push(`${dep.name} on :${dep.port} (start it with \`${dep.hint}\`)`);
+  }
+  if (unreachable.length > 0) {
+    throw new Error(
+      "\n\n  PRODUCTION E2E CANNOT RUN — a dependency is unavailable, which is not\n" +
+        "  the same thing as a test failing:\n\n" +
+        unreachable.map((m) => `    - ${m}`).join("\n") +
+        "\n\n  Nothing was run. Fix the above and try again.\n",
+    );
+  }
+  console.log(`[prod-e2e] dependencies reachable: ${deps.map((d) => d.name).join(", ")}`);
 
   console.log("[prod-e2e] building…");
   const built = spawnSync("pnpm", ["--filter", "@1v1/web", "build"], {

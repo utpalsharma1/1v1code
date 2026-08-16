@@ -16,6 +16,10 @@
     "./env": {
       "types": "./src/env.ts",
       "default": "./src/env.ts"
+    },
+    "./replay": {
+      "types": "./src/replay.ts",
+      "default": "./src/replay.ts"
     }
   },
   "scripts": {

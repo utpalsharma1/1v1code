@@ -70,6 +70,32 @@ running() {           # running <name> <argv-fragment>
 # production-e2e proxy origin, `pnpm stack` reported "gateway already running",
 # and six specs failed against a gateway still enforcing the old allowlist. The
 # config on disk and the config in memory disagreed and nothing said so.
+# Which source trees a service actually runs. Used to answer "is the code that
+# is running the code I just wrote", which is a different question from "is the
+# config that is running the config I just wrote" and bit twice in one session:
+# the gateway kept serving the old match.created shape after it was edited,
+# because nothing about the ENVIRONMENT had changed.
+#
+# Same rule as the pidfile check and the BUILD_ID comparison in tunnel.sh:
+# "something is running" is not "what I just wrote is running".
+config_src() {
+  case "$1" in
+    gateway) printf '%s' "apps/gateway/src packages/core/src packages/proto/src packages/db/src" ;;
+    judge)   printf '%s' "apps/judge/src packages/proto/src packages/core/src" ;;
+    web)     printf '%s' "" ;;   # next dev reloads itself
+    *)       printf '' ;;
+  esac
+}
+
+# Newest modification time across a service's sources, in epoch seconds.
+newest_src() {
+  local dirs; dirs="$(config_src "$1")"
+  [ -n "$dirs" ] || { printf '0'; return 0; }
+  # shellcheck disable=SC2086
+  find $dirs -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.prisma' \) \
+    -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1
+}
+
 config_env() {
   case "$1" in
     gateway) printf '%s|%s|%s' "${WEB_ORIGIN:-}" "${REDIS_URL:-}" "${GATEWAY_PORT:-}" ;;
@@ -85,10 +111,17 @@ start() {             # start <name> <argv-fragment> <command...>
   want="$(config_env "$name" | cksum | cut -d' ' -f1)"
   if pid="$(running "$name" "$frag")"; then
     have="$(cat "$RUN/$name.env" 2>/dev/null || echo "")"
+    local started newest
+    started="$(stat -c %Y "$RUN/$name.pid" 2>/dev/null || echo 0)"
+    newest="$(newest_src "$name")"
     if [ -n "$(config_env "$name")" ] && [ "$want" != "$have" ]; then
-      warn "$name is running with STALE config — restarting it"
+      warn "$name is running with STALE CONFIG — restarting it"
       warn "  (its environment changed since it started; a running process is not"
       warn "   evidence that the config you just edited is in effect)"
+      stop "$name" "$frag"
+    elif [ "${newest:-0}" -gt "${started:-0}" ] 2>/dev/null; then
+      warn "$name is running STALE CODE — restarting it"
+      warn "  (source under $(config_src "$name") changed after it started)"
       stop "$name" "$frag"
     else
       ok "$name already running (pid $pid)"
