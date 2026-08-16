@@ -2970,3 +2970,94 @@ are unblocked — this is the right place to stop rather than start the viewer w
 the session. Next session, in that order.
 
 Per §13.12, stopping here.
+
+---
+
+## The replay viewer, and three findings from being the log's first consumer
+
+### The two small things
+
+**`pnpm stack` detects stale CODE, not just stale config.** It compares the newest mtime under a
+service's source trees against its pidfile and restarts, saying which. Same rule as the pidfile
+check and `tunnel.sh`'s `BUILD_ID` comparison — *"something is running" is not "what I just wrote is
+running"*. Positive-controlled both ways: untouched → *already running*; `touch relay.ts` → **STALE
+CODE — restarting**; untouched again → *already running*.
+
+**The production suite checks its dependencies first.** Postgres, Redis and the gateway, each by TCP
+connect, before a single test runs — and an unreachable one aborts:
+
+```
+PRODUCTION E2E CANNOT RUN — a dependency is unavailable, which is not
+the same thing as a test failing:
+  - gateway on :4000 (start it with `pnpm stack`)
+Nothing was run. Fix the above and try again.
+```
+
+Positive-controlled by stopping the gateway. This is the failure that had four specs reporting
+"element not found" and pointing at the socket payload I had just changed.
+
+**CLAUDE.md §13.8** now carries the denormalisation rule: it freezes whatever is wrong at the moment
+it runs, so every field is checked at its source before being copied. The hardcoded `tier: "gold"`
+is the worked example — invisible for months, and the migration would have made it look like
+history rather than a bug.
+
+### The replay viewer
+
+**Playback is a pure reducer**, in `@1v1/core/replay` rather than in the page: `parseReplay`,
+`markersOf`, `documentsAt`, `progressAt`. That is what makes §10's claim checkable — **12 tests, no
+browser**, and it runs over all **17 real logs with 0 refused**.
+
+What the tests pin down, each because §10 says so:
+
+- **Ordering is by `seq` only.** A test feeds events out of time order and asserts they come back in
+  seq order — a replay that sorts by timestamp reorders itself when a host clock moves backwards.
+- **A torn final line is normal**, not corruption: append-only behind a buffer means a killed
+  process leaves one. Corruption anywhere *else* is refused, because then the log stops being
+  trustworthy from that point.
+- **A pre-denormalisation log is refused with its version number**, not rendered. That is the whole
+  reason the integer exists — those logs reference players by id, so the names would be whatever
+  the rows say today.
+- **Scrubbing backwards gives the same answer as arriving forwards.** `documentsAt` rebuilds from
+  the start each call rather than keeping an incremental cursor, because a cursor that has to
+  rewind is where drift gets in.
+
+`/api/replay/<id>` serves the raw log — not a digest, which would be a second implementation of
+playback that could disagree with the first. **A live match is refused**: serving its log would hand
+over both editors' source in real time, bypassing §7's 45-second delay and §10's self-spectate rule.
+
+The viewer itself: both documents side by side, a scrubber with §7's timeline markers (start,
+submit, verdict, disconnect, end, and idle pauses over 20 s), 0.5×–8× speeds, and a clock. Handles
+render **`inMatch`** — §4 suppresses tier colour anywhere a live HUD is on screen, and a replay is
+one. Nothing animates on a seek: a scrubber is a tool, not a moment.
+
+Match history on the Hub and profile now links to `/replay/<id>` rather than the live watch page.
+
+### Three findings about the format, treated as findings
+
+**1. Match ids are UUIDs, not cuids.** The schema declares `@default(cuid())`, but the gateway
+generates `randomUUID()` and passes it explicitly, so the default never fires. A validation regex
+written from the schema rejected **every real id** with a 400. The schema and reality disagree about
+what an id looks like, and anything validating one has to know that.
+
+**2. `var/replays` is repo-root relative, and the web server's cwd is `apps/web`.** The same
+relative path resolved to `apps/web/var/replays`, so every finished match reported *"no log was
+recorded"*. Two processes sharing a relative path agree only while they share a working directory;
+the route now resolves the repo root explicitly.
+
+**3. `match.started` repeats `problem` and `durationMs`** that `match.created` already carries.
+Harmless today because they agree, but a viewer has to decide which to trust, and the moment they
+can diverge one of them is wrong. **Worth collapsing before anything else reads the format** — which
+is now, while the viewer is the only consumer.
+
+None of the three was worked around in the viewer.
+
+### Verification
+
+typecheck 7/7, **core 86/86** (74 + 12 replay), unit 7/7, bank gates green (176 cases, 23 problems),
+**e2e 18/18**, **e2e:prod 15/15**. The replay module verified against all 17 logs on disk.
+
+### Not done
+
+**The live match panel** — the last of 3B. Stopping rather than starting it here.
+
+Per §13.13, stopping here.
