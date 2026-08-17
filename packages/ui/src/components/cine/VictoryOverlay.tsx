@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
+import { sound } from "../../lib/sound";
 import { cn } from "../../lib/cn";
 import { useMotion } from "../../lib/motion-tuning";
 import type { Division, Side, Tier } from "../../lib/types";
@@ -73,6 +74,12 @@ export function VictoryOverlay({
       if (event instanceof KeyboardEvent && ["Enter", " ", "Tab"].includes(event.key)) return;
       if (event.target instanceof Element && event.target.closest("button")) return;
       setSettled(true);
+      /* Skipping silences the sting too — a victory sting continuing over the
+         Hub is the sound of a bug. It is RELEASED, not cut: `dur.skip` arms at
+         700ms into a 2400ms sting, so a skip always lands mid-buffer, and
+         stopping a buffer mid-sample is a step discontinuity that clicks
+         audibly. The engine ramps it down over 90ms instead. */
+      sound.stopAll();
       onSkip?.();
     };
 

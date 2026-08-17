@@ -3,14 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "sideEffects": ["*.css"],
+  "sideEffects": [
+    "*.css"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./motion": "./motion.ts",
     "./tokens.css": "./tokens.css"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/lib/*.test.ts"
   },
   "peerDependencies": {
     "framer-motion": "^12",
@@ -23,6 +26,7 @@
     "framer-motion": "^12.42.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@types/node": "^24"
   }
 }

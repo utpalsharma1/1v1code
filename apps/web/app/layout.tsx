@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, JetBrains_Mono, Martian_Mono } from "next/font/google";
-import { MotionPrefProvider, motionPrefBootstrapScript } from "@1v1/ui";
+import { MotionPrefProvider, SoundPrefProvider, SoundToggle, motionPrefBootstrapScript } from "@1v1/ui";
 import { Rail } from "./Rail";
 import "./globals.css";
 
@@ -48,11 +48,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bg-ink text-fg min-h-dvh">
         <MotionPrefProvider>
+          {/* §9: on by default, one toggle. The provider restores the stored
+              preference and primes the buffer pool before anything can play. */}
+          <SoundPrefProvider>
           {/* The persistent left rail (§7). It hides itself on the match,
               spectate and challenge screens, where the viewport belongs to the
               match. Content is inset by the rail width on md and up. */}
-          <Rail />
-          <div className="md:pl-[68px]">{children}</div>
+            <Rail />
+            <div className="md:pl-[68px]">{children}</div>
+            <SoundToggle />
+          </SoundPrefProvider>
         </MotionPrefProvider>
       </body>
     </html>

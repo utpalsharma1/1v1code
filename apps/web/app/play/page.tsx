@@ -17,6 +17,7 @@ import {
   QueueCard,
   QueuePop,
   cn,
+  sound,
   type CellState,
   type Division,
   type Side,
@@ -304,6 +305,10 @@ function Play() {
     });
 
     socket.on("match.found", (payload) => {
+      /* §6.2's low impact hit, on the frame the nameplates collide. This is
+         usually the first sound of a session, and it is sample-accurate rather
+         than being the cue that pays for the pool load — see sound-pref. */
+      sound.play("queue_pop");
       matchRef.current = payload.matchId;
       setMatch(payload);
       setAccepted({ p1: false, p2: false });
@@ -319,6 +324,10 @@ function Play() {
     socket.on("match.countdown", (payload: { beat: number }) => {
       setPhase("countdown");
       setBeat(payload.beat as 3 | 2 | 1 | 0);
+      /* §6.3: a tick per beat, and the final one pitched higher. Beat 0 is GO.
+         Driven by the server's beat rather than a local timer so the sound
+         lands with the digit, not with a clock that has drifted from it. */
+      sound.play(payload.beat === 0 ? "countdown_final" : "countdown_tick");
     });
     socket.on("match.start", (payload) => {
       setBeat(null);

@@ -40,6 +40,7 @@
     "db:fill": "pnpm --filter @1v1/db fill",
     "db:timing": "pnpm --filter @1v1/db timing",
     "test:unit": "pnpm --filter @1v1/web test:unit",
+    "test:sound": "pnpm --filter @1v1/ui test",
     "tunnel": "bash scripts/tunnel.sh",
     "test:origin": "pnpm --filter @1v1/gateway test:origin",
     "test:e2e:prod": "playwright test -c e2e/playwright.prod.config.ts"

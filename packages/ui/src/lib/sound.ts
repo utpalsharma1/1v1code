@@ -1,189 +1,357 @@
 "use client";
 
 /* ============================================================================
-   Placeholder sound (pulled forward from Phase 4)
+   §9 sound — a preloaded buffer pool over Web Audio.
 
-   §6.3's countdown and §6.6's sequential test reveal are timed to rhythm, and
-   rhythm cannot be tuned in silence — tuning them mute would only mean retuning
-   everything when real sound lands.
+   WHAT REPLACED WHAT. Six placeholder oscillator tones, built during Phase 0 so
+   that §6.3's countdown and §6.6's reveal could be tuned against a rhythm
+   instead of against silence, and explicit that they were scaffolding. This is
+   the library they were scaffolding for: every §9 cue, rendered once into
+   `AudioBuffer`s at load, played back as one `BufferSource` each.
 
-   These are crude Web Audio oscillator tones, generated at runtime. No asset
-   files, no <audio> tags. The real library in §9 is still Phase 4 and will use
-   a preloaded buffer pool; this is scaffolding for the tuning surface, not the
-   sound design.
+   NO `<audio>` TAGS, per §9 — the latency of an `<audio>` element is tens of
+   milliseconds and unpredictable, which would destroy the one thing these
+   sounds exist to do, which is land on a frame.
+
+   THE POOL IS GENUINELY PRELOADED, and that is a design choice with a
+   consequence worth stating. `OfflineAudioContext` needs no user gesture, so
+   every buffer is rendered when the provider mounts — before anything can be
+   played, not on the first cue. What still needs a gesture is `resume()` on the
+   live context, which browsers require and which is unrelated to the pool. The
+   result is that the very first sound of a session, §6.2's queue pop, is
+   sample-accurate rather than being the one that pays for the load.
+
+   NOTHING IS FETCHED. The samples come from `sound-design.ts`, which generates
+   them; see the licence note at the top of that file.
+
+   ON BEING GENUINELY OPTIONAL. Sound is on by default and one toggle turns it
+   off. Muting sets a master gain to zero and, above that, `play()` returns
+   before it touches the context at all, so a muted session builds no node
+   graph. NOTHING IN THIS PRODUCT IS ONLY LEGIBLE THROUGH SOUND: every cue here
+   accompanies a visual state change that stands on its own, which is asserted
+   for real in `sound.test.ts` rather than asserted in a comment.
    ========================================================================= */
 
-export type Cue =
-  | "countdown_tick"
-  | "countdown_final"
-  | "test_pass"
-  | "test_fail"
-  | "submit"
-  | "victory";
+import { CUE_SECONDS, PASS_STEPS, renderCue, type CueName } from "./sound-design";
 
-/** Cue names the simulator emits that have no placeholder tone yet. */
-const SILENT = new Set(["queue_pop", "compile", "clutch_ambient", "emote", "defeat", "rank_up"]);
+export type { CueName };
 
+/** Legacy alias — the placeholder's exported type name. */
+export type Cue = CueName;
+
+const STORAGE_KEY = "1v1.sound";
+
+/**
+ * A consecutive-pass streak resets after this long without a pass.
+ *
+ * §6.6 resolves a submission's tests at `dur.reveal` (165ms), so a gap this
+ * large means the ladder is climbing across two separate submissions and
+ * should start again rather than carry over.
+ */
 const PASS_STREAK_RESET_MS = 4000;
-const PASS_BASE_HZ = 520;
-const PASS_STEP = 1.0595; // one semitone per consecutive pass
+
+/**
+ * How long a cue is faded when it is stopped early.
+ *
+ * §6.7's victory sting is 2.4s and `dur.skip` arms a skip at 700ms, so a player
+ * who skips WILL interrupt the sound. Cutting a buffer mid-sample is a step
+ * discontinuity and it clicks audibly, which is a worse artefact than the tail
+ * it was trying to remove. 90ms is short enough to feel immediate and long
+ * enough that the ramp is inaudible.
+ */
+const RELEASE_MS = 90;
+
+/** A cue currently sounding, kept so it can be released rather than cut. */
+interface Voice {
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+}
 
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  private noise: AudioBuffer | null = null;
+  private buffers = new Map<string, AudioBuffer>();
+  private voices = new Map<string, Voice[]>();
+  private loops = new Map<string, Voice>();
+  private ready = false;
+  private priming: Promise<void> | null = null;
+
   private passStreak = 0;
   private lastPassAt = 0;
 
   muted = false;
-  volume = 0.4;
+  volume = 0.5;
 
-  /** Lazily built; browsers refuse an AudioContext before a user gesture. */
-  private ensure(): AudioContext | null {
+  /* --- Preferences ---------------------------------------------------- */
+
+  /** Reads the stored preference. Called by the provider before anything plays. */
+  loadPrefs(): { muted: boolean; volume: number } {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { muted?: boolean; volume?: number };
+          if (typeof parsed.muted === "boolean") this.muted = parsed.muted;
+          if (typeof parsed.volume === "number" && parsed.volume >= 0 && parsed.volume <= 1) {
+            this.volume = parsed.volume;
+          }
+        }
+      } catch {
+        /* A corrupt or unreadable preference falls back to the default rather
+           than throwing on a code path that runs before anything is rendered. */
+      }
+    }
+    this.applyGain();
+    return { muted: this.muted, volume: this.volume };
+  }
+
+  private savePrefs(): void {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ muted: this.muted, volume: this.volume }),
+      );
+    } catch {
+      /* Private browsing can refuse writes. Losing the preference is survivable;
+         throwing on a volume slider is not. */
+    }
+  }
+
+  private applyGain(): void {
+    if (!this.master || !this.ctx) return;
+    const target = this.muted ? 0 : this.volume;
+    /* Ramped, not set: a step change in gain on a sounding voice is a click,
+       and the mute button is most likely to be pressed while something plays. */
+    this.master.gain.setTargetAtTime(target, this.ctx.currentTime, 0.015);
+  }
+
+  setVolume(v: number): void {
+    this.volume = Math.min(1, Math.max(0, v));
+    this.applyGain();
+    this.savePrefs();
+  }
+
+  setMuted(m: boolean): void {
+    this.muted = m;
+    this.applyGain();
+    if (m) this.stopLoops();
+    this.savePrefs();
+  }
+
+  /* --- The pool ------------------------------------------------------- */
+
+  /**
+   * Renders every cue into the pool. Idempotent, and safe to call before any
+   * user gesture — an `OfflineAudioContext` does not need one.
+   */
+  prime(): Promise<void> {
+    if (this.priming) return this.priming;
+    if (typeof window === "undefined") return Promise.resolve();
+
+    this.priming = (async () => {
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+      const sr = ctx.sampleRate;
+
+      for (const cue of Object.keys(CUE_SECONDS) as CueName[]) {
+        if (cue === "test_pass") {
+          /* One buffer per rung rather than one buffer replayed at a shifted
+             `playbackRate`. Rate-shifting changes duration as well as pitch, so
+             the twentieth tick would be 40% shorter than the first and the run
+             would accelerate as it rose — which is a different sound from the
+             one §9 asks for. Twenty short buffers cost under a megabyte. */
+          for (let step = 0; step <= PASS_STEPS; step++) {
+            this.buffers.set(`test_pass:${step}`, this.toBuffer(ctx, renderCue(cue, sr, step)));
+          }
+        } else {
+          this.buffers.set(cue, this.toBuffer(ctx, renderCue(cue, sr)));
+        }
+        /* Yield between cues so priming never blocks a frame. The whole pool is
+           a few tens of milliseconds of work, but it runs during page load,
+           which is the worst moment to hold the main thread. */
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      this.ready = true;
+    })();
+
+    return this.priming;
+  }
+
+  private toBuffer(ctx: BaseAudioContext, samples: Float32Array): AudioBuffer {
+    const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+    /* `copyToChannel` is typed against `Float32Array<ArrayBuffer>` while the
+       renderer returns the generic `ArrayBufferLike` form. Writing the channel
+       directly avoids the cast and is the same work. */
+    buffer.getChannelData(0).set(samples);
+    return buffer;
+  }
+
+  private ensureContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
     if (!this.ctx) {
-      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      const Ctor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctor) return null;
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
-      this.master.gain.value = this.volume;
+      this.master.gain.value = this.muted ? 0 : this.volume;
       this.master.connect(this.ctx.destination);
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume();
-    if (this.master) this.master.gain.value = this.muted ? 0 : this.volume;
     return this.ctx;
   }
 
-  setVolume(v: number) {
-    this.volume = v;
-    if (this.master) this.master.gain.value = this.muted ? 0 : v;
+  /**
+   * Resumes the context. Browsers start it suspended until a user gesture, so
+   * this is called from the first pointer or key event.
+   */
+  unlock(): void {
+    const ctx = this.ensureContext();
+    if (ctx && ctx.state === "suspended") void ctx.resume();
   }
 
-  setMuted(m: boolean) {
-    this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : this.volume;
+  /** True once every buffer is rendered. Exposed for the dev tuning panel. */
+  get primed(): boolean {
+    return this.ready;
   }
 
-  /** One enveloped oscillator. `glideTo` sweeps the pitch over the tone. */
-  private tone(opts: {
-    freq: number;
-    type?: OscillatorType;
-    ms: number;
-    gain?: number;
-    glideTo?: number;
-    delay?: number;
-  }) {
-    const ctx = this.ensure();
-    if (!ctx || !this.master) return;
-    const { freq, type = "triangle", ms, gain = 0.5, glideTo, delay = 0 } = opts;
-    const t0 = ctx.currentTime + delay / 1000;
-    const dur = ms / 1000;
-
-    const osc = ctx.createOscillator();
-    const env = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t0);
-    if (glideTo !== undefined) osc.frequency.exponentialRampToValueAtTime(glideTo, t0 + dur);
-
-    // Fast attack, exponential decay — reads as percussive rather than as a beep.
-    env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(gain, t0 + 0.006);
-    env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-
-    osc.connect(env);
-    env.connect(this.master);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.02);
+  get poolSize(): number {
+    return this.buffers.size;
   }
 
-  /** Band-passed white noise, for the submit whoosh. Buffer built once. */
-  private whoosh(ms: number) {
-    const ctx = this.ensure();
-    if (!ctx || !this.master) return;
-    if (!this.noise) {
-      const len = ctx.sampleRate * 1;
-      this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = this.noise.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  /* --- Playback ------------------------------------------------------- */
+
+  private start(key: string, gain: number, loop: boolean): Voice | null {
+    const ctx = this.ensureContext();
+    const buffer = this.buffers.get(key);
+    if (!ctx || !this.master || !buffer) return null;
+    if (ctx.state === "suspended") void ctx.resume();
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = loop;
+    const node = ctx.createGain();
+    node.gain.value = gain;
+    source.connect(node);
+    node.connect(this.master);
+    source.start();
+
+    const voice: Voice = { source, gain: node };
+    if (!loop) {
+      const live = this.voices.get(key) ?? [];
+      live.push(voice);
+      this.voices.set(key, live);
+      source.onended = () => {
+        const rest = (this.voices.get(key) ?? []).filter((v) => v !== voice);
+        this.voices.set(key, rest);
+      };
     }
-    const t0 = ctx.currentTime;
-    const dur = ms / 1000;
-
-    const src = ctx.createBufferSource();
-    src.buffer = this.noise;
-    const filter = ctx.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.Q.value = 1.2;
-    filter.frequency.setValueAtTime(320, t0);
-    filter.frequency.exponentialRampToValueAtTime(2600, t0 + dur);
-
-    const env = ctx.createGain();
-    env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(0.35, t0 + 0.03);
-    env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-
-    src.connect(filter);
-    filter.connect(env);
-    env.connect(this.master);
-    src.start(t0);
-    src.stop(t0 + dur + 0.02);
+    return voice;
   }
 
-  play(cue: string) {
-    if (this.muted || SILENT.has(cue)) return;
-    switch (cue as Cue) {
-      case "countdown_tick":
-        this.tone({ freq: 440, type: "square", ms: 80, gain: 0.28 });
-        break;
-
-      case "countdown_final":
-        // §6.3 — the final beat is pitched higher.
-        this.tone({ freq: 700, type: "square", ms: 150, gain: 0.34 });
-        break;
-
-      case "test_pass": {
-        // §9 — pitch rises with each consecutive pass. The streak is what makes
-        // a clean sweep feel like a run rather than ten identical ticks.
-        const now = performance.now();
-        if (now - this.lastPassAt > PASS_STREAK_RESET_MS) this.passStreak = 0;
-        this.lastPassAt = now;
-        const freq = PASS_BASE_HZ * PASS_STEP ** Math.min(this.passStreak, 14);
-        this.passStreak += 1;
-        this.tone({ freq, type: "sine", ms: 70, gain: 0.3 });
-        break;
-      }
-
-      case "test_fail":
-        // Dull thud: low, fast, no glide.
-        this.passStreak = 0;
-        this.tone({ freq: 130, type: "sine", ms: 180, gain: 0.42, glideTo: 70 });
-        break;
-
-      case "submit":
-        this.whoosh(420);
-        break;
-
-      case "victory":
-        // Rising sting — a three-note arpeggio.
-        this.tone({ freq: 392, type: "triangle", ms: 160, gain: 0.32 });
-        this.tone({ freq: 523, type: "triangle", ms: 180, gain: 0.32, delay: 110 });
-        this.tone({ freq: 784, type: "triangle", ms: 420, gain: 0.36, delay: 230 });
-        break;
-
-      default:
-        break;
+  /** Fades a voice out over `RELEASE_MS` and stops it. Never a hard cut. */
+  private release(voice: Voice): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const end = now + RELEASE_MS / 1000;
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
+    voice.gain.gain.linearRampToValueAtTime(0, end);
+    try {
+      voice.source.stop(end);
+    } catch {
+      /* Already stopped. */
     }
+  }
+
+  /**
+   * Plays a cue.
+   *
+   * Returns without touching the audio context when muted, so a muted session
+   * costs nothing rather than building a graph into a zeroed gain.
+   */
+  play(cue: string): void {
+    if (this.muted) return;
+
+    if (cue === "test_pass") {
+      /* §9: the pitch rises with each consecutive pass. This is the placeholder
+         behaviour that was kept deliberately — it is what makes a clean sweep
+         read as a run rather than as ten identical ticks. */
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (now - this.lastPassAt > PASS_STREAK_RESET_MS) this.passStreak = 0;
+      this.lastPassAt = now;
+      const step = Math.min(this.passStreak, PASS_STEPS);
+      this.passStreak += 1;
+      this.start(`test_pass:${step}`, 1, false);
+      return;
+    }
+
+    if (cue === "test_fail") this.passStreak = 0;
+
+    if (cue === "clutch_ambient") {
+      this.startLoop("clutch_ambient");
+      return;
+    }
+
+    this.start(cue, 1, false);
+  }
+
+  /**
+   * Starts a looping cue if it is not already running. Idempotent, because
+   * §6.5's clutch state is a threshold that can be re-entered.
+   */
+  startLoop(cue: string): void {
+    if (this.muted || this.loops.has(cue)) return;
+    const voice = this.start(cue, 0, true);
+    if (!voice || !this.ctx) return;
+    /* Faded in over a second — §6.5 calls it peripheral, "you feel it before you
+       consciously see it", and a sub-bass tone that arrives at full level is
+       the opposite of peripheral. */
+    voice.gain.gain.setValueAtTime(0, this.ctx.currentTime);
+    voice.gain.gain.linearRampToValueAtTime(0.7, this.ctx.currentTime + 1);
+    this.loops.set(cue, voice);
+  }
+
+  stopLoop(cue: string): void {
+    const voice = this.loops.get(cue);
+    if (!voice) return;
+    this.loops.delete(cue);
+    this.release(voice);
+  }
+
+  stopLoops(): void {
+    for (const cue of [...this.loops.keys()]) this.stopLoop(cue);
+  }
+
+  /**
+   * Stops everything currently sounding, with a release rather than a cut.
+   *
+   * Called when a cinematic is skipped (§5: `dur.skip` arms any input to drop
+   * the remainder) and when a match screen unmounts. A victory sting continuing
+   * over the Hub is the sound of a bug.
+   */
+  stopAll(): void {
+    for (const [, live] of this.voices) for (const voice of live) this.release(voice);
+    this.voices.clear();
+    this.stopLoops();
   }
 }
 
 export const sound = new SoundEngine();
 
-/** Cue names the simulator emits, mapped onto the placeholder tones. */
+/**
+ * Names the rest of the app emits, mapped onto §9's cue list.
+ *
+ * Kept because the HUD simulator and the match screen name some moments
+ * differently from §9's library, and a rename across both is churn for nothing.
+ */
 export const CUE_ALIASES: Record<string, string> = {
   countdown_tick_final: "countdown_final",
   victory_sting: "victory",
 };
 
-export function playCue(name: string) {
+export function playCue(name: string): void {
   sound.play(CUE_ALIASES[name] ?? name);
 }

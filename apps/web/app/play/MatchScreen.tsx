@@ -23,6 +23,7 @@ import {
 import { PULSE_SAMPLE_MS } from "@1v1/core/pulse";
 import type { EditorChange } from "@1v1/proto";
 import { rankOf } from "@1v1/core/ladder";
+import { useMatchSound } from "./useMatchSound";
 
 /* ============================================================================
    The match screen — Phase 1's cinematics driven by real gateway events.
@@ -313,6 +314,10 @@ export function MatchScreen(props: MatchScreenProps) {
     const filled = cells[opponent].filter((c) => c === "pass").length;
     return totalTests === 0 ? 0 : filled / totalTests;
   }, [cells, opponent, totalTests]);
+
+  /* §9's cues, on the real match. See useMatchSound for whose tests sound and
+     why the opponent's do not. */
+  useMatchSound({ you, opponent, cells, compileKeys, opponentProgress, inFlight, ending });
 
   const submitting = inFlight || holding.includes(you);
 
