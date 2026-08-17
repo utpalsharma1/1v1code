@@ -3440,3 +3440,180 @@ Per §12's order of work: **Stage 1 deployment to Oracle Cloud** (Hyderabad, ARM
 as the first thing to run on the new host. Then problem authoring as a dedicated block.
 
 Per §13.13, stopping here.
+
+---
+
+## Stage 1 groundwork — what could be done without the instance
+
+The plan re-read, what changed since, and everything executable before an Oracle host exists.
+**The instance itself is blocked on account actions only you can take**; the list is at the end.
+
+### What changed since the plan was written
+
+The plan is sound and the shape has not changed. Four things have moved:
+
+- **`db:timing` now exists and was written for this migration**, re-deriving every timing claim per
+  host instead of trusting a comment. It is the reason this is a measurement rather than a hope.
+- **Stage 0 shipped**, so the topology is already rehearsed — `deploy/Caddyfile.stage1` is that file
+  with three changes and no drift.
+- **Two gateway-memory orphans were found and fixed** since. A third was found this session.
+- **`packages/core/src/paths.ts`** was written for exactly this and **did not survive the check**.
+
+### 1. ARM64 — g++ and Python do NOT behave identically, and one difference decides matches
+
+Testable here after all: `tonistiigi/binfmt` registers `qemu-aarch64`, so both judge images build and
+run for `linux/arm64` on this laptop. Timing under emulation is meaningless; **correctness is fully
+testable**, and that is where the problem was.
+
+Both images use multi-arch bases (`debian:bookworm-slim`, `python:3.12-slim-bookworm`) and install no
+architecture-specific packages, so the rebuild needed no Dockerfile change. **g++ is 12.2.0 on both
+sides.** Compiling the same probe file in each image:
+
+| | x86-64 | AArch64 |
+| --- | --- | --- |
+| `char` is signed | **yes** | **no** |
+| `long double` mantissa | 64 bits (x87) | **113 bits** (IEEE quad) |
+| `sizeof(int/long/long long)` | 4/8/8 | 4/8/8 |
+| `0.1+0.2`, `(-8)>>1`, `__int128` | identical | identical |
+
+**The `char` difference is not a portability note, it is a match-deciding bug.** The classic shape is
+`char c; while ((c = getchar()) != EOF)`. `EOF` is `-1`, an unsigned char can never equal it, and the
+loop never ends. Measured, same binary source, same flags:
+
+- x86: `read=4` · **ARM: `read=1000000`** — i.e. an infinite loop, so `TIME_LIMIT`.
+
+A correct C++ submission would have failed purely because of which host picked up the job. That is
+indistinguishable from cheating from the losing player's side — the same argument §6.9 makes about
+receipt order. **The runner now compiles with `-fsigned-char`**, and the same test reads 4 on both.
+It also pins the behaviour against any future host, and matches the platform competitive programmers
+overwhelmingly develop on. Judge containment suite **26/26** with the flag.
+
+`long double` needs no flag — ARM is *more* precise, so nothing newly fails. It is worth knowing that
+AArch64 quad-precision is largely software-emulated, so a solution leaning on `long double` in a hot
+loop will be slower there than the general ARM penalty suggests. Recorded, not acted on.
+
+**Python needs nothing.** Same CPython 3.12, pure-Python references, no native extensions.
+
+### 2. `db:timing` on ARM — the x86 baseline, and exactly what is at risk
+
+Re-run here to fix the baseline before the move. Every reference fits, gate at 40% of the limit:
+
+| problem | % of limit (x86) | at ARM ×1.7 |
+| --- | --- | --- |
+| `palindrome-min-cut` | 24.0% | **40.8% — crosses the gate** |
+| `dijkstra-shortest` | 16.8% | 28.6% |
+| `coin-change-min` | 10.4% | 17.7% |
+| everything else | ≤ 10% | fine |
+| `edit-distance` | 88.8% | already `LOCKED`, `pythonLocked` |
+
+So the honest prediction is **one problem at risk**, and it must be *measured on the host*, not
+predicted from this table.
+
+**`gcd-pair`'s `notADefect` verdict survives ARM with room to spare.** Its subtractive Euclid at the
+worst legal input (10⁹, 1) uses **20.4% of the 5000 ms limit** here. The verdict only requires it to
+stay *inside the limit*, not inside the 40% gate, so it holds until a host is roughly **4.9× slower**
+than this laptop. Ampere at 1.3–1.7× is nowhere near that. `db:timing` re-derives it on the new host
+regardless, and will say so if the margin ever closes.
+
+### 3. The two carry-overs — one held, one did not
+
+**Gateway memory: a third orphan, and the only invisible one.** Surveying every module-level map:
+`queueIntent`, `sessions` are per-socket and rebuilt on connect; `matches`/`userMatch` are the fixed
+ones; `challengeStarting`/`challengeIntent` are in-flight guards that are *correct* when empty. But:
+
+**`Submission.verdict` defaults to `PENDING`, and it is the GATEWAY that writes the real verdict**
+(`submissions.ts:139`) — not the judge worker. A restart between the row being created and the
+verdict arriving strands it at `PENDING` permanently: the judge finishes the job and publishes a
+result nobody is listening for.
+
+Nothing renders it, which is what makes it worse than the phantom `LIVE` rows — those surfaced on the
+live panel the day it shipped. This is a permanent "still judging" in the record, and §10 makes the
+record the thing we claim is true. On Oracle, where restarts are frequent, they accumulate.
+
+Resolved on startup as **`INTERNAL_ERROR`** — the honest value, because the verdict genuinely was
+lost on our side, and §11's invariant is that *user code* may never provoke it, which a restart is
+not. It does not drag the match to `VOID`; the match is set `CANCELED`/`BOTH_ABANDONED` by the same
+pass, because a restart with a match open is ordinary (§6.9).
+
+**Scoped to the matches this run just abandoned**, deliberately. Sweeping every `PENDING` row is
+correct today with one gateway and becomes a live bug the moment §12's Redis adapter permits a
+second — a restarting process would annul the other's in-flight submissions. Scoping costs one query.
+Positive-controlled: a stranded row was staged, the restart caught it and named it in the log.
+
+**Absolute paths: the rule did NOT survive, and checking was the right call.** Run the way systemd
+runs it — `cd / && env -i` — the walk up finds no `pnpm-workspace.yaml`, and `replayDir()` cheerfully
+answered **`/var/replays`**. `ensureWritable` would have failed afterwards, so nothing was silently
+lost, but it would have failed saying `/var/replays` is not writable — naming a symptom and sending
+whoever read it to fix permissions on a directory that was never the target.
+
+That is §13.7's distinction exactly: **"could not ask" is not "asked and got an answer."** It now
+refuses and names `REPLAY_DIR`, saying that this is the normal case under systemd. Nothing else in
+the project resolves a shared path relatively.
+
+### 4. The judge under systemd, not in a container with the socket mounted
+
+`deploy/systemd/` — five units, all verified with `systemd-analyze verify`.
+
+**Holding `/var/run/docker.sock` is equivalent to root on the host.** Anything with it can start
+`--privileged -v /:/host` and walk out. Doing that to the single component whose entire job is
+executing untrusted code inverts the model: §11's flag set contains the *submission*, while the
+containing process would be trivially escapable. Docker-in-Docker is worse again. So the worker is an
+ordinary host process talking to the host daemon; the **submission's** container is the boundary, and
+it is the only one that needs to be.
+
+- **Two accounts.** `arena` runs gateway and web; `arenajudge` runs the judge and reaper and is the
+  only member of `docker`. A bug in the web app cannot reach the daemon; a bug in the worker cannot
+  read the session table.
+- **The reaper is its own unit**, not `BindsTo=` the judge. §11 is explicit that it exists for the
+  case where the worker dies, so one that dies with it is decoration.
+- **Service accounts cannot be named `1v1`.** `systemd-analyze verify` rejects digit-leading user
+  names and `useradd` refuses them outright on some systems — caught by running the verifier rather
+  than reading the units.
+- **`TRUSTED_PROXY=local`, not `cloudflare`.** No tunnel sits in front at Stage 1, so
+  `CF-Connecting-IP` is absent and must never be trusted. Caddy's `X-Forwarded-For` overwrite stops
+  being a second lock and becomes the only one.
+
+**`SESSION_SECRET` is dead config.** `.env` has one and nothing reads it — sessions are opaque
+server-side rows keyed by a high-entropy random token, not signed cookies. It is deliberately absent
+from the deployment template with a note, because carrying it would imply sessions depend on it and
+somebody rotating it to invalidate every login would find nothing happened. `JUDGE_QUEUE` likewise.
+
+### 5. Oracle Always Free ARM capacity — the honest position and the fallback
+
+**`VM.Standard.A1.Flex` is heavily capacity-constrained in popular regions** and `Out of host
+capacity` is the normal response, not an error. It is not a queue: there is no position and no
+notification, and it can persist for weeks. Two things follow:
+
+- **Home region is permanent and decides everything.** It cannot be changed after signup, and Always
+  Free ARM only exists in it. Hyderabad was the plan and remains right for latency from India;
+  it is also less contested than Mumbai.
+- **Retrying on a schedule is what actually works** — a loop attempting creation every few minutes,
+  because capacity is released continuously as others tear down. Hours to days is typical.
+
+**The fallback if it never comes**, in order of preference, and this should be decided in advance
+rather than under frustration:
+
+1. **Always Free x86: two `VM.Standard.E2.1.Micro`,** 1 OCPU / 1 GB each. Available essentially
+   always. **1 GB is genuinely tight** — Postgres, Redis, gateway, web and a 2-slot judge (512 MB
+   worst case) do not fit on one. Split across both, or run the judge at 1 slot. **The upside is
+   that the ARM findings above stop applying**, and `db:timing` would likely pass unchanged.
+2. **Hetzner CAX11** — ARM, 2 vCPU / 4 GB, ~€3.8/mo. Keeps the ARM target, no capacity lottery, and
+   is more machine than the free tier. This is what I would actually recommend paying for.
+3. **Oracle paid A1** — same hardware, no capacity contention.
+
+**Do not use an ARM instance to escape a capacity problem and then skip `db:timing`.** The whole
+point of the tool is that the bank's soundness is host-dependent.
+
+### Verification
+
+typecheck 7/7, **core 91/91**, sound 17/17, unit 7/7, **judge containment 26/26 with `-fsigned-char`**,
+**`db:verify` all three passes green**, `db:timing` green on x86, probes 5/5, **e2e 19/19**,
+**e2e:prod 15/15**. Judge images built and run for `linux/arm64`. Five systemd units verified. The
+submission sweep and the path refusal were both positive-controlled.
+
+### Not done — blocked on the instance
+
+`db:timing` on ARM, the provisioning run, TLS on a real hostname, the restore-tested Postgres backup,
+and per-IP rate limiting. All of it is downstream of an instance existing.
+
+Per §13.10, stopping here.
