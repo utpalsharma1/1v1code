@@ -1,0 +1,35 @@
+[Unit]
+Description=1v1.code web (Next.js, production build)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arena
+Group=arena
+WorkingDirectory=/srv/1v1.code/apps/web
+EnvironmentFile=/etc/1v1/env
+# `next start`, never `next dev`. NODE_ENV=production comes from the env file
+# and is what makes /api/dev/sparring-ticket 404 — Caddy blocking /dev/* is the
+# second lock, not the only one.
+ExecStart=/usr/bin/pnpm exec next start --port ${PORT}
+
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/1v1 /srv/1v1.code/apps/web/.next
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=1v1-web
+
+[Install]
+WantedBy=multi-user.target

@@ -360,7 +360,25 @@ def main():
             return
         emit({"kind": "compiling"})
         status, message, compile_cpu = compile_step(
-            ["g++", "-std=c++17", "-O2", "-o", binary, src], memory_bytes
+            # -fsigned-char PINS AN ARCHITECTURE DIFFERENCE THAT WOULD OTHERWISE
+            # DECIDE MATCHES. Plain `char` is signed on x86-64 and UNSIGNED on
+            # AArch64 by default, verified by compiling the same file in both
+            # images: `char c = -1; c < 0` is true on x86 and false on ARM.
+            #
+            # That is not an abstract portability note, it is a submission that
+            # passes here and fails on the deployment host. The classic shape is
+            # `char c; while ((c = getchar()) != EOF)` — EOF is -1, an unsigned
+            # char can never equal it, and the loop runs forever, so a correct
+            # solution earns TIME_LIMIT for reasons the player cannot see.
+            #
+            # Pinning it to signed makes the judge behave identically on every
+            # host we might ever run on, and matches the platform competitive
+            # programmers overwhelmingly develop against. The alternative —
+            # letting the verdict depend on which machine picked up the job — is
+            # indistinguishable from cheating from the losing player's side, the
+            # same argument §6.9 makes about receipt order.
+            ["g++", "-std=c++17", "-O2", "-fsigned-char", "-o", binary, src],
+            memory_bytes,
         )
         total_cpu_ms += compile_cpu
         if status != "OK":

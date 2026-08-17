@@ -1,0 +1,31 @@
+[Unit]
+Description=1v1.code edge (Caddy, TLS termination, single origin)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+EnvironmentFile=/etc/1v1/env
+ExecStart=/usr/bin/caddy run --environ --config /srv/1v1.code/deploy/Caddyfile.stage1
+ExecReload=/usr/bin/caddy reload --config /srv/1v1.code/deploy/Caddyfile.stage1 --force
+
+Restart=always
+RestartSec=5
+
+# Binding 80 and 443 as a non-root user. Let's Encrypt's HTTP-01 challenge
+# needs 80 reachable, so this is not optional.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/caddy /var/log/caddy
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=1v1-caddy
+
+[Install]
+WantedBy=multi-user.target

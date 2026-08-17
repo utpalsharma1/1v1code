@@ -25,8 +25,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
    does not depend on who is asking.
    ========================================================================= */
 
-/** Walks up to the directory holding the workspace manifest. */
-export function repoRoot(from: string = process.cwd()): string {
+/** Walks up to the directory holding the workspace manifest, or null. */
+export function findRepoRoot(from: string = process.cwd()): string | null {
   let dir = resolve(from);
   for (let i = 0; i < 8; i++) {
     if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
@@ -34,10 +34,12 @@ export function repoRoot(from: string = process.cwd()): string {
     if (up === dir) break;
     dir = up;
   }
-  /* No manifest found: return the starting point rather than guessing. The
-     caller's `ensureWritable` will then fail loudly on a wrong directory
-     instead of creating one in a surprising place. */
-  return resolve(from);
+  return null;
+}
+
+/** Walks up to the workspace root, falling back to the starting directory. */
+export function repoRoot(from: string = process.cwd()): string {
+  return findRepoRoot(from) ?? resolve(from);
 }
 
 /**
@@ -52,7 +54,37 @@ export function replayDir(): string {
   if (configured && configured.length > 0) {
     return isAbsolute(configured) ? configured : join(repoRoot(), configured);
   }
-  return join(repoRoot(), "var", "replays");
+
+  /* NO CONFIGURED VALUE AND NO WORKSPACE ROOT IS A MISSING SETTING, NOT A PATH.
+   *
+   * Found by running this the way a real host runs it rather than the way a
+   * developer does: `cd / && env -i node ...`, which is the systemd layout. The
+   * walk up from `/` finds no `pnpm-workspace.yaml`, the old fallback returned
+   * the starting directory, and `replayDir()` cheerfully answered
+   * `/var/replays` — a fabricated answer to "where is the repo root", presented
+   * as if it had been found.
+   *
+   * That is §13.7's distinction exactly: "could not ask" is not "asked and got
+   * an answer". `ensureWritable` would have failed afterwards, so nothing was
+   * silently lost — but it would have failed saying `/var/replays` is not
+   * writable, which names a symptom and sends whoever reads it to fix
+   * permissions on a directory that was never the intended target.
+   *
+   * §13.9: an entry point states the variables it needs and refuses without
+   * them. Outside a checkout there is no default worth guessing, so it says so.
+   */
+  const root = findRepoRoot();
+  if (root === null) {
+    throw new Error(
+      "REPLAY_DIR is not set and there is no workspace checkout above " +
+        `${process.cwd()} to derive it from.\n` +
+        "  Set REPLAY_DIR to an absolute path. Every match's event log goes " +
+        "there, and §10 makes that log the replay — losing it loses the match.\n" +
+        "  This is the normal case when running under systemd or in a " +
+        "container, where the working directory is not the repo.",
+    );
+  }
+  return join(root, "var", "replays");
 }
 
 /**

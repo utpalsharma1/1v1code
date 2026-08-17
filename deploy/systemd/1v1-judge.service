@@ -1,0 +1,49 @@
+[Unit]
+Description=1v1.code judge worker (pulls from Redis, runs one container per submission)
+After=network-online.target docker.service redis-server.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ON THE HOST, NOT IN A CONTAINER WITH THE SOCKET MOUNTED.
+#
+# Holding /var/run/docker.sock is equivalent to root on the host — anything with
+# it can start `--privileged -v /:/host`. Doing that to the one component whose
+# job is executing untrusted code inverts the whole model. The SUBMISSION's
+# container is the security boundary (§11's flag set) and it is the only one
+# that needs to be. See README.md.
+#
+# This user must be in the `docker` group, which is itself root-equivalent —
+# hence a dedicated account that runs nothing else.
+User=arenajudge
+Group=arenajudge
+SupplementaryGroups=docker
+WorkingDirectory=/srv/1v1.code
+EnvironmentFile=/etc/1v1/env
+ExecStart=/usr/bin/node --experimental-strip-types apps/judge/src/index.ts
+
+# §11: no single submission may take down the worker. Malformed payloads are
+# rejected in-loop, so a restart here means something genuinely unexpected.
+Restart=always
+RestartSec=3
+
+# Long enough for an in-flight container to finish its 5s execution budget plus
+# the 10s compile budget, so a deploy does not orphan one. The reaper below is
+# the backstop for when it does.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=1v1-judge
+
+[Install]
+WantedBy=multi-user.target

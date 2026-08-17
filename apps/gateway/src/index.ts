@@ -1319,6 +1319,14 @@ process.on("unhandledRejection", (e) => console.error("[gateway] unhandled (cont
  */
 async function reconcileOrphanedMatches(): Promise<void> {
   try {
+    /* Collected BEFORE the update, because afterwards nothing distinguishes a
+       match this run abandoned from one abandoned last week — and the
+       submission sweep below must only touch the ones we just orphaned. */
+    const open = await prisma.match.findMany({
+      where: { state: { in: ["LIVE", "PENDING"] } },
+      select: { id: true },
+    });
+
     const orphaned = await prisma.match.updateMany({
       where: { state: { in: ["LIVE", "PENDING"] } },
       data: {
@@ -1332,6 +1340,43 @@ async function reconcileOrphanedMatches(): Promise<void> {
       console.log(
         `[gateway] reconciled ${orphaned.count} match(es) left open by a previous process`,
       );
+    }
+
+    /* A THIRD ORPHAN, AND THE ONLY INVISIBLE ONE.
+     *
+     * `Submission.verdict` defaults to PENDING and it is THIS PROCESS that
+     * writes the real verdict when the judge reports back (submissions.ts) —
+     * not the judge worker. So a restart between the row being created and the
+     * verdict arriving strands that row at PENDING permanently: the judge
+     * finishes the job and publishes a result nobody is listening for.
+     *
+     * Nothing renders it, which is exactly why it is worse than the phantom
+     * LIVE rows were. Those at least showed up on the live panel the day it
+     * shipped. A PENDING submission is a permanent "still judging" in the
+     * record, and §10 makes the record the thing we claim is true.
+     *
+     * INTERNAL_ERROR is the honest verdict rather than a convenient one: the
+     * verdict genuinely was lost on our side, which is what that value means.
+     * §11's invariant is that USER CODE may never provoke it, and a gateway
+     * restart is not user code. It does not drag the match to VOID either —
+     * the match was just set CANCELED / BOTH_ABANDONED above, because a
+     * restart with a match open is ordinary (§6.9).
+     *
+     * SCOPED TO THE MATCHES THIS RUN JUST ABANDONED, deliberately. Sweeping
+     * every PENDING row would be correct today, with one gateway, and would
+     * become a live bug the moment §12's Redis adapter lets a second gateway
+     * exist — a restarting process would annul the other one's in-flight
+     * submissions. Scoping it costs one query and removes the hazard. */
+    if (open.length > 0) {
+      const lost = await prisma.submission.updateMany({
+        where: { matchId: { in: open.map((m) => m.id) }, verdict: "PENDING" },
+        data: { verdict: "INTERNAL_ERROR" },
+      });
+      if (lost.count > 0) {
+        console.log(
+          `[gateway] resolved ${lost.count} submission(s) whose verdict was lost with a previous process`,
+        );
+      }
     }
 
     /* The same reasoning one layer down. See Matchmaker.clearStalePool. */

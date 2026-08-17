@@ -1,0 +1,35 @@
+[Unit]
+Description=1v1.code judge orphan reaper
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+# §11: THE REAPER EXISTS FOR THE CASE WHERE THE WORKER DIES, so it must not die
+# with it. It is a separate unit with its own restart policy, it imports nothing
+# from the worker, and it is deliberately NOT `BindsTo=1v1-judge.service` — a
+# reaper that stops when the judge stops is decoration.
+#
+# It kills any container labelled com.1v1.judge=1 older than 30s. That label is
+# how it finds them without knowing anything about the worker's bookkeeping.
+User=arenajudge
+Group=arenajudge
+SupplementaryGroups=docker
+WorkingDirectory=/srv/1v1.code
+EnvironmentFile=/etc/1v1/env
+ExecStart=/usr/bin/node --experimental-strip-types apps/judge/src/reaper.ts
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=1v1-reaper
+
+[Install]
+WantedBy=multi-user.target

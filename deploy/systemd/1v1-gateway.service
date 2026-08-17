@@ -1,0 +1,40 @@
+[Unit]
+Description=1v1.code gateway (Socket.IO, matchmaking, match lifecycle)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arena
+Group=arena
+WorkingDirectory=/srv/1v1.code
+EnvironmentFile=/etc/1v1/env
+ExecStart=/usr/bin/node --experimental-strip-types apps/gateway/src/index.ts
+
+# A gateway restart is ORDINARY on a real host, not exceptional. Every restart
+# reconciles orphaned matches, stale Redis queue entries and submissions
+# stranded at PENDING, so restarting converges rather than corrupting.
+Restart=always
+RestartSec=2
+
+# Give in-flight matches a chance to settle before SIGKILL. The event log is
+# write-behind (§10) and flushed on every lifecycle transition, so this bounds
+# tail loss to the events since the last transition.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/1v1
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=1v1-gateway
+
+[Install]
+WantedBy=multi-user.target

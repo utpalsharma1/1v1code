@@ -1,0 +1,80 @@
+# =============================================================================
+#  Stage 1 — the real host, on a real hostname, with automatic TLS.
+#
+#  THIS IS DELIBERATELY THE STAGE 0 FILE WITH THREE CHANGES. Stage 0 exists to
+#  be a rehearsal rather than a detour, and it only earns that if the topology
+#  is identical — one origin, `/socket.io/*` to the gateway, everything else to
+#  the web app, `wss://` derived from the page's own protocol rather than
+#  configured. If this file diverged, Stage 0 would have been rehearsing
+#  something we do not run.
+#
+#  What changes, and nothing else:
+#    1. A real hostname instead of `:8080`, so Caddy provisions a certificate
+#       from Let's Encrypt over ports 80 and 443.
+#    2. `auto_https off` is gone — Caddy terminates TLS here now, rather than
+#       Cloudflare terminating it at a tunnel edge.
+#    3. TRUSTED_PROXY becomes `local`, not `cloudflare`: no tunnel sits in
+#       front, so `CF-Connecting-IP` will not be present and must not be
+#       trusted. See the note below — this one is load-bearing.
+#
+#  Run under systemd:  deploy/systemd/1v1-caddy.service
+# =============================================================================
+
+{
+	# The address Let's Encrypt uses for expiry warnings. A certificate that
+	# silently fails to renew takes the whole site down, and the warning email
+	# is the only advance notice there is.
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$SITE_HOSTNAME} {
+	# --- The gateway, same origin, under socket.io's default path ------------
+	handle /socket.io/* {
+		reverse_proxy 127.0.0.1:4000 {
+			# OVERWRITE X-Forwarded-For, never append.
+			#
+			# Caddy's default is to append, which leaves any client-supplied
+			# value in FRONT of ours — and a limiter reading the first entry
+			# then trusts the client. This is the same reasoning as Stage 0 with
+			# one difference that matters: there, the app ran TRUSTED_PROXY=
+			# cloudflare and read CF-Connecting-IP, which Cloudflare overwrites
+			# at its edge so a client cannot forge it. HERE THERE IS NO
+			# CLOUDFLARE. Nothing upstream sanitises anything, so this overwrite
+			# is not a second lock — it is the ONLY one, and TRUSTED_PROXY must
+			# be `local` so the app reads what Caddy wrote rather than a header
+			# any client can set.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# --- Dev routes are refused at the edge ----------------------------------
+	# `/dev/sparring` mints socket tickets. Those routes 404 under
+	# NODE_ENV=production and the systemd units set it, so this is the second of
+	# two locks rather than the only one — kept because the cost of the app
+	# being started in dev mode by accident on a public host is that anyone
+	# holding the URL can join matches as a second identity.
+	handle /dev/* {
+		respond "not found" 404
+	}
+
+	# --- Everything else is the web app --------------------------------------
+	handle {
+		reverse_proxy 127.0.0.1:3001 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	encode gzip
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format console
+		level ERROR
+	}
+}
