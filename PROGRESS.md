@@ -3267,3 +3267,176 @@ oscillators and may need revisiting rather than preserving, that the rising semi
 pass is the placeholder behaviour worth keeping, and that every state change stays legible muted.
 
 Per §13.13, stopping here.
+
+---
+
+## The §9 sound library
+
+### Where the sounds come from
+
+**Generated, entirely, by `packages/ui/src/lib/sound-design.ts`.** Nothing is sampled, downloaded, or
+derived from a library, so the audio inherits the repository's AGPL and there is no third-party right
+to get wrong. There is no `assets/sfx` directory. §9 now carries the rule: do not add an audio file
+without recording its licence beside it, and prefer extending the synthesis.
+
+That was the cheapest correct answer rather than a compromise. "Free sound effects" sites carry
+per-asset terms that routinely differ from the banner on the front page, and auditing thirty of those
+is more work than writing the DSP.
+
+### Pure DSP, so §13.7 applies before the bug rather than after
+
+The cues are **pure functions over `Float32Array`** — additive band-limited partials, FM for the
+struck-metal tick, a Chamberlin state-variable filter for swept noise, a small Schroeder reverb, and
+a seeded xorshift PRNG so a render is reproducible to the sample.
+
+The reason is not elegance. A Web Audio node graph can only be exercised in a browser, which in
+practice means it is never asserted on at all — and "the sound code did not throw" is precisely a
+check that cannot fail. `sound-design.test.ts` runs in Node and measures real properties: buffer
+length, peak, RMS, dominant frequency by autocorrelation, seam continuity on the loop, and the cues
+**summed against each other**. 17 assertions.
+
+**Two were positive-controlled** by breaking the synthesis and watching them go red — a ladder made
+to sag 2% per rung, and a loop seam moved off an integer cycle count. **Three failed organically**,
+and every one was a real defect rather than a strict threshold.
+
+### What the tests caught
+
+**1. The final countdown beat was pitched LOWER, not higher.** §6.3 is explicit that the final beat
+is higher. A 330 Hz "body" added under the 990 Hz lead made the whole beat measure **331 Hz — a fifth
+*below* the 660 Hz regular tick.** It sounded bigger and read as lower, which is the opposite of what
+the beat is for, and it is invisible to anything except a pitch measurement.
+
+Moving that body to a fifth *above* (1485 Hz) measured **495 Hz** and was still wrong: 990 and 1485
+share a sub-multiple, so the ear supplies the missing fundamental an octave down. **Any harmonically
+related pair implies a lower root, so the only safe way to reinforce a pitch is with its own
+octaves.** At 1980 Hz it measures 1000 Hz against the tick's 658 Hz.
+
+**2. The pass ladder stopped climbing at 14 while `MAX_CELLS` is 20.** The last six ticks of the
+longest sweep were identical — the run going flat exactly where it is most impressive. It now spans
+all 20, as **one pre-rendered buffer per rung** rather than one buffer at a shifted `playbackRate`:
+rate-shifting changes duration as well as pitch, so the twentieth tick would have been 40% shorter
+than the first and the run would have accelerated as it rose, which is a different sound from the one
+§9 asks for.
+
+**3. Whole-buffer RMS is the wrong way to compare loudness across cues, and it gave a confidently
+wrong answer.** It divides by total length, so a 2.4 s victory sting with a reverb tail scored
+*below* a 0.9 s queue pop. The sound was right and the assertion was wrong. It uses the loudest
+400 ms window now — roughly the ear's integration time — under which victory is the loudest thing in
+the library at 0.348 against queue pop's 0.274, which is what §9 intends.
+
+### Amplitude across the ladder, and the tolerances
+
+Twenty rungs synthesised independently can drift even when each is individually fine, so peak and RMS
+are pinned **against the set's mean** rather than against rung 0, so one outlier cannot drag the
+reference with it.
+
+- **Peak: ±6%.** `finish` normalises every buffer to a target peak, so this really asserts that
+  normalisation is doing its job; anything past a few percent means a rung escaped it.
+- **RMS: ±22%,** deliberately looser and it has to be. RMS over a fixed window measures the *energy*
+  of a decaying tone, and a higher tone with the same envelope carries measurably less energy per
+  cycle. Some downward drift is physics, not a defect. 22% is about 2 dB — at the edge of noticeable
+  on a short tick and well inside "the run does not sag."
+- Plus a direction check: the top rung must not be below 80% of the root's RMS.
+
+### Cues against each other
+
+**Three at once is the normal case, not the exception:** §6.6 fires a tick every 165 ms while §6.5's
+clutch loop runs underneath and a compile pulse can land on top.
+
+- **A full 20-tick sweep over three clutch loops plus a compile pulse peaks at well under full
+  scale**, and under half of it at the default volume — with no limiter involved. A limiter that
+  engages during a normal sweep is audible pumping, so headroom is asserted rather than rescued.
+- **Nothing masks the ticks.** The clutch loop is sub-bass (measured under 120 Hz) and the ticks are
+  440 Hz and up, so they occupy different bands — but "should not fight" is exactly the kind of claim
+  §13.7 is about, so it is measured: adding the loop underneath moves the energy in the tick's own
+  band by under 5%.
+- **The compile pulse stays peripheral**, asserted at under 75% of a pass tick's peak. It fires far
+  more often than a verdict, and at equal level it would become the main event.
+
+### The timings, honestly
+
+They were fitted to placeholder beeps, so all four were re-checked rather than assumed.
+
+- **`dur.reveal` (165 ms) survives, and is now load-bearing rather than incidental.** A 70 ms
+  placeholder beep could not have smeared at any cadence, so the number was never actually tested by
+  it. A real bell tick with a decay tail can, and it is what now *sets* the tick's length: the tick
+  is 160 ms, and by 165 ms it has fallen to 0.4% of its peak, so twenty overlapping tails cannot
+  accumulate into a wash. The constraint runs from the cadence to the sound, which is the right
+  direction — the reveal rhythm is a design decision and the tick has to fit it.
+- **`dur.victory` (2800 ms) and `dur.defeat` (1600 ms) both hold.** The stings are 2.4 s and 1.35 s,
+  fitting inside their mandatory portions with margin, and defeat stays shorter than victory as §5
+  requires for its own reasons.
+- **`dur.skip` (700 ms) does not fit the sting, and cannot.** A skip always lands mid-buffer. That is
+  not a defect to design around — it is why the engine **releases over 90 ms rather than cutting**,
+  because stopping a buffer mid-sample is a step discontinuity that clicks, which is a worse artefact
+  than the tail it was removing. A test asserts the premise, so if the sting ever becomes shorter
+  than `dur.skip` somebody has to decide deliberately whether the ramp is still needed.
+
+**No timing changed.** That is a finding, not a non-finding: three of the four were validated for
+better reasons than they were originally chosen for, and the fourth turned out to be the reason a
+release ramp exists.
+
+### The library, and the pool
+
+`queue_pop · countdown_tick · countdown_final · test_pass ×21 · test_fail · submit · compile ·
+victory · defeat · rank_up · emote · clutch_ambient`. The Phase 4 hack sounds are not built, per §12.
+
+**The pool is genuinely preloaded.** `OfflineAudioContext` needs no user gesture, so every buffer is
+rendered when the provider mounts rather than on first play; the gesture is only needed to `resume()`
+the live context, which is a different event. The consequence is that §6.2's queue pop — usually the
+first sound of a session — is sample-accurate instead of being the cue that pays for the load.
+
+### It fires on real matches now, which it never did
+
+**The placeholders were wired only into `/dev/hud`.** That was right for Phase 1 — that route exists
+to tune the feel — but it meant every cue in the product had only ever fired in a simulator.
+`useMatchSound` drives them from real gateway state: cells resolving, the opponent's compile key, the
+clutch threshold, the in-flight lock, and the ending.
+
+**Your tests make a sound and the opponent's do not.** Both bars are on screen so firing for both is
+the obvious reading, and it is wrong: §9's tick rises with each consecutive pass, and two interleaved
+ladders is not two runs, it is noise with no run in it. The opponent is not silent — they get §6.5's
+compile pulse and the clutch sub-bass, which is exactly that section's own division between *their
+individual passes* (never audible) and *that they are moving and how close they are* (always).
+
+A resync replaces the whole cell array, and that is silent by construction: only a cell moving from
+unresolved to resolved makes a sound, so learning about forty already-passed cells does not replay
+forty ticks.
+
+### Genuinely optional
+
+On by default, one toggle, a volume slider, persisted. Muting returns from `play()` before the audio
+context is touched, so a muted session builds no node graph at all. The toggle is fixed and present
+on every screen **including the match**, where §7's rail is hidden — the moment somebody wants to
+mute is the moment something is loud. It sits below the cinematic overlays in the stacking order,
+because §6.7 is a full-screen takeover and chrome floating over it would be the one element ignoring
+that.
+
+**Nothing in the product is legible only through sound.** Every cue accompanies a visual state change
+that stands on its own: cells fill and flash, the pulse line moves, the clutch edge breathes, the
+verdict panel drops. Reduced motion deliberately does **not** mute — `prefers-reduced-motion` is about
+vestibular symptoms and weak hardware, not audio, and taking a channel away from someone who did not
+ask to lose it is the wrong reading of §5.
+
+### The divergence marker — decided, not dropped
+
+Recorded in §7. The three candidate definitions are **not equivalent**: where the lead last changed
+hands needs only the log and marks a *fact*; the last moment the trailing player could still have won
+needs a model of remaining time and marks a *counterfactual*; where the two documents diverged into
+correct and not needs the judge run over intermediate editor states and makes a claim about code
+nobody submitted.
+
+**Default recorded: where the lead last changed hands.** It needs nothing the log does not already
+contain and is honest about what it asserts. Still not built.
+
+### Verification
+
+typecheck 7/7, **core 91/91**, **sound 17/17**, unit 7/7, probes 5/5, **e2e 19/19**, **e2e:prod 15/15**
+(exit 0). Two sound assertions positive-controlled by breaking the synthesis and watching them go red.
+
+### Next
+
+Per §12's order of work: **Stage 1 deployment to Oracle Cloud** (Hyderabad, ARM), with `pnpm db:timing`
+as the first thing to run on the new host. Then problem authoring as a dedicated block.
+
+Per §13.13, stopping here.
